@@ -15,6 +15,10 @@ from ..risk_management import RiskCalculator, ComplianceChecker
 from ..order_management import SignalConverter, MathematricksOrder
 from ..brokers import BaseBroker
 from .portfolio_manager import PortfolioManager
+from ..utils.logger import setup_logger
+
+# Setup logger
+logger = setup_logger('signal_processor', 'signal_processor.log')
 
 # Global signal processor instance
 _global_signal_processor: Optional['SignalProcessor'] = None
@@ -72,36 +76,36 @@ class SignalProcessor:
         Returns:
             Processing result dictionary
         """
-        print("\n" + "="*80)
-        print("🚀 PROCESSING NEW SIGNAL")
-        print("="*80)
+        logger.info("="*80)
+        logger.info("PROCESSING NEW SIGNAL")
+        logger.info("="*80)
 
         try:
             # 1. Parse signal
             signal = TradingSignal.from_webhook(signal_data)
-            print(f"📨 Signal ID: {signal.signalID}")
-            print(f"📊 Strategy: {signal.strategy_name}")
-            print(f"🔖 Type: {signal.signal_type.value}")
+            logger.info(f"Signal ID: {signal.signalID}")
+            logger.info(f"Strategy: {signal.strategy_name}")
+            logger.info(f"Type: {signal.signal_type.value}")
 
             # 2. Get current portfolio
-            print("\n📂 Step 1: Fetching current portfolio...")
+            logger.info("Step 1: Fetching current portfolio...")
             current_portfolio = self.portfolio_manager.refresh_portfolio()
 
             # 3. Calculate ideal portfolio (risk-adjusted)
-            print("\n⚖️  Step 2: Calculating ideal portfolio (risk-adjusted)...")
+            logger.info("Step 2: Calculating ideal portfolio (risk-adjusted)...")
             ideal_portfolio = self.risk_calculator.adjust_portfolio(current_portfolio)
-            print(f"   Risk Score: {ideal_portfolio.risk_score:.2f}/100")
+            logger.info(f"Risk Score: {ideal_portfolio.risk_score:.2f}/100")
             if ideal_portfolio.adjustments_made:
-                print(f"   Adjustments: {len(ideal_portfolio.adjustments_made)}")
+                logger.info(f"Adjustments: {len(ideal_portfolio.adjustments_made)}")
 
             # 4. Convert signal to orders
-            print("\n🔄 Step 3: Converting signal to orders...")
+            logger.info("Step 3: Converting signal to orders...")
             broker = self._determine_broker(signal)
             orders = self.signal_converter.convert_signal(signal, broker)
-            print(f"   Generated {len(orders)} order(s)")
+            logger.info(f"Generated {len(orders)} order(s)")
 
             # 5. Calculate updated portfolio (after signal)
-            print("\n📈 Step 4: Calculating updated portfolio...")
+            logger.info("Step 4: Calculating updated portfolio...")
             new_positions = self._simulate_positions_from_orders(orders)
             updated_portfolio = UpdatedPortfolio.from_current_with_signal(
                 current_portfolio,
@@ -111,22 +115,22 @@ class SignalProcessor:
             )
 
             # 6. Check compliance
-            print("\n🔍 Step 5: Checking compliance...")
+            logger.info("Step 5: Checking compliance...")
             is_compliant, rebalance_signals = self.compliance_checker.check_compliance(
                 updated_portfolio
             )
 
             if is_compliant:
-                print("   ✅ Portfolio is compliant")
+                logger.info("✅ Portfolio is compliant")
             else:
-                print("   ⚠️  Compliance violations detected")
+                logger.warning("⚠️  Compliance violations detected")
                 # TODO: Handle rebalancing in future versions
 
             # 7. Execute orders (if compliant)
             execution_results = []
 
             if is_compliant:
-                print("\n📤 Step 6: Executing orders...")
+                logger.info("Step 6: Executing orders...")
                 for order in orders:
                     result = self._execute_order(order, broker)
                     execution_results.append(result)
@@ -136,14 +140,14 @@ class SignalProcessor:
                         self.data_store.store_order(order, result)
 
             else:
-                print("\n⛔ Step 6: Skipping execution (not compliant)")
+                logger.warning("Step 6: Skipping execution (not compliant)")
 
             # 8. Store signal in database
             if self.data_store:
                 self.data_store.store_signal(signal, execution_results)
 
-            print("\n✅ SIGNAL PROCESSING COMPLETE")
-            print("="*80 + "\n")
+            logger.info("SIGNAL PROCESSING COMPLETE")
+            logger.info("="*80)
 
             return {
                 'success': True,
@@ -155,8 +159,8 @@ class SignalProcessor:
             }
 
         except Exception as e:
-            print(f"\n❌ ERROR PROCESSING SIGNAL: {e}")
-            print("="*80 + "\n")
+            logger.error(f"ERROR PROCESSING SIGNAL: {e}", exc_info=True)
+            logger.info("="*80)
 
             return {
                 'success': False,
@@ -225,7 +229,7 @@ class SignalProcessor:
         broker = self.portfolio_manager.brokers.get(broker_type)
 
         if not broker or not broker.is_connected:
-            print(f"   ❌ {broker_type.value} not available")
+            logger.error(f"{broker_type.value} not available")
             return {
                 'order_id': order.signal_id,
                 'status': 'failed',
@@ -236,7 +240,7 @@ class SignalProcessor:
             # Send order to broker
             confirmation = broker.send_order(order)
 
-            print(f"   ✅ {broker_type.value}: {confirmation.message}")
+            logger.info(f"✅ {broker_type.value}: {confirmation.message}")
 
             return {
                 'order_id': confirmation.order_id,
@@ -246,7 +250,7 @@ class SignalProcessor:
             }
 
         except Exception as e:
-            print(f"   ❌ {broker_type.value} error: {e}")
+            logger.error(f"{broker_type.value} error: {e}", exc_info=True)
 
             return {
                 'order_id': order.signal_id,

@@ -13,14 +13,18 @@ from src.execution.signal_processor import set_signal_processor
 from src.risk_management import RiskCalculator, ComplianceChecker
 from src.order_management import SignalConverter
 from src.reporting import DataStore
+from src.utils.logger import setup_logger
 
 # Load environment variables
 load_dotenv()
 
+# Setup logger
+logger = setup_logger('main', 'main.log')
+
 
 def initialize_brokers():
     """Initialize all broker instances"""
-    print("🔧 Initializing brokers...")
+    logger.info("Initializing brokers...")
 
     brokers = {}
 
@@ -63,27 +67,29 @@ def initialize_brokers():
 
 def initialize_trading_system():
     """Initialize the complete trading system"""
-    print("="*80)
-    print("🚀 MATHEMATRICKS TRADER V1 - INITIALIZATION")
-    print("="*80)
+    logger.info("="*80)
+    logger.info("MATHEMATRICKS TRADER V1 - INITIALIZATION")
+    logger.info("="*80)
 
     # 1. Initialize brokers
     brokers = initialize_brokers()
 
     # 2. Initialize portfolio manager
-    print("\n📊 Initializing portfolio manager...")
+    logger.info("Initializing portfolio manager...")
     portfolio_manager = PortfolioManager(brokers)
 
     # 3. Connect to brokers
-    print("\n🔌 Connecting to brokers...")
+    logger.info("Connecting to brokers...")
     connection_results = portfolio_manager.connect_all_brokers()
 
     for broker, success in connection_results.items():
-        status = "✅" if success else "❌"
-        print(f"   {status} {broker.value}")
+        if success:
+            logger.info(f"✅ Connected to {broker.value}")
+        else:
+            logger.error(f"❌ Failed to connect to {broker.value}")
 
     # 4. Initialize risk management
-    print("\n⚖️  Initializing risk management...")
+    logger.info("Initializing risk management...")
     risk_config = {
         'max_position_size_pct': float(os.getenv('MAX_POSITION_SIZE_PCT', '10')),
         'max_broker_allocation_pct': float(os.getenv('MAX_BROKER_ALLOCATION_PCT', '40'))
@@ -92,17 +98,17 @@ def initialize_trading_system():
     compliance_checker = ComplianceChecker(risk_config)
 
     # 5. Initialize signal converter
-    print("\n🔄 Initializing signal converter...")
+    logger.info("Initializing signal converter...")
     signal_converter = SignalConverter()
 
     # 6. Initialize data store
-    print("\n💾 Initializing MongoDB data store...")
+    logger.info("Initializing MongoDB data store...")
     mongodb_url = os.getenv('mongodbconnectionstring')
     data_store = DataStore(mongodb_url)
     data_store.connect()
 
     # 7. Initialize signal processor
-    print("\n⚡ Initializing signal processor...")
+    logger.info("Initializing signal processor...")
     signal_processor = SignalProcessor(
         portfolio_manager=portfolio_manager,
         risk_calculator=risk_calculator,
@@ -114,9 +120,9 @@ def initialize_trading_system():
     # Set global signal processor
     set_signal_processor(signal_processor)
 
-    print("\n" + "="*80)
-    print("✅ MATHEMATRICKS TRADER V1 - READY")
-    print("="*80)
+    logger.info("="*80)
+    logger.info("MATHEMATRICKS TRADER V1 - READY")
+    logger.info("="*80)
 
     return signal_processor
 
@@ -126,14 +132,9 @@ def main():
     # Initialize trading system
     signal_processor = initialize_trading_system()
 
-    print("\n📡 System is now listening for signals from signal_collector.py")
-    print("   Signals will be automatically processed when received.\n")
-
-    print("🎨 To view the dashboard, run:")
-    print("   streamlit run frontend/app.py\n")
-
-    print("📝 Signal collector should be running separately:")
-    print("   python signal_collector.py\n")
+    logger.info("System is now listening for signals from signal_collector.py")
+    logger.info("Signals will be automatically processed when received")
+    logger.info("View dashboard at: http://localhost:8501")
 
     # Keep the process running
     try:
@@ -141,13 +142,13 @@ def main():
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n\n🛑 Shutting down Mathematricks Trader...")
+        logger.info("Shutting down Mathematricks Trader...")
         # Cleanup
         if signal_processor:
             signal_processor.portfolio_manager.disconnect_all_brokers()
             if signal_processor.data_store:
                 signal_processor.data_store.disconnect()
-        print("✅ Shutdown complete\n")
+        logger.info("Shutdown complete")
 
 
 if __name__ == "__main__":
