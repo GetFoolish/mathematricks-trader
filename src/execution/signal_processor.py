@@ -16,6 +16,7 @@ from ..order_management import SignalConverter, MathematricksOrder
 from ..brokers import BaseBroker
 from .portfolio_manager import PortfolioManager
 from ..utils.logger import setup_logger
+from telegram import TelegramNotifier
 
 # Setup logger
 logger = setup_logger('signal_processor', 'signal_processor.log')
@@ -47,7 +48,8 @@ class SignalProcessor:
         risk_calculator: RiskCalculator,
         compliance_checker: ComplianceChecker,
         signal_converter: SignalConverter,
-        data_store=None
+        data_store=None,
+        telegram_notifier: TelegramNotifier = None
     ):
         """
         Initialize signal processor
@@ -58,12 +60,14 @@ class SignalProcessor:
             compliance_checker: Compliance checker instance
             signal_converter: Signal converter instance
             data_store: MongoDB data store (optional)
+            telegram_notifier: Telegram notifier (optional)
         """
         self.portfolio_manager = portfolio_manager
         self.risk_calculator = risk_calculator
         self.compliance_checker = compliance_checker
         self.signal_converter = signal_converter
         self.data_store = data_store
+        self.telegram = telegram_notifier or TelegramNotifier()
 
     def process_new_signal(self, signal_data: Dict) -> Dict:
         """
@@ -86,6 +90,9 @@ class SignalProcessor:
             logger.info(f"Signal ID: {signal.signalID}")
             logger.info(f"Strategy: {signal.strategy_name}")
             logger.info(f"Type: {signal.signal_type.value}")
+
+            # Send Telegram notification: Signal received
+            self.telegram.notify_signal_received(signal_data)
 
             # 2. Get current portfolio
             logger.info("Step 1: Fetching current portfolio...")
@@ -124,6 +131,12 @@ class SignalProcessor:
                 logger.info("✅ Portfolio is compliant")
             else:
                 logger.warning("⚠️  Compliance violations detected")
+                # Send Telegram notification: Compliance violation
+                self.telegram.notify_compliance_violation(
+                    signal.signalID,
+                    signal.strategy_name,
+                    [str(v) for v in rebalance_signals] if rebalance_signals else ["Portfolio compliance check failed"]
+                )
                 # TODO: Handle rebalancing in future versions
 
             # 7. Execute orders (if compliant)
@@ -138,6 +151,15 @@ class SignalProcessor:
                     # Store order in database
                     if self.data_store:
                         self.data_store.store_order(order, result)
+
+                # Send Telegram notification: Trades executed
+                orders_dict = [order.to_dict() for order in orders]
+                self.telegram.notify_trade_executed(
+                    signal.signalID,
+                    signal.strategy_name,
+                    orders_dict,
+                    execution_results
+                )
 
             else:
                 logger.warning("Step 6: Skipping execution (not compliant)")
@@ -161,6 +183,14 @@ class SignalProcessor:
         except Exception as e:
             logger.error(f"ERROR PROCESSING SIGNAL: {e}", exc_info=True)
             logger.info("="*80)
+
+            # Send Telegram notification: Signal failed
+            try:
+                signal_id = signal_data.get('signalID', 'Unknown')
+                strategy_name = signal_data.get('strategy_name', 'Unknown')
+                self.telegram.notify_signal_failed(signal_id, strategy_name, str(e))
+            except:
+                pass  # Don't let Telegram errors break the error handling
 
             return {
                 'success': False,

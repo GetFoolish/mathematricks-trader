@@ -16,6 +16,7 @@ TradingView → Vercel → MongoDB → signal_collector.py → Mathematricks Tra
 - ✅ **Risk Management**: Position sizing, broker allocation limits
 - ✅ **Compliance Checking**: Pre-trade validation
 - ✅ **Portfolio Management**: Aggregated view across all brokers
+- ✅ **Telegram Notifications**: Real-time alerts for signals and trades
 
 ### Reporting & Analytics
 - 📊 **Signals History**: Filter and view all historical signals
@@ -34,14 +35,20 @@ mathematricks-trader-v1/
 │   ├── order_management/     # Signal → Order conversion
 │   ├── brokers/              # Broker integrations
 │   ├── execution/            # Signal processor & portfolio manager
-│   └── reporting/            # Data storage & metrics
+│   ├── reporting/            # Data storage & metrics
+│   └── utils/                # Logger and utilities
+├── telegram/                 # Telegram notifications
+│   ├── __init__.py
+│   └── notifier.py
 ├── frontend/                 # Streamlit dashboard
 │   ├── app.py
 │   └── pages/
+├── logs/                     # System logs
 ├── tmp/                      # Development files
 ├── signal_collector.py       # Receives signals from MongoDB
 ├── signal_sender.py          # Test signal sender
 ├── main.py                   # System entry point
+├── run_mathematricks_trader.py  # Unified launcher
 ├── requirements.txt
 └── .env.sample
 ```
@@ -155,6 +162,47 @@ streamlit run frontend/app.py
 - Requires MetaTrader 5 or Vantage API
 - Set `VANTAGE_API_KEY`, `VANTAGE_API_SECRET`, `VANTAGE_ACCOUNT_ID`
 - Toggle `VANTAGE_DEMO`
+
+## Telegram Notifications
+
+The system sends real-time notifications to Telegram for:
+- **Signal Received**: When a new signal arrives from TradingView
+- **Trade Executed**: When orders are successfully placed
+- **Compliance Violation**: When a signal fails compliance checks
+- **Signal Failed**: When signal processing encounters errors
+- **Position Closed**: When a position is exited (coming soon)
+- **Daily Summary**: End-of-day performance report (coming soon)
+
+### Setup Telegram
+
+1. **Create a Telegram Bot**:
+   - Message [@BotFather](https://t.me/botfather) on Telegram
+   - Send `/newbot` and follow instructions
+   - Copy the bot token provided
+
+2. **Get Your Chat ID**:
+   - Message [@userinfobot](https://t.me/userinfobot) on Telegram
+   - Copy your chat ID
+
+3. **Configure Environment**:
+   ```bash
+   # In your .env file
+   TELEGRAM_ENABLED=true
+   TELEGRAM_BOT_TOKEN=your_bot_token_here
+   TELEGRAM_CHAT_ID=your_chat_id_here
+   ```
+
+4. **Test Notifications**:
+   - Start the system and send a test signal
+   - You should receive formatted notifications in your Telegram chat
+
+### Notification Format
+
+All notifications are sent in HTML format with:
+- 📊 Strategy name and signal ID
+- 🕐 Timestamp
+- ✅/❌ Status indicators
+- 📋 Detailed trade information
 
 ## Risk Management
 

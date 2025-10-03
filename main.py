@@ -14,6 +14,7 @@ from src.risk_management import RiskCalculator, ComplianceChecker
 from src.order_management import SignalConverter
 from src.reporting import DataStore
 from src.utils.logger import setup_logger
+from telegram import TelegramNotifier
 
 # Load environment variables
 load_dotenv()
@@ -107,14 +108,19 @@ def initialize_trading_system():
     data_store = DataStore(mongodb_url)
     data_store.connect()
 
-    # 7. Initialize signal processor
+    # 7. Initialize Telegram notifier
+    logger.info("Initializing Telegram notifier...")
+    telegram = TelegramNotifier()
+
+    # 8. Initialize signal processor
     logger.info("Initializing signal processor...")
     signal_processor = SignalProcessor(
         portfolio_manager=portfolio_manager,
         risk_calculator=risk_calculator,
         compliance_checker=compliance_checker,
         signal_converter=signal_converter,
-        data_store=data_store
+        data_store=data_store,
+        telegram_notifier=telegram
     )
 
     # Set global signal processor
