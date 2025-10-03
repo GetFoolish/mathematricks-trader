@@ -63,17 +63,24 @@ cp .env.sample .env
 
 ### 3. Run the System
 
-**Start the trading system:**
+**Option 1: Run everything with a single command (recommended):**
+```bash
+python run_mathematricks_trader.py
+```
+
+**Option 2: Run components separately:**
+
+Terminal 1 - Trading system:
 ```bash
 python main.py
 ```
 
-**Start the signal collector (in another terminal):**
+Terminal 2 - Signal collector:
 ```bash
 python signal_collector.py
 ```
 
-**Start the dashboard (in another terminal):**
+Terminal 3 - Dashboard:
 ```bash
 streamlit run frontend/app.py
 ```
