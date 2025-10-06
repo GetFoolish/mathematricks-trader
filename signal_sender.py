@@ -121,13 +121,13 @@ class SignalSender:
 
 def main():
     parser = argparse.ArgumentParser(description='Send trading signals to Mathematricks webhook')
-    parser.add_argument('--signalId', required=True,
+    parser.add_argument('--signalId',
                        help='Unique signal identifier')
     parser.add_argument('--passphrase', default='yahoo123',
                        help='Webhook passphrase')
     parser.add_argument('--current_timestamp',
                        help='Current timestamp (ISO format, defaults to now)')
-    parser.add_argument('--signal', required=True,
+    parser.add_argument('--signal',
                        help='Signal data as JSON string (can be dict or list)')
     parser.add_argument('--staging', action='store_true',
                        help='Use staging environment')

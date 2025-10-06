@@ -36,7 +36,8 @@ class TelegramNotifier:
             self.enabled = False
 
         if self.enabled:
-            logger.info("Telegram notifications enabled")
+            # logger.info("Telegram notifications enabled")c
+            pass
         else:
             logger.info("Telegram notifications disabled")
 
