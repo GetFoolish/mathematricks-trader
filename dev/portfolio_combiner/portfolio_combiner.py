@@ -5,6 +5,16 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import quantstats as qs
 
+def validate_weights(allocation_config, accounts):
+    """Validate that weights sum to 100% for each account."""
+    for account_name in accounts.keys():
+        strategies = {name: cfg for name, cfg in allocation_config.items()
+                     if cfg['account'] == account_name}
+        total_weight = sum(cfg['weight'] for cfg in strategies.values())
+        if abs(total_weight - 100.0) > 0.01:
+            raise ValueError(f"{account_name} weights sum to {total_weight:.2f}%, must be 100%")
+        print(f"  ✓ {account_name}: {len(strategies)} strategies, weights sum to {total_weight:.1f}%")
+
 def compile_portfolio(data_folder, allocation_config, starting_capital=1_000_000,
                      accounts=None, strategy_metadata=None):
     """
@@ -13,12 +23,17 @@ def compile_portfolio(data_folder, allocation_config, starting_capital=1_000_000
 
     Args:
         data_folder: Path to folder containing strategy CSV files
-        allocation_config: Dict mapping strategy names to account, allocated_capital, and max_position_scale
-        starting_capital: Total starting capital across all accounts (for legacy compatibility)
-        accounts: Dict mapping account names to starting_capital (optional, for separate account tracking)
-        strategy_metadata: Dict mapping strategy names to margin_per_unit, min_position, increment (optional)
+        allocation_config: Dict mapping strategy names to account and weight
+        starting_capital: Total starting capital across all accounts
+        accounts: Dict mapping account names to starting_capital and target_margin_util_pct
+        strategy_metadata: Dict mapping strategy names to margin_per_unit, min_position, increment
     """
     print("Starting portfolio compilation...")
+
+    # Validate weights
+    if accounts:
+        print("\nValidating strategy weights...")
+        validate_weights(allocation_config, accounts)
 
     # --- 1. Load and Process Each Strategy CSV ---
     all_strategy_dfs = []
@@ -62,14 +77,13 @@ def compile_portfolio(data_folder, allocation_config, starting_capital=1_000_000
     
     print("\nStep 1: All strategies aligned onto a master timeline.")
 
-    # --- 3. Calculate Implied Positions and Scale with Constraints ---
+    # --- 3. Calculate Positions from Margin Budgets ---
     strategy_equity_map = {}  # Map strategy name to its equity series
     account_strategy_map = {}  # Map account to list of strategies
 
     for strategy_name, config in allocation_config.items():
         account = config['account']
-        allocated_capital = config.get('allocated_capital', starting_capital)
-        max_scale = config.get('max_position_scale', 1.0)
+        weight = config['weight']
 
         raw_return_col = f"{strategy_name}_Return_%"
         margin_col = f"{strategy_name}_Margin_Used"
@@ -78,35 +92,46 @@ def compile_portfolio(data_folder, allocation_config, starting_capital=1_000_000
             print(f"  - WARNING: Missing data for '{strategy_name}', skipping...")
             continue
 
-        # Get position sizing metadata (if provided)
+        # Calculate margin allocation from account budget and weight
+        if accounts and account in accounts:
+            account_capital = accounts[account]['starting_capital']
+            target_margin_pct = accounts[account]['target_margin_util_pct']
+            account_margin_budget = account_capital * (target_margin_pct / 100)
+            strategy_margin_allocation = account_margin_budget * (weight / 100)
+        else:
+            # Fallback if accounts not provided
+            strategy_margin_allocation = starting_capital * 0.1  # Default 10%
+
+        # Get position sizing metadata
         if strategy_metadata and strategy_name in strategy_metadata:
             metadata = strategy_metadata[strategy_name]
             margin_per_unit = metadata['margin_per_unit']
             min_position = metadata['min_position']
             increment = metadata['increment']
 
-            # Calculate implied position from margin data
-            implied_position = master_df[margin_col] / margin_per_unit
-            master_df[f"{strategy_name}_Implied_Units"] = implied_position
+            # Calculate developer's implied position (for returns scaling)
+            dev_implied_position = master_df[margin_col] / margin_per_unit
+            master_df[f"{strategy_name}_Implied_Units"] = dev_implied_position
 
-            # Apply scaling factor
-            scaled_position = implied_position * max_scale
+            # Calculate OUR target position from margin allocation (ignoring dev size!)
+            target_position = strategy_margin_allocation / margin_per_unit
 
             # Round to valid increments and enforce minimum
-            valid_position = (scaled_position / increment).round() * increment
-            valid_position = valid_position.apply(lambda x: max(x, min_position) if x > 0 else 0)
+            import numpy as np
+            valid_position = np.round(target_position / increment) * increment
+            valid_position = max(min_position, valid_position) if valid_position > 0 else 0
 
-            # Store scaled position
+            # Store our position (constant over time!)
             master_df[f"{strategy_name}_Scaled_Units"] = valid_position
 
-            # Calculate scaled margin based on actual valid position
+            # Calculate our actual margin used (should be constant!)
             master_df[f"{strategy_name}_Scaled_Margin"] = valid_position * margin_per_unit
 
-            # Calculate position ratio (avoiding division by zero)
-            position_ratio = valid_position / implied_position.replace(0, 1)
+            # Calculate position ratio for returns scaling
+            position_ratio = valid_position / dev_implied_position.replace(0, 1)
             position_ratio = position_ratio.fillna(0)
 
-            # Calculate scaled returns based on actual position ratio
+            # Scale returns by position ratio
             master_df[f"{strategy_name}_Scaled_Return_%"] = master_df[raw_return_col] * position_ratio
 
             # Calculate scaled notional (if notional data exists)
@@ -114,13 +139,14 @@ def compile_portfolio(data_folder, allocation_config, starting_capital=1_000_000
             if notional_col in master_df.columns:
                 master_df[f"{strategy_name}_Scaled_Notional"] = master_df[notional_col] * position_ratio
         else:
-            # Fallback: scale margin proportionally without position constraints
-            master_df[f"{strategy_name}_Scaled_Margin"] = master_df[margin_col] * max_scale
-            master_df[f"{strategy_name}_Scaled_Return_%"] = master_df[raw_return_col] * max_scale
+            # Fallback without metadata
+            master_df[f"{strategy_name}_Scaled_Margin"] = strategy_margin_allocation
+            master_df[f"{strategy_name}_Scaled_Return_%"] = master_df[raw_return_col]
 
-        # Calculate equity curve for this strategy in dollar terms using scaled returns
+        # Calculate equity curve starting from margin allocation
         scaled_return_col = f"{strategy_name}_Scaled_Return_%"
-        equity_curve = [allocated_capital]  # Start with allocated capital
+        starting_equity = strategy_margin_allocation  # Start equity = margin allocated
+        equity_curve = [starting_equity]
         for ret in master_df[scaled_return_col]:
             equity_curve.append(equity_curve[-1] * (1 + ret))
 
@@ -134,7 +160,7 @@ def compile_portfolio(data_folder, allocation_config, starting_capital=1_000_000
             account_strategy_map[account] = []
         account_strategy_map[account].append(strategy_name)
 
-    print("Step 2: Implied positions calculated, scaled with constraints, and equity curves built.")
+    print("Step 2: Margin budgets allocated, positions calculated, and equity curves built.")
 
     # --- 4. Calculate Account-Level Performance ---
     account_perf_df = pd.DataFrame(index=master_df.index)
@@ -455,7 +481,100 @@ def compile_portfolio(data_folder, allocation_config, starting_capital=1_000_000
 
     print("  - Generated correlation matrix: output/[CORRELATION]_strategy_returns.png")
 
-    # --- 9. Save Output Files ---
+    # --- 9. Generate Detailed Margin and PnL Analysis CSVs ---
+    print("\nStep 9: Generating detailed margin and PnL analysis CSVs...")
+
+    # CSV 1: Strategy Margin Analysis
+    # Shows target vs actual margin, position sizes, and returns for each strategy
+    strategy_margin_df = pd.DataFrame(index=master_df.index)
+
+    for strategy_name, config in allocation_config.items():
+        account = config['account']
+        weight = config['weight']
+
+        # Calculate target margin for this strategy
+        if accounts and account in accounts:
+            account_capital = accounts[account]['starting_capital']
+            target_margin_pct = accounts[account]['target_margin_util_pct']
+            account_margin_budget = account_capital * (target_margin_pct / 100)
+            target_margin = account_margin_budget * (weight / 100)
+        else:
+            target_margin = 0
+
+        # Add columns for this strategy
+        strategy_margin_df[f"{strategy_name}_Target_Margin"] = target_margin
+
+        if f"{strategy_name}_Scaled_Margin" in master_df.columns:
+            strategy_margin_df[f"{strategy_name}_Actual_Margin"] = master_df[f"{strategy_name}_Scaled_Margin"]
+            strategy_margin_df[f"{strategy_name}_Margin_Diff"] = master_df[f"{strategy_name}_Scaled_Margin"] - target_margin
+
+        if f"{strategy_name}_Scaled_Units" in master_df.columns:
+            strategy_margin_df[f"{strategy_name}_Position"] = master_df[f"{strategy_name}_Scaled_Units"]
+
+        if f"{strategy_name}_Scaled_Return_%" in master_df.columns:
+            strategy_margin_df[f"{strategy_name}_Return_%"] = master_df[f"{strategy_name}_Scaled_Return_%"]
+
+        if f"{strategy_name}_Equity_$" in master_df.columns:
+            strategy_margin_df[f"{strategy_name}_Equity"] = master_df[f"{strategy_name}_Equity_$"]
+
+    strategy_margin_df.to_csv(os.path.join(output_folder, '4_strategy_margin_analysis.csv'))
+    print("  - Generated: 4_strategy_margin_analysis.csv")
+
+    # CSV 2: Account Margin Summary
+    # Shows account-level margin tracking over time
+    account_margin_summary = pd.DataFrame(index=master_df.index)
+
+    for account, strategies in account_strategy_map.items():
+        if accounts and account in accounts:
+            account_capital = accounts[account]['starting_capital']
+            target_margin_pct = accounts[account]['target_margin_util_pct']
+            target_margin = account_capital * (target_margin_pct / 100)
+
+            account_margin_summary[f"{account}_Capital"] = account_capital
+            account_margin_summary[f"{account}_Target_Margin"] = target_margin
+
+            # Sum actual margin used
+            margin_cols = [f"{strat}_Scaled_Margin" for strat in strategies if f"{strat}_Scaled_Margin" in master_df.columns]
+            if margin_cols:
+                actual_margin = master_df[margin_cols].sum(axis=1)
+                account_margin_summary[f"{account}_Actual_Margin"] = actual_margin
+                account_margin_summary[f"{account}_Margin_Util_%"] = (actual_margin / account_capital) * 100
+                account_margin_summary[f"{account}_Target_Util_%"] = target_margin_pct
+                account_margin_summary[f"{account}_Margin_Diff"] = actual_margin - target_margin
+
+            # Add equity
+            if f"{account}_Equity_$" in account_perf_df.columns:
+                account_margin_summary[f"{account}_Equity"] = account_perf_df[f"{account}_Equity_$"]
+
+    account_margin_summary.to_csv(os.path.join(output_folder, '5_account_margin_summary.csv'))
+    print("  - Generated: 5_account_margin_summary.csv")
+
+    # CSV 3: Daily PnL Attribution
+    # Shows daily PnL contribution by strategy and account
+    pnl_attribution = pd.DataFrame(index=master_df.index)
+
+    for strategy_name in allocation_config.keys():
+        equity_col = f"{strategy_name}_Equity_$"
+        if equity_col in master_df.columns:
+            # Calculate daily PnL as change in equity
+            daily_pnl = master_df[equity_col].diff().fillna(0)
+            pnl_attribution[f"{strategy_name}_Daily_PnL"] = daily_pnl
+
+    # Add account-level PnL
+    for account in account_strategy_map.keys():
+        equity_col = f"{account}_Equity_$"
+        if equity_col in account_perf_df.columns:
+            daily_pnl = account_perf_df[equity_col].diff().fillna(0)
+            pnl_attribution[f"{account}_Daily_PnL"] = daily_pnl
+
+    # Add portfolio-level PnL
+    pnl_attribution['Portfolio_Daily_PnL'] = total_portfolio_df['Equity_Curve'].diff().fillna(0)
+    pnl_attribution['Portfolio_Cumulative_PnL'] = pnl_attribution['Portfolio_Daily_PnL'].cumsum()
+
+    pnl_attribution.to_csv(os.path.join(output_folder, '6_daily_pnl_attribution.csv'))
+    print("  - Generated: 6_daily_pnl_attribution.csv")
+
+    # --- 10. Save Original Output Files ---
     master_df.to_csv(os.path.join(output_folder, '1_master_aligned_data.csv'))
     account_perf_df.to_csv(os.path.join(output_folder, '2_account_performance.csv'))
     total_portfolio_df.to_csv(os.path.join(output_folder, '3_total_portfolio_performance.csv'))
@@ -474,10 +593,16 @@ if __name__ == "__main__":
     # 2. Define your accounts and their starting capital
     ACCOUNTS = {
         'IBKR Main': {
-            'starting_capital': 600_000
+            'starting_capital': 500_000,
+            'target_margin_util_pct': 80  # Target 80% margin utilization
         },
         'Futures Account': {
-            'starting_capital': 400_000
+            'starting_capital': 300_000,
+            'target_margin_util_pct': 80
+        },
+        'Crypto Account': {
+            'starting_capital': 200_000,
+            'target_margin_util_pct': 80
         }
     }
 
@@ -500,28 +625,49 @@ if __name__ == "__main__":
       'NQ_Trend': {'margin_per_unit': 18000, 'min_position': 1, 'increment': 1},
       'ZN_MeanReversion': {'margin_per_unit': 2200, 'min_position': 1, 'increment': 1},
       'GC_Breakout': {'margin_per_unit': 7200, 'min_position': 1, 'increment': 1},
+      # Crypto Account
+      'BTC_Trend': {'margin_per_unit': 15000, 'min_position': 0.01, 'increment': 0.01},
+      'ETH_Momentum': {'margin_per_unit': 8000, 'min_position': 0.01, 'increment': 0.01},
+      'BTC_ETH_Spread': {'margin_per_unit': 10000, 'min_position': 0.01, 'increment': 0.01},
+      'SOL_Breakout': {'margin_per_unit': 3000, 'min_position': 0.1, 'increment': 0.1},
+      'Altcoin_Basket': {'margin_per_unit': 5000, 'min_position': 0.1, 'increment': 0.1},
+      'Funding_Rate_Arb': {'margin_per_unit': 12000, 'min_position': 0.01, 'increment': 0.01},
+      'Crypto_MeanReversion': {'margin_per_unit': 6000, 'min_position': 0.1, 'increment': 0.1},
   }
 
-    # 4. Define your strategy allocations
-    #    The key (e.g., 'SPX_Condors') MUST EXACTLY MATCH the CSV filename.
+    # 4. Define your strategy allocations using WEIGHTS
+    #    Weights sum to 100% PER ACCOUNT
+    #    Each strategy gets: (account_capital * target_margin% * weight%) of margin
     ALLOCATION_CONFIG = {
-      # IBKR Main ($600K total capital, allocating ~$450K)
-      'SPX_Condors': {'account': 'IBKR Main', 'allocated_capital': 80_000, 'max_position_scale': 1.0},
-      'SPX_Butterflies': {'account': 'IBKR Main', 'allocated_capital': 60_000, 'max_position_scale': 0.8},
-      'NDX_IronCondors': {'account': 'IBKR Main', 'allocated_capital': 70_000, 'max_position_scale': 0.9},
-      'RUT_CreditSpreads': {'account': 'IBKR Main', 'allocated_capital': 65_000, 'max_position_scale': 0.85},
-      'Equity_LongShort': {'account': 'IBKR Main', 'allocated_capital': 50_000, 'max_position_scale': 0.5},
-      'TLT_Covered_Calls': {'account': 'IBKR Main', 'allocated_capital': 75_000, 'max_position_scale': 0.7},
-      'VIX_Calendar': {'account': 'IBKR Main', 'allocated_capital': 50_000, 'max_position_scale': 1.0},
+      # IBKR Main - 7 strategies, weights sum to 100%, margin budget = $400K (80% of $500K)
+      'SPX_Condors':         {'account': 'IBKR Main', 'weight': 18.0},  # 18% of $400K = $72K margin
+      'SPX_Butterflies':     {'account': 'IBKR Main', 'weight': 12.0},  # $48K margin
+      'NDX_IronCondors':     {'account': 'IBKR Main', 'weight': 16.0},  # $64K margin
+      'RUT_CreditSpreads':   {'account': 'IBKR Main', 'weight': 14.0},  # $56K margin
+      'Equity_LongShort':    {'account': 'IBKR Main', 'weight': 15.0},  # $60K margin
+      'TLT_Covered_Calls':   {'account': 'IBKR Main', 'weight': 13.0},  # $52K margin
+      'VIX_Calendar':        {'account': 'IBKR Main', 'weight': 12.0},  # $48K margin
+      # Sum = 100%
 
-      # Futures Account ($400K total capital, allocating ~$280K)
-      'Forex_Trend': {'account': 'Futures Account', 'allocated_capital': 45_000, 'max_position_scale': 0.75},
-      'Gold_Breakout': {'account': 'Futures Account', 'allocated_capital': 40_000, 'max_position_scale': 0.8},
-      'Crude_Momentum': {'account': 'Futures Account', 'allocated_capital': 35_000, 'max_position_scale': 0.7},
-      'ES_Scalping': {'account': 'Futures Account', 'allocated_capital': 50_000, 'max_position_scale': 0.65},
-      'NQ_Trend': {'account': 'Futures Account', 'allocated_capital': 45_000, 'max_position_scale': 0.6},
-      'ZN_MeanReversion': {'account': 'Futures Account', 'allocated_capital': 30_000, 'max_position_scale': 0.9},
-      'GC_Breakout': {'account': 'Futures Account', 'allocated_capital': 35_000, 'max_position_scale': 0.85},
+      # Futures Account - 7 strategies, weights sum to 100%, margin budget = $240K (80% of $300K)
+      'Forex_Trend':         {'account': 'Futures Account', 'weight': 16.0},  # $38.4K margin
+      'Gold_Breakout':       {'account': 'Futures Account', 'weight': 14.0},  # $33.6K margin
+      'Crude_Momentum':      {'account': 'Futures Account', 'weight': 15.0},  # $36K margin
+      'ES_Scalping':         {'account': 'Futures Account', 'weight': 18.0},  # $43.2K margin
+      'NQ_Trend':            {'account': 'Futures Account', 'weight': 17.0},  # $40.8K margin
+      'ZN_MeanReversion':    {'account': 'Futures Account', 'weight': 10.0},  # $24K margin
+      'GC_Breakout':         {'account': 'Futures Account', 'weight': 10.0},  # $24K margin
+      # Sum = 100%
+
+      # Crypto Account - 7 strategies, weights sum to 100%, margin budget = $160K (80% of $200K)
+      'BTC_Trend':           {'account': 'Crypto Account', 'weight': 20.0},  # $32K margin
+      'ETH_Momentum':        {'account': 'Crypto Account', 'weight': 18.0},  # $28.8K margin
+      'BTC_ETH_Spread':      {'account': 'Crypto Account', 'weight': 12.0},  # $19.2K margin
+      'SOL_Breakout':        {'account': 'Crypto Account', 'weight': 15.0},  # $24K margin
+      'Altcoin_Basket':      {'account': 'Crypto Account', 'weight': 15.0},  # $24K margin
+      'Funding_Rate_Arb':    {'account': 'Crypto Account', 'weight': 10.0},  # $16K margin
+      'Crypto_MeanReversion': {'account': 'Crypto Account', 'weight': 10.0},  # $16K margin
+      # Sum = 100%
   }
 
     # --- Run the compilation process ---

@@ -201,6 +201,99 @@ def generate_strategy_file(strategy_name, save_path):
           'min_position': 1,
           'position_increment': 1,
           'typical_contracts': 5
+      },
+
+      # ===== Crypto Account Strategies (7) =====
+      'BTC_Trend': {
+          'days': 2800,
+          'mean_return': 0.00065,
+          'volatility': 0.035,
+          'fat_tail_prob': 0.05,
+          'fat_tail_mult': 2.5,
+          'base_notional': 450000,
+          'base_margin': 45000,
+          'margin_per_contract': 15000,
+          'min_position': 0.01,
+          'position_increment': 0.01,
+          'typical_contracts': 3
+      },
+      'ETH_Momentum': {
+          'days': 2600,
+          'mean_return': 0.00070,
+          'volatility': 0.040,
+          'fat_tail_prob': 0.055,
+          'fat_tail_mult': 2.6,
+          'base_notional': 400000,
+          'base_margin': 40000,
+          'margin_per_contract': 8000,
+          'min_position': 0.01,
+          'position_increment': 0.01,
+          'typical_contracts': 5
+      },
+      'BTC_ETH_Spread': {
+          'days': 2400,
+          'mean_return': 0.00030,
+          'volatility': 0.020,
+          'fat_tail_prob': 0.03,
+          'fat_tail_mult': 2.0,
+          'base_notional': 400000,
+          'base_margin': 40000,
+          'margin_per_contract': 10000,
+          'min_position': 0.01,
+          'position_increment': 0.01,
+          'typical_contracts': 4
+      },
+      'SOL_Breakout': {
+          'days': 1800,
+          'mean_return': 0.00080,
+          'volatility': 0.050,
+          'fat_tail_prob': 0.06,
+          'fat_tail_mult': 2.8,
+          'base_notional': 240000,
+          'base_margin': 24000,
+          'margin_per_contract': 3000,
+          'min_position': 0.1,
+          'position_increment': 0.1,
+          'typical_contracts': 8
+      },
+      'Altcoin_Basket': {
+          'days': 2000,
+          'mean_return': 0.00055,
+          'volatility': 0.045,
+          'fat_tail_prob': 0.052,
+          'fat_tail_mult': 2.4,
+          'base_notional': 300000,
+          'base_margin': 30000,
+          'margin_per_contract': 5000,
+          'min_position': 0.1,
+          'position_increment': 0.1,
+          'typical_contracts': 6
+      },
+      'Funding_Rate_Arb': {
+          'days': 2200,
+          'mean_return': 0.00025,
+          'volatility': 0.015,
+          'fat_tail_prob': 0.02,
+          'fat_tail_mult': 1.8,
+          'base_notional': 360000,
+          'base_margin': 36000,
+          'margin_per_contract': 12000,
+          'min_position': 0.01,
+          'position_increment': 0.01,
+          'typical_contracts': 3
+      },
+      'Crypto_MeanReversion': {
+          'days': 2400,
+          'mean_return': 0.00045,
+          'volatility': 0.030,
+          'fat_tail_prob': 0.04,
+          'fat_tail_mult': 2.2,
+          'base_notional': 300000,
+          'base_margin': 30000,
+          'margin_per_contract': 6000,
+          'min_position': 0.1,
+          'position_increment': 0.1,
+          'typical_contracts': 5
       }
   }
 
@@ -276,12 +369,13 @@ def generate_strategy_file(strategy_name, save_path):
 
     print(f"Successfully created '{filepath}' with {len(records)} records.")
 
-    # --- Generate Equity Curve Graph ---
+    # --- Generate Equity Curve Graph with Margin Utilization ---
     graph_folder = 'strategy_performance_data_graphs'
     os.makedirs(graph_folder, exist_ok=True)
 
     # Calculate equity curve (convert percentage strings back to floats)
     returns_numeric = [r['Daily Returns (%)'] for r in records]
+    margin_values = [r['Maximum Daily Margin Utilization ($)'] for r in records]
     starting_capital = 1_000_000
     equity_curve = [starting_capital]
 
@@ -290,24 +384,36 @@ def generate_strategy_file(strategy_name, save_path):
 
     # Create date array for plotting
     dates = [datetime.strptime(r['Date'], '%Y-%m-%d') for r in records]
-    dates.insert(0, dates[0] - timedelta(days=1))  # Add starting point
+    dates.insert(0, dates[0] - timedelta(days=1))  # Add starting point for equity
+
+    # Calculate margin utilization %
+    margin_util = [(m / starting_capital) * 100 for m in margin_values]
 
     # Calculate total return and annualized return
     total_return = (equity_curve[-1] / equity_curve[0] - 1) * 100
     years = params['days'] / 365.25
     annualized_return = ((equity_curve[-1] / equity_curve[0]) ** (1/years) - 1) * 100
 
-    # Plot
-    plt.figure(figsize=(14, 7))
-    plt.plot(dates, equity_curve, linewidth=2, color='darkblue')
-    plt.title(f'{strategy_name} - Equity Curve\nTotal Return: {total_return:.2f}% | Annualized: {annualized_return:.2f}%',
-              fontsize=14, fontweight='bold')
-    plt.xlabel('Date', fontsize=12)
-    plt.ylabel('Equity ($)', fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-    plt.gcf().autofmt_xdate()
-    plt.tight_layout()
+    # Create stacked subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+
+    # Top plot: Equity curve
+    ax1.plot(dates, equity_curve, linewidth=2, color='tab:blue')
+    ax1.set_ylabel('Equity ($)', fontsize=12)
+    ax1.set_title(f'{strategy_name} - Equity Curve & Margin Utilization\nTotal Return: {total_return:.2f}% | Annualized: {annualized_return:.2f}%',
+                  fontsize=14, fontweight='bold')
+    ax1.grid(True, alpha=0.3)
+
+    # Bottom plot: Margin utilization
+    dates_margin = [datetime.strptime(r['Date'], '%Y-%m-%d') for r in records]
+    ax2.plot(dates_margin, margin_util, linewidth=2, color='tab:red')
+    ax2.set_xlabel('Date', fontsize=12)
+    ax2.set_ylabel('Margin Utilization (%)', fontsize=12)
+    ax2.grid(True, alpha=0.3)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
 
     graph_path = os.path.join(graph_folder, f'{strategy_name}_equity_curve.png')
     plt.savefig(graph_path, dpi=300)
@@ -330,7 +436,10 @@ if __name__ == "__main__":
       'Equity_LongShort', 'TLT_Covered_Calls', 'VIX_Calendar',
       # Futures Account
       'Forex_Trend', 'Gold_Breakout', 'Crude_Momentum', 'ES_Scalping',
-      'NQ_Trend', 'ZN_MeanReversion', 'GC_Breakout'
+      'NQ_Trend', 'ZN_MeanReversion', 'GC_Breakout',
+      # Crypto Account
+      'BTC_Trend', 'ETH_Momentum', 'BTC_ETH_Spread', 'SOL_Breakout',
+      'Altcoin_Basket', 'Funding_Rate_Arb', 'Crypto_MeanReversion'
   ]
     
     print("--- Starting Sample Data Generation ---")
