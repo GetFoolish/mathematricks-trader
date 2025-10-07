@@ -17,34 +17,192 @@ def generate_strategy_file(strategy_name, save_path):
     # --- Strategy Parameter Configuration ---
     # Define the unique characteristics of each strategy here.
     strategy_params = {
-        'SPX_Condors': {
-            'days': 3650,  # 10 years of data
-            'mean_return': 0.00035,  # Slight alpha (~15% annual)
-            'volatility': 0.011,   # Moderate volatility for stochastic appearance
-            'fat_tail_prob': 0.03,  # 3% chance of fat tail event
-            'fat_tail_mult': 2.2,   # Fat tails are 2.2x normal volatility
-            'base_notional': 5500000,
-            'base_margin': 50000
-        },
-        'Forex_Trend': {
-            'days': 1460,  # 4 years of data
-            'mean_return': 0.00045,  # Slight alpha (~18% annual)
-            'volatility': 0.016,   # Higher volatility
-            'fat_tail_prob': 0.04,  # 4% chance of fat tail event
-            'fat_tail_mult': 2.1,
-            'base_notional': 850000,
-            'base_margin': 17000
-        },
-        'Gold_Breakout': {
-            'days': 2555,  # 7 years of data
-            'mean_return': 0.00040,  # Slight alpha (~23% annual)
-            'volatility': 0.016,   # High volatility but reduced
-            'fat_tail_prob': 0.03,  # 3% chance of fat tail event
-            'fat_tail_mult': 2.0,
-            'base_notional': 425000,
-            'base_margin': 41000
-        }
-    }
+      # ===== IBKR Main Account Strategies (7) =====
+      'SPX_Condors': {
+          'days': 3650,
+          'mean_return': 0.00035,
+          'volatility': 0.011,
+          'fat_tail_prob': 0.03,
+          'fat_tail_mult': 2.2,
+          'base_notional': 5500000,
+          'base_margin': 50000,
+          'margin_per_contract': 5000,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 10
+      },
+      'SPX_Butterflies': {
+          'days': 3200,
+          'mean_return': 0.00028,
+          'volatility': 0.009,
+          'fat_tail_prob': 0.025,
+          'fat_tail_mult': 2.0,
+          'base_notional': 3300000,
+          'base_margin': 30000,
+          'margin_per_contract': 3000,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 10
+      },
+      'NDX_IronCondors': {
+          'days': 2800,
+          'mean_return': 0.00042,
+          'volatility': 0.013,
+          'fat_tail_prob': 0.035,
+          'fat_tail_mult': 2.3,
+          'base_notional': 7200000,
+          'base_margin': 65000,
+          'margin_per_contract': 6500,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 10
+      },
+      'RUT_CreditSpreads': {
+          'days': 3100,
+          'mean_return': 0.00038,
+          'volatility': 0.012,
+          'fat_tail_prob': 0.03,
+          'fat_tail_mult': 2.1,
+          'base_notional': 4400000,
+          'base_margin': 44000,
+          'margin_per_contract': 4400,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 10
+      },
+      'Equity_LongShort': {
+          'days': 2600,
+          'mean_return': 0.00032,
+          'volatility': 0.010,
+          'fat_tail_prob': 0.028,
+          'fat_tail_mult': 1.9,
+          'base_notional': 2000000,
+          'base_margin': 1000000,
+          'margin_per_contract': 100000,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 10
+      },
+      'TLT_Covered_Calls': {
+          'days': 3400,
+          'mean_return': 0.00025,
+          'volatility': 0.008,
+          'fat_tail_prob': 0.02,
+          'fat_tail_mult': 1.8,
+          'base_notional': 1800000,
+          'base_margin': 900000,
+          'margin_per_contract': 90000,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 10
+      },
+      'VIX_Calendar': {
+          'days': 2900,
+          'mean_return': 0.00045,
+          'volatility': 0.016,
+          'fat_tail_prob': 0.04,
+          'fat_tail_mult': 2.5,
+          'base_notional': 3800000,
+          'base_margin': 38000,
+          'margin_per_contract': 3800,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 10
+      },
+
+      # ===== Futures Account Strategies (7) =====
+      'Forex_Trend': {
+          'days': 3650,
+          'mean_return': 0.00045,
+          'volatility': 0.016,
+          'fat_tail_prob': 0.04,
+          'fat_tail_mult': 2.1,
+          'base_notional': 850000,
+          'base_margin': 17000,
+          'margin_per_contract': 2000,
+          'min_position': 0.01,
+          'position_increment': 0.1,
+          'typical_contracts': 8.5
+      },
+      'Gold_Breakout': {
+          'days': 3650,
+          'mean_return': 0.00040,
+          'volatility': 0.016,
+          'fat_tail_prob': 0.03,
+          'fat_tail_mult': 2.0,
+          'base_notional': 425000,
+          'base_margin': 41000,
+          'margin_per_contract': 8200,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 5
+      },
+      'Crude_Momentum': {
+          'days': 3300,
+          'mean_return': 0.00048,
+          'volatility': 0.018,
+          'fat_tail_prob': 0.045,
+          'fat_tail_mult': 2.2,
+          'base_notional': 600000,
+          'base_margin': 30000,
+          'margin_per_contract': 6000,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 5
+      },
+      'ES_Scalping': {
+          'days': 2400,
+          'mean_return': 0.00035,
+          'volatility': 0.014,
+          'fat_tail_prob': 0.035,
+          'fat_tail_mult': 2.0,
+          'base_notional': 1250000,
+          'base_margin': 62500,
+          'margin_per_contract': 12500,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 5
+      },
+      'NQ_Trend': {
+          'days': 2700,
+          'mean_return': 0.00052,
+          'volatility': 0.019,
+          'fat_tail_prob': 0.04,
+          'fat_tail_mult': 2.3,
+          'base_notional': 1800000,
+          'base_margin': 90000,
+          'margin_per_contract': 18000,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 5
+      },
+      'ZN_MeanReversion': {
+          'days': 3000,
+          'mean_return': 0.00030,
+          'volatility': 0.011,
+          'fat_tail_prob': 0.025,
+          'fat_tail_mult': 1.8,
+          'base_notional': 550000,
+          'base_margin': 11000,
+          'margin_per_contract': 2200,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 5
+      },
+      'GC_Breakout': {
+          'days': 3100,
+          'mean_return': 0.00043,
+          'volatility': 0.017,
+          'fat_tail_prob': 0.038,
+          'fat_tail_mult': 2.1,
+          'base_notional': 720000,
+          'base_margin': 36000,
+          'margin_per_contract': 7200,
+          'min_position': 1,
+          'position_increment': 1,
+          'typical_contracts': 5
+      }
+  }
 
     if strategy_name not in strategy_params:
         print(f"Error: Parameters for '{strategy_name}' not found. Cannot generate data.")
@@ -77,9 +235,22 @@ def generate_strategy_file(strategy_name, save_path):
             prev_return = records[-1]['Daily Returns (%)']
             daily_return += 0.3 * prev_return  # Slight momentum effect
 
-        # Add some random noise to notional and margin to make it look realistic
-        notional = params['base_notional'] * (1 + (random.random() - 0.5) * 0.1)
-        margin = params['base_margin'] * (1 + (random.random() - 0.5) * 0.1)
+        # Generate position size with some variation (±20% around typical contracts)
+        # This simulates the strategy varying position size based on market conditions
+        position_variation = 1 + (random.random() - 0.5) * 0.4  # 0.8 to 1.2
+        raw_position = params['typical_contracts'] * position_variation
+
+        # Round to valid position size based on increment
+        actual_position = max(
+            params['min_position'],
+            round(raw_position / params['position_increment']) * params['position_increment']
+        )
+
+        # Calculate margin and notional based on actual position
+        margin = actual_position * params['margin_per_contract']
+        # Notional varies but should be correlated with position size
+        notional_per_unit = params['base_notional'] / params['typical_contracts']
+        notional = actual_position * notional_per_unit * (1 + (random.random() - 0.5) * 0.05)
 
         records.append({
             'Date': current_date.strftime('%Y-%m-%d'),
@@ -153,7 +324,14 @@ if __name__ == "__main__":
     TARGET_FOLDER = 'strategy_performance_data'
     
     # List of strategies to generate
-    STRATEGIES_TO_CREATE = ['SPX_Condors', 'Forex_Trend', 'Gold_Breakout']
+    STRATEGIES_TO_CREATE = [
+      # IBKR Main
+      'SPX_Condors', 'SPX_Butterflies', 'NDX_IronCondors', 'RUT_CreditSpreads',
+      'Equity_LongShort', 'TLT_Covered_Calls', 'VIX_Calendar',
+      # Futures Account
+      'Forex_Trend', 'Gold_Breakout', 'Crude_Momentum', 'ES_Scalping',
+      'NQ_Trend', 'ZN_MeanReversion', 'GC_Breakout'
+  ]
     
     print("--- Starting Sample Data Generation ---")
     for strategy in STRATEGIES_TO_CREATE:

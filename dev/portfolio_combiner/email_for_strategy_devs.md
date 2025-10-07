@@ -36,6 +36,27 @@ This context is essential for understanding how the strategy might interact with
 *   **Example for Futures/Commodities:** "A breakout strategy on Gold (GC) and Crude Oil (CL) futures."
 *   **Example for Stocks:** "A long/short equity pairs trading strategy focused on the semiconductor sector."
 
+**5. Unit-Level Margin Information**
+To properly scale your strategy within my portfolio, I need to understand the margin requirements at the unit level (per contract, per lot, per share, etc.).
+
+*   **Margin Per Unit:** How much margin does one tradeable unit require?
+    *   **Example for SPX Options:** "$5,000 per contract for a 50-point wide credit spread."
+    *   **Example for Forex:** "$2,000 per standard lot at 50:1 leverage."
+    *   **Example for Futures/Commodities:** "$8,200 per contract (CME initial margin for Crude Oil CL)."
+    *   **Example for Stocks:** "$450 per share in a Reg-T account (50% margin requirement for a $900 stock)."
+
+*   **Minimum Position Size:** What is the smallest position you can take?
+    *   **Example for Options:** "1 contract minimum."
+    *   **Example for Forex:** "0.01 lots (micro lot minimum)."
+    *   **Example for Futures:** "1 contract minimum."
+    *   **Example for Stocks:** "1 share minimum."
+
+*   **Position Increments:** Can positions be scaled continuously, or only in specific increments?
+    *   **Example for Options:** "Whole contracts only (1, 2, 3, ...)."
+    *   **Example for Forex:** "0.1 lot increments (0.1, 0.2, 0.3, ...)."
+    *   **Example for Futures:** "Whole contracts only."
+    *   **Example for Stocks:** "Whole shares only."
+
 This data will be used strictly for internal portfolio construction and risk management to ensure I can allocate the appropriate amount of capital to your strategy safely. Even if you can only provide a few of these points, any data you can share would be incredibly valuable.
 
 I appreciate your assistance in providing this detailed information.
