@@ -5,10 +5,15 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import quantstats as qs
 
-def compile_portfolio(data_folder, allocation_config):
+def compile_portfolio(data_folder, allocation_config, starting_capital=1_000_000):
     """
     Reads all strategy CSVs from a folder, aligns them to a master timeline,
-    and calculates performance based on a hard-coded allocation dictionary.
+    and calculates performance based on allocation config and capital.
+
+    Args:
+        data_folder: Path to folder containing strategy CSV files
+        allocation_config: Dict mapping strategy names to account and multiplier
+        starting_capital: Starting capital for capital allocation analysis
     """
     print("Starting portfolio compilation...")
 
@@ -82,95 +87,160 @@ def compile_portfolio(data_folder, allocation_config):
     # --- 5. Calculate Total Portfolio Performance ---
     total_portfolio_df = pd.DataFrame(index=account_perf_df.index)
     total_portfolio_df['Total_Return_%'] = account_perf_df.sum(axis=1)
-
-    starting_capital = 1_000_000
     total_portfolio_df['Equity_Curve'] = starting_capital * (1 + total_portfolio_df['Total_Return_%']).cumprod()
 
     print("Step 4: Total portfolio performance and equity curve calculated.")
+
+    # --- 5a. Calculate Capital Allocation and Margin Metrics ---
+    # Calculate total margin used across all strategies
+    margin_cols = [col for col in master_df.columns if col.endswith('_Margin_Used')]
+    notional_cols = [col for col in master_df.columns if col.endswith('_Notional_Value')]
+
+    master_df['Total_Margin_Used'] = master_df[margin_cols].sum(axis=1)
+    master_df['Total_Notional_Exposure'] = master_df[notional_cols].sum(axis=1)
+    master_df['Margin_Utilization_%'] = (master_df['Total_Margin_Used'] / starting_capital) * 100
+    master_df['Leverage_Ratio'] = master_df['Total_Notional_Exposure'] / starting_capital
+
+    # Calculate account-level margin metrics
+    for account, sized_cols in sized_returns_map.items():
+        # Find strategies belonging to this account
+        account_strategies = [config for config in allocation_config.items() if config[1]['account'] == account]
+        account_margin_cols = [f"{strat}_Margin_Used" for strat, _ in account_strategies]
+        account_notional_cols = [f"{strat}_Notional_Value" for strat, _ in account_strategies]
+
+        account_perf_df[f"{account}_Margin_Used"] = master_df[[col for col in account_margin_cols if col in master_df.columns]].sum(axis=1)
+        account_perf_df[f"{account}_Notional_Exposure"] = master_df[[col for col in account_notional_cols if col in master_df.columns]].sum(axis=1)
+        account_perf_df[f"{account}_Margin_Utilization_%"] = (account_perf_df[f"{account}_Margin_Used"] / starting_capital) * 100
+
+    # Add margin metrics to portfolio dataframe
+    total_portfolio_df['Total_Margin_Used'] = master_df['Total_Margin_Used']
+    total_portfolio_df['Total_Notional_Exposure'] = master_df['Total_Notional_Exposure']
+    total_portfolio_df['Margin_Utilization_%'] = master_df['Margin_Utilization_%']
+    total_portfolio_df['Leverage_Ratio'] = master_df['Leverage_Ratio']
+
+    print("Step 4a: Capital allocation and margin metrics calculated.")
 
     # --- 6. Generate Equity Curve Graphs ---
     output_folder = 'output'
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
 
-    # 6a. Strategy-level equity curves
+    # 6a. Strategy-level equity curves with margin utilization
     for strategy_name in allocation_config.keys():
         sized_return_col = f"{strategy_name}_Sized_Return_%"
-        if sized_return_col in master_df.columns:
-            equity_curve = starting_capital * (1 + master_df[sized_return_col]).cumprod()
+        margin_col = f"{strategy_name}_Margin_Used"
 
-            plt.figure(figsize=(12, 6))
-            plt.plot(equity_curve.index, equity_curve.values, linewidth=2)
-            plt.title(f'{strategy_name} - Equity Curve', fontsize=14, fontweight='bold')
-            plt.xlabel('Date', fontsize=12)
-            plt.ylabel('Equity ($)', fontsize=12)
-            plt.grid(True, alpha=0.3)
-            plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-            plt.gcf().autofmt_xdate()
-            plt.tight_layout()
+        if sized_return_col in master_df.columns and margin_col in master_df.columns:
+            equity_curve = starting_capital * (1 + master_df[sized_return_col]).cumprod()
+            margin_util = (master_df[margin_col] / starting_capital) * 100
+
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+
+            # Top plot: Equity curve
+            ax1.plot(equity_curve.index, equity_curve.values, linewidth=2, color='tab:blue')
+            ax1.set_ylabel('Equity ($)', fontsize=12)
+            ax1.set_title(f'{strategy_name} - Equity Curve & Margin Utilization', fontsize=14, fontweight='bold')
+            ax1.grid(True, alpha=0.3)
+
+            # Bottom plot: Margin utilization
+            ax2.plot(margin_util.index, margin_util.values, linewidth=2, color='tab:red')
+            ax2.set_xlabel('Date', fontsize=12)
+            ax2.set_ylabel('Margin Utilization (%)', fontsize=12)
+            ax2.grid(True, alpha=0.3)
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+
+            fig.autofmt_xdate()
+            fig.tight_layout()
             plt.savefig(os.path.join(output_folder, f'[STRATEGY]{strategy_name}_equity_curve.png'), dpi=300)
             plt.close()
 
-    # 6b. Account-level equity curves
+    # 6b. Account-level equity curves with margin utilization
     for account in sized_returns_map.keys():
         account_return_col = f"{account}_Return_%"
-        if account_return_col in account_perf_df.columns:
-            equity_curve = starting_capital * (1 + account_perf_df[account_return_col]).cumprod()
+        account_margin_col = f"{account}_Margin_Utilization_%"
 
-            plt.figure(figsize=(12, 6))
-            plt.plot(equity_curve.index, equity_curve.values, linewidth=2)
-            plt.title(f'{account} - Equity Curve', fontsize=14, fontweight='bold')
-            plt.xlabel('Date', fontsize=12)
-            plt.ylabel('Equity ($)', fontsize=12)
-            plt.grid(True, alpha=0.3)
-            plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-            plt.gcf().autofmt_xdate()
-            plt.tight_layout()
+        if account_return_col in account_perf_df.columns and account_margin_col in account_perf_df.columns:
+            equity_curve = starting_capital * (1 + account_perf_df[account_return_col]).cumprod()
+            margin_util = account_perf_df[account_margin_col]
+
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+
+            # Top plot: Equity curve
+            ax1.plot(equity_curve.index, equity_curve.values, linewidth=2, color='tab:blue')
+            ax1.set_ylabel('Equity ($)', fontsize=12)
+            ax1.set_title(f'{account} - Equity Curve & Margin Utilization', fontsize=14, fontweight='bold')
+            ax1.grid(True, alpha=0.3)
+
+            # Bottom plot: Margin utilization
+            ax2.plot(margin_util.index, margin_util.values, linewidth=2, color='tab:red')
+            ax2.set_xlabel('Date', fontsize=12)
+            ax2.set_ylabel('Margin Utilization (%)', fontsize=12)
+            ax2.grid(True, alpha=0.3)
+            ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+
+            fig.autofmt_xdate()
+            fig.tight_layout()
             plt.savefig(os.path.join(output_folder, f'[ACCOUNT]{account}_equity_curve.png'), dpi=300)
             plt.close()
 
-    # 6c. Total portfolio equity curve
-    plt.figure(figsize=(12, 6))
-    plt.plot(total_portfolio_df.index, total_portfolio_df['Equity_Curve'].values, linewidth=2, color='green')
-    plt.title('Total Portfolio - Equity Curve', fontsize=14, fontweight='bold')
-    plt.xlabel('Date', fontsize=12)
-    plt.ylabel('Equity ($)', fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-    plt.gcf().autofmt_xdate()
-    plt.tight_layout()
+    # 6c. Total portfolio equity curve with margin utilization
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+
+    # Top plot: Equity curve
+    ax1.plot(total_portfolio_df.index, total_portfolio_df['Equity_Curve'].values, linewidth=2.5, color='tab:green')
+    ax1.set_ylabel('Equity ($)', fontsize=12)
+    ax1.set_title('Total Portfolio - Equity Curve & Margin Utilization', fontsize=14, fontweight='bold')
+    ax1.grid(True, alpha=0.3)
+
+    # Bottom plot: Margin utilization
+    ax2.plot(total_portfolio_df.index, total_portfolio_df['Margin_Utilization_%'].values, linewidth=2, color='tab:red')
+    ax2.set_xlabel('Date', fontsize=12)
+    ax2.set_ylabel('Margin Utilization (%)', fontsize=12)
+    ax2.grid(True, alpha=0.3)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
     plt.savefig(os.path.join(output_folder, '[PORTFOLIO]_equity_curve.png'), dpi=300)
     plt.close()
 
-    # 6d. Combined graph with all curves
-    plt.figure(figsize=(14, 8))
+    # 6d. Combined graph with all curves and margin utilization
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12), sharex=True)
 
-    # Plot strategy curves
+    # Top plot: All equity curves
+    # Plot strategy equity curves
     for strategy_name in allocation_config.keys():
         sized_return_col = f"{strategy_name}_Sized_Return_%"
         if sized_return_col in master_df.columns:
             equity_curve = starting_capital * (1 + master_df[sized_return_col]).cumprod()
-            plt.plot(equity_curve.index, equity_curve.values, linewidth=1.5, label=f'{strategy_name}', alpha=0.7)
+            ax1.plot(equity_curve.index, equity_curve.values, linewidth=1.5, label=f'{strategy_name}', alpha=0.7)
 
-    # Plot account curves
+    # Plot account equity curves
     for account in sized_returns_map.keys():
         account_return_col = f"{account}_Return_%"
         if account_return_col in account_perf_df.columns:
             equity_curve = starting_capital * (1 + account_perf_df[account_return_col]).cumprod()
-            plt.plot(equity_curve.index, equity_curve.values, linewidth=2, label=f'{account}', linestyle='--', alpha=0.8)
+            ax1.plot(equity_curve.index, equity_curve.values, linewidth=2, label=f'{account}', linestyle='--', alpha=0.8)
 
-    # Plot portfolio curve
-    plt.plot(total_portfolio_df.index, total_portfolio_df['Equity_Curve'].values, linewidth=3,
+    # Plot total portfolio equity curve
+    ax1.plot(total_portfolio_df.index, total_portfolio_df['Equity_Curve'].values, linewidth=3,
              label='Total Portfolio', color='green', alpha=0.9)
 
-    plt.title('All Equity Curves Combined', fontsize=14, fontweight='bold')
-    plt.xlabel('Date', fontsize=12)
-    plt.ylabel('Equity ($)', fontsize=12)
-    plt.legend(loc='best', fontsize=10)
-    plt.grid(True, alpha=0.3)
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-    plt.gcf().autofmt_xdate()
-    plt.tight_layout()
+    ax1.set_ylabel('Equity ($)', fontsize=12)
+    ax1.set_title('All Equity Curves & Portfolio Margin Utilization', fontsize=14, fontweight='bold')
+    ax1.legend(loc='upper left', fontsize=9)
+    ax1.grid(True, alpha=0.3)
+
+    # Bottom plot: Portfolio margin utilization
+    ax2.plot(total_portfolio_df.index, total_portfolio_df['Margin_Utilization_%'].values,
+             linewidth=2, color='tab:red')
+    ax2.set_xlabel('Date', fontsize=12)
+    ax2.set_ylabel('Portfolio Margin Utilization (%)', fontsize=12)
+    ax2.grid(True, alpha=0.3)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+
+    fig.autofmt_xdate()
+    fig.tight_layout()
     plt.savefig(os.path.join(output_folder, '[ALL]_equity_curves.png'), dpi=300)
     plt.close()
 
@@ -223,20 +293,23 @@ def compile_portfolio(data_folder, allocation_config):
 # --- MAIN EXECUTION BLOCK ---
 # ==============================================================================
 if __name__ == "__main__":
-    
+
     # --- This is your Control Panel ---
     # 1. Define the folder where your strategy CSVs are located.
     STRATEGY_DATA_FOLDER = 'strategy_performance_data'
-    
-    # 2. Define your strategy allocations.
+
+    # 2. Define your starting capital for capital allocation analysis.
+    STARTING_CAPITAL = 1_000_000
+
+    # 3. Define your strategy allocations.
     #    The key (e.g., 'SPX_Condors') MUST EXACTLY MATCH the CSV filename.
     ALLOCATION_CONFIG = {
-        'SPX_Condors':   {'account': 'IBKR Main',       'multiplier': 1.0},
+        'SPX_Condors':   {'account': 'IBKR Main',       'multiplier': 0.75},
         'Forex_Trend':   {'account': 'Futures Account', 'multiplier': 0.75},
-        'Gold_Breakout': {'account': 'IBKR Main',       'multiplier': 0.5}
+        'Gold_Breakout': {'account': 'IBKR Main',       'multiplier': 0.75}
         # To add a new strategy, just add a new line here.
         # 'New_Strategy':  {'account': 'IBKR Main', 'multiplier': 0.25},
     }
-    
+
     # --- Run the compilation process ---
-    compile_portfolio(STRATEGY_DATA_FOLDER, ALLOCATION_CONFIG)
+    compile_portfolio(STRATEGY_DATA_FOLDER, ALLOCATION_CONFIG, STARTING_CAPITAL)
