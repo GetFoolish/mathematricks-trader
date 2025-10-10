@@ -1,65 +1,79 @@
-Of course. Here is the email template, cleaned up and properly formatted in Markdown for clear presentation and readability.
-
-***
-
-**Subject: Data Request for Advanced Portfolio Allocation & Risk Modeling**
+**Subject: Data Request for Portfolio Allocation & Risk Modeling**
 
 Hi [Strategy Owner's Name],
 
 I hope this message finds you well.
 
-I am in the process of constructing a multi-strategy portfolio and am very impressed with the performance of your strategy. To ensure it is integrated in a mathematically sound and risk-aware manner, I need to perform a detailed analysis that goes beyond simple returns.
+I am constructing a multi-strategy portfolio and am very impressed with the performance of your strategy. I'd love to integrate it into my portfolio using proper risk management and position sizing.
 
-To facilitate this, could you please provide the following historical data, ideally in a daily time-series format (CSV or Excel)?
+**I can work with whatever data you have available** - even just daily returns is helpful!
 
-**1. Daily Returns (%)**
-The complete history of daily P&L, expressed as a percentage of the capital allocated to the strategy.
+---
 
-**2. Maximum Daily Notional Value**
-The peak total underlying value of all open positions on any given day. This is crucial for managing the overall portfolio leverage.
-*   **Example for SPX Options:** "On Oct 5th, the max position was short 10 contracts of the 5500 strike put, for a total notional value of $5,500,000 (10 contracts x 5500 strike x $100 multiplier)."
-*   **Example for Forex:** "The peak exposure was long 8.5 standard lots of USD/JPY, for a notional value of $850,000 (8.5 lots x 100,000 units/lot)."
-*   **Example for Futures/Commodities:** "The largest position was long 5 contracts of Crude Oil (CL) at $85/barrel, representing a notional value of $425,000 (5 contracts x 1,000 barrel multiplier x $85 price)."
-*   **Example for Stocks:** "The portfolio held long 1,000 shares of NVDA at $900/share, for a notional value of $900,000."
+## **What I Need (In Order of Priority)**
 
-**3. Maximum Daily Margin Utilization ($)**
-The peak dollar amount of margin required by the strategy on any given day. This is the single most important metric for preventing margin calls. If possible, please specify if this is based on a Reg-T or Portfolio Margin calculation.
-*   **Example for SPX Options:** "For a short 50-point wide credit spread, the margin held was $5,000 per contract."
-*   **Example for Forex:** "For the $850,000 notional USD/JPY position at 50:1 leverage, the required margin was $17,000."
-*   **Example for Futures/Commodities:** "For the 5 contracts of Crude Oil (CL), the initial margin required by the exchange was approximately $41,000 (5 contracts x $8,200 CME margin)."
-*   **Example for Stocks:** "For the $900,000 long NVDA position in a Reg-T account, the initial margin requirement was $450,000 (50% of the position)."
+### **MINIMUM: Daily Returns (%)**
+A CSV with your daily returns - I'll estimate the rest.
 
-**4. High-Level Description of the Strategy's Structure**
-This context is essential for understanding how the strategy might interact with others during different market conditions.
-*   **Example for SPX Options:** "SPX 0-DTE Iron Condors, 10 delta, 50 points wide."
-*   **Example for Forex:** "A trend-following strategy on major pairs (EUR/USD, GBP/USD) using moving average crosses on the 4-hour chart."
-*   **Example for Futures/Commodities:** "A breakout strategy on Gold (GC) and Crude Oil (CL) futures."
-*   **Example for Stocks:** "A long/short equity pairs trading strategy focused on the semiconductor sector."
+```csv
+Date,Daily Returns (%)
+2024-01-15,0.5%
+2024-01-16,-0.3%
+2024-01-17,0.8%
+```
 
-**5. Unit-Level Margin Information**
-To properly scale your strategy within my portfolio, I need to understand the margin requirements at the unit level (per contract, per lot, per share, etc.).
+### **RECOMMENDED: Returns + Position Data** ⭐
+This gives me accurate risk metrics without needing assumptions.
 
-*   **Margin Per Unit:** How much margin does one tradeable unit require?
-    *   **Example for SPX Options:** "$5,000 per contract for a 50-point wide credit spread."
-    *   **Example for Forex:** "$2,000 per standard lot at 50:1 leverage."
-    *   **Example for Futures/Commodities:** "$8,200 per contract (CME initial margin for Crude Oil CL)."
-    *   **Example for Stocks:** "$450 per share in a Reg-T account (50% margin requirement for a $900 stock)."
+```csv
+Date,Daily Returns (%),Maximum Daily Notional Value,Maximum Daily Margin Utilization ($)
+2024-01-15,0.5%,5500000,50000
+2024-01-16,-0.3%,6200000,55000
+2024-01-17,0.8%,4800000,45000
+```
 
-*   **Minimum Position Size:** What is the smallest position you can take?
-    *   **Example for Options:** "1 contract minimum."
-    *   **Example for Forex:** "0.01 lots (micro lot minimum)."
-    *   **Example for Futures:** "1 contract minimum."
-    *   **Example for Stocks:** "1 share minimum."
+**What these mean:**
+- **Daily Returns (%)**: Your daily P&L as % of account equity
+- **Maximum Daily Notional Value**: Total market value of all positions that day
+- **Maximum Daily Margin Utilization ($)**: Total margin requirement that day
 
-*   **Position Increments:** Can positions be scaled continuously, or only in specific increments?
-    *   **Example for Options:** "Whole contracts only (1, 2, 3, ...)."
-    *   **Example for Forex:** "0.1 lot increments (0.1, 0.2, 0.3, ...)."
-    *   **Example for Futures:** "Whole contracts only."
-    *   **Example for Stocks:** "Whole shares only."
+### **BONUS: Position Sizing Rules** (Provide Once)
+This helps me scale your strategy correctly in my portfolio:
 
-This data will be used strictly for internal portfolio construction and risk management to ensure I can allocate the appropriate amount of capital to your strategy safely. Even if you can only provide a few of these points, any data you can share would be incredibly valuable.
+- **Minimum Position Size**: Smallest tradeable unit (e.g., "1 contract", "0.01 lots", "100 shares")
+- **Position Increment**: How positions scale (e.g., "1 contract", "0.1 lots", "100 shares")
 
-I appreciate your assistance in providing this detailed information.
+**Examples:**
+- **Options**: Min: 1 contract, Increment: 1 contract
+- **Forex**: Min: 0.01 lot, Increment: 0.1 lot
+- **Futures**: Min: 1 contract, Increment: 1 contract
+- **Stocks**: Min: 1 share, Increment: 1 share (or 100 if round lots)
+
+**SPX Options Example:**
+- Notional: 10 contracts × 5500 strike × $100 = $5,500,000
+- Margin: $50,000 (broker requirement for that position)
+
+**Commodities Example:**
+- Notional: 5 CL contracts × 1,000 barrels × $85 = $425,000
+- Margin: $41,000 (CME initial margin for 5 contracts)
+
+**Forex Example:**
+- Notional: 8.5 lots × $100,000 = $850,000
+- Margin: $17,000 (at 50:1 leverage)
+
+---
+
+## **Why These 3 Columns?**
+
+With Date, Returns%, Notional, and Margin, I can calculate everything else automatically:
+- ✅ Daily P&L ($) = calculated from returns and equity curve
+- ✅ Return on Notional (%) = calculated from P&L ÷ Notional
+
+**Key point:** I cannot accurately estimate margin from returns alone, because daily returns don't tell me how many positions you had open. That's why the Margin column is particularly valuable!
+
+---
+
+I appreciate any data you can share - whether it's just the basic returns or the full historical dataset!
 
 Best regards,
 

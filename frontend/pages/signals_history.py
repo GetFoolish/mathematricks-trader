@@ -9,6 +9,10 @@ import pandas as pd
 from datetime import datetime, timedelta
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 

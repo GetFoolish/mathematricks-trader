@@ -20,8 +20,8 @@ python-dotenv>=1.0.0
 # python-binance>=1.0.19  # Binance
 # MetaTrader5>=5.0.45  # For Vantage (MT5)
 
-# Optional: Performance metrics
-# quantstats>=0.0.62
+# Performance metrics
+quantstats>=0.0.62
 
 # Development dependencies (optional)
 # pytest>=7.4.0

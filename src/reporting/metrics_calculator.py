@@ -8,6 +8,11 @@ from typing import List, Dict, Optional
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import quantstats as qs
+
+# Suppress quantstats warnings
+import warnings
+warnings.filterwarnings('ignore')
 
 
 class MetricsCalculator:
@@ -81,7 +86,7 @@ class MetricsCalculator:
         pnl_history: List[Dict]
     ) -> Dict:
         """
-        Calculate basic performance metrics
+        Calculate performance metrics using quantstats
 
         Args:
             pnl_history: List of PnL records
@@ -95,34 +100,40 @@ class MetricsCalculator:
             return {
                 'total_return': 0.0,
                 'sharpe_ratio': 0.0,
+                'sortino_ratio': 0.0,
+                'calmar_ratio': 0.0,
                 'max_drawdown': 0.0,
-                'win_rate': 0.0
+                'win_rate': 0.0,
+                'volatility': 0.0,
+                'var': 0.0,
+                'cvar': 0.0
             }
 
-        # Total return
-        total_return = (1 + returns).prod() - 1
+        # Use quantstats for metrics
+        total_return = qs.stats.comp(returns) * 100
+        sharpe = qs.stats.sharpe(returns)
+        sortino = qs.stats.sortino(returns)
+        calmar = qs.stats.calmar(returns)
+        max_drawdown = abs(qs.stats.max_drawdown(returns) * 100)
+        volatility = qs.stats.volatility(returns) * 100
+        var = abs(qs.stats.var(returns) * 100)
+        cvar = abs(qs.stats.cvar(returns) * 100)
 
-        # Sharpe ratio (annualized, assuming 252 trading days)
-        mean_return = returns.mean()
-        std_return = returns.std()
-        sharpe = (mean_return / std_return * np.sqrt(252)) if std_return > 0 else 0
-
-        # Max drawdown
-        cumulative = (1 + returns).cumprod()
-        running_max = cumulative.expanding().max()
-        drawdown = (cumulative - running_max) / running_max
-        max_drawdown = drawdown.min()
-
-        # Win rate
+        # Win rate (manual calculation)
         positive_days = (returns > 0).sum()
         total_days = len(returns)
         win_rate = (positive_days / total_days * 100) if total_days > 0 else 0
 
         return {
-            'total_return': round(total_return * 100, 2),
+            'total_return': round(total_return, 2),
             'sharpe_ratio': round(sharpe, 2),
-            'max_drawdown': round(max_drawdown * 100, 2),
-            'win_rate': round(win_rate, 2)
+            'sortino_ratio': round(sortino, 2),
+            'calmar_ratio': round(calmar, 2),
+            'max_drawdown': round(max_drawdown, 2),
+            'win_rate': round(win_rate, 2),
+            'volatility': round(volatility, 2),
+            'var': round(var, 2),
+            'cvar': round(cvar, 2)
         }
 
     def calculate_strategy_correlation(

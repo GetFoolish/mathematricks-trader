@@ -9,6 +9,10 @@ import plotly.graph_objects as go
 import sys
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 

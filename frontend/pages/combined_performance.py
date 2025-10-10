@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 """
 Combined Performance Page
-Show overall system performance with metrics and equity curve
+Show overall system performance using QuantStats tearsheet
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import sys
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+import quantstats as qs
+import warnings
+
+# Suppress warnings
+warnings.filterwarnings('ignore')
+
+# Load environment variables
+load_dotenv()
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
@@ -34,77 +42,48 @@ def show():
 
     metrics_calc = MetricsCalculator(data_store)
 
-    # Get overall performance
-    performance = metrics_calc.get_strategy_performance()
+    # Get combined PnL history
+    pnl_history = data_store.get_pnl_history()
 
-    # Metrics cards
-    col1, col2, col3, col4 = st.columns(4)
+    if not pnl_history or len(pnl_history) == 0:
+        st.info("No performance data available. Load data using: `python tests/test_load_equity_curves.py tests/sample_equity_curves.csv`")
+        data_store.disconnect()
+        return
 
-    with col1:
-        st.metric("Total Return", f"{performance.get('total_return', 0)}%")
+    # Calculate returns
+    returns = metrics_calc.calculate_returns(pnl_history)
 
-    with col2:
-        st.metric("Sharpe Ratio", f"{performance.get('sharpe_ratio', 0)}")
+    if returns.empty:
+        st.info("No returns data available")
+        data_store.disconnect()
+        return
 
-    with col3:
-        st.metric("Max Drawdown", f"{performance.get('max_drawdown', 0)}%")
+    st.info(f"Displaying tearsheet for {len(returns)} days of trading data across all strategies")
 
-    with col4:
-        st.metric("Win Rate", f"{performance.get('win_rate', 0)}%")
+    # Generate QuantStats HTML tearsheet
+    try:
+        # Create HTML report
+        html_report = qs.reports.html(returns, output=None, download_filename=None)
 
-    # Equity Curve
-    st.subheader("📈 Equity Curve")
+        # Display in Streamlit
+        components.html(html_report, height=3000, scrolling=True)
 
-    # Get strategy returns for overlay
-    strategy_returns = metrics_calc.get_all_strategy_returns()
+    except Exception as e:
+        st.error(f"Error generating tearsheet: {e}")
+        st.info("Showing basic metrics instead...")
 
-    # Multi-select for strategy overlay
-    strategies_to_show = st.multiselect(
-        "Overlay Strategies",
-        options=list(strategy_returns.keys()),
-        default=[]
-    )
+        # Fallback to basic metrics
+        performance = metrics_calc.get_strategy_performance()
 
-    # Plot equity curve
-    fig = go.Figure()
-
-    # Main equity curve
-    if 'equity_curve' in performance and performance['equity_curve']:
-        equity_data = performance['equity_curve']
-        dates = list(equity_data.keys())
-        values = list(equity_data.values())
-
-        fig.add_trace(go.Scatter(
-            x=dates,
-            y=values,
-            mode='lines',
-            name='Combined',
-            line=dict(color='blue', width=2)
-        ))
-
-    # Overlay selected strategies
-    for strategy in strategies_to_show:
-        perf = metrics_calc.get_strategy_performance(strategy)
-        if 'equity_curve' in perf and perf['equity_curve']:
-            equity_data = perf['equity_curve']
-            dates = list(equity_data.keys())
-            values = list(equity_data.values())
-
-            fig.add_trace(go.Scatter(
-                x=dates,
-                y=values,
-                mode='lines',
-                name=strategy
-            ))
-
-    fig.update_layout(
-        xaxis_title="Date",
-        yaxis_title="Equity ($)",
-        hovermode='x unified',
-        height=500
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Return", f"{performance.get('total_return', 0)}%")
+        with col2:
+            st.metric("Sharpe Ratio", f"{performance.get('sharpe_ratio', 0)}")
+        with col3:
+            st.metric("Max Drawdown", f"{performance.get('max_drawdown', 0)}%")
+        with col4:
+            st.metric("Win Rate", f"{performance.get('win_rate', 0)}%")
 
     # Recent Signals and Orders
     st.subheader("📋 Recent Signals & Orders")

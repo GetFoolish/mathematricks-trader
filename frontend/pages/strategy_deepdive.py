@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """
 Strategy Deepdive Page
-Detailed analysis of a single strategy
+Detailed analysis of a single strategy using QuantStats tearsheet
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
-import plotly.graph_objects as go
 import sys
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+import quantstats as qs
+import warnings
+
+# Suppress warnings
+warnings.filterwarnings('ignore')
+
+# Load environment variables
+load_dotenv()
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
@@ -43,51 +52,49 @@ def show():
 
     if selected_strategy:
         metrics_calc = MetricsCalculator(data_store)
-        performance = metrics_calc.get_strategy_performance(selected_strategy)
 
-        # Metrics
-        st.subheader(f"📊 {selected_strategy} Performance")
+        # Get PnL history for selected strategy
+        pnl_history = data_store.get_pnl_history(strategy_name=selected_strategy)
 
-        col1, col2, col3, col4 = st.columns(4)
+        if not pnl_history or len(pnl_history) == 0:
+            st.info(f"No performance data available for {selected_strategy}")
+            data_store.disconnect()
+            return
 
-        with col1:
-            st.metric("Total Return", f"{performance.get('total_return', 0)}%")
+        # Calculate returns
+        returns = metrics_calc.calculate_returns(pnl_history)
 
-        with col2:
-            st.metric("Sharpe Ratio", f"{performance.get('sharpe_ratio', 0)}")
+        if returns.empty:
+            st.info("No returns data available")
+            data_store.disconnect()
+            return
 
-        with col3:
-            st.metric("Max Drawdown", f"{performance.get('max_drawdown', 0)}%")
+        st.info(f"Displaying tearsheet for {selected_strategy} ({len(returns)} days of data)")
 
-        with col4:
-            st.metric("Win Rate", f"{performance.get('win_rate', 0)}%")
+        # Generate QuantStats HTML tearsheet
+        try:
+            # Create HTML report
+            html_report = qs.reports.html(returns, output=None, download_filename=None)
 
-        # Equity Curve
-        st.subheader("📈 Equity Curve")
+            # Display in Streamlit
+            components.html(html_report, height=3000, scrolling=True)
 
-        if 'equity_curve' in performance and performance['equity_curve']:
-            equity_data = performance['equity_curve']
-            dates = list(equity_data.keys())
-            values = list(equity_data.values())
+        except Exception as e:
+            st.error(f"Error generating tearsheet: {e}")
+            st.info("Showing basic metrics instead...")
 
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=dates,
-                y=values,
-                mode='lines',
-                name=selected_strategy,
-                fill='tozeroy'
-            ))
+            # Fallback to basic metrics
+            performance = metrics_calc.get_strategy_performance(selected_strategy)
 
-            fig.update_layout(
-                xaxis_title="Date",
-                yaxis_title="Equity ($)",
-                height=400
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No equity curve data available")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Return", f"{performance.get('total_return', 0)}%")
+            with col2:
+                st.metric("Sharpe Ratio", f"{performance.get('sharpe_ratio', 0)}")
+            with col3:
+                st.metric("Max Drawdown", f"{performance.get('max_drawdown', 0)}%")
+            with col4:
+                st.metric("Win Rate", f"{performance.get('win_rate', 0)}%")
 
         # Signals for this strategy
         st.subheader("📡 Signals")
@@ -105,24 +112,5 @@ def show():
             st.dataframe(df_signals, use_container_width=True)
         else:
             st.info("No signals found for this strategy")
-
-        # Orders for this strategy
-        st.subheader("📋 Orders")
-
-        orders = data_store.get_orders(strategy_name=selected_strategy, limit=100)
-
-        if orders:
-            df_orders = pd.DataFrame([{
-                'Order ID': o.get('order_id'),
-                'Ticker': o.get('ticker'),
-                'Side': o.get('order_side'),
-                'Quantity': o.get('quantity'),
-                'Broker': o.get('broker'),
-                'Status': o.get('status')
-            } for o in orders])
-
-            st.dataframe(df_orders, use_container_width=True)
-        else:
-            st.info("No orders found for this strategy")
 
     data_store.disconnect()

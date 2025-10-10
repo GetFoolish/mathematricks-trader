@@ -42,3 +42,10 @@ Thumbs.db
 tmp/
 logs/
 *.log
+output/
+
+# Portfolio combiner data folders (keep folders but not contents)
+dev/portfolio_combiner/outputs/*
+!dev/portfolio_combiner/outputs/.gitkeep
+dev/portfolio_combiner/real_strategy_data/*
+!dev/portfolio_combiner/real_strategy_data/.gitkeep
