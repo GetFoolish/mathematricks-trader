@@ -2,10 +2,14 @@
 """
 Signal Processor for Mathematricks Trader
 Main execution engine that processes signals and routes to brokers
+
+NOTE: Modified to bridge signals to new MVP microservices (Cerebro + Execution)
 """
 
 from typing import Dict, List, Optional
 from datetime import datetime
+import os
+import json
 from ..core.signal_types import TradingSignal
 from ..core.portfolio import (
     CurrentPortfolio, IdealPortfolio, UpdatedPortfolio,
@@ -20,6 +24,14 @@ from telegram import TelegramNotifier
 
 # Setup logger
 logger = setup_logger('signal_processor', 'signal_processor.log')
+
+# Try to import Pub/Sub (optional - falls back to old logic if not available)
+try:
+    from google.cloud import pubsub_v1
+    PUBSUB_AVAILABLE = True
+except ImportError:
+    PUBSUB_AVAILABLE = False
+    logger.info("Google Cloud Pub/Sub not available - using legacy processing")
 
 # Global signal processor instance
 _global_signal_processor: Optional['SignalProcessor'] = None
@@ -69,6 +81,66 @@ class SignalProcessor:
         self.data_store = data_store
         self.telegram = telegram_notifier or TelegramNotifier()
 
+        # Initialize Pub/Sub publisher if available
+        self.pubsub_publisher = None
+        self.pubsub_topic_path = None
+        if PUBSUB_AVAILABLE:
+            try:
+                project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
+                self.pubsub_publisher = pubsub_v1.PublisherClient()
+                self.pubsub_topic_path = self.pubsub_publisher.topic_path(project_id, 'standardized-signals')
+                logger.info("✅ Pub/Sub bridge enabled - signals will route to microservices")
+            except Exception as e:
+                logger.info(f"⚠️  Pub/Sub initialization failed: {e} - using legacy processing")
+                self.pubsub_publisher = None
+
+    def _send_to_cerebro_microservice(self, signal_data: Dict) -> bool:
+        """
+        Send signal to Cerebro microservice via Pub/Sub
+        Returns True if successfully published, False otherwise
+        """
+        if not self.pubsub_publisher or not self.pubsub_topic_path:
+            return False
+
+        try:
+            # Convert signal data to standardized format for Cerebro
+            standardized_signal = {
+                "signal_id": f"SC_{datetime.utcnow().timestamp()}",
+                "strategy_id": signal_data.get('strategy_name', 'Unknown'),
+                "timestamp": signal_data.get('timestamp', datetime.utcnow().isoformat()),
+                "instrument": signal_data.get('signal', {}).get('ticker', ''),
+                "direction": "LONG",  # Simplified - would parse from signal
+                "action": signal_data.get('signal', {}).get('action', 'ENTRY').upper(),
+                "order_type": signal_data.get('signal', {}).get('order_type', 'MARKET').upper(),
+                "price": float(signal_data.get('signal', {}).get('price', 0)),
+                "quantity": float(signal_data.get('signal', {}).get('quantity', 1)),
+                "stop_loss": float(signal_data.get('signal', {}).get('stop_loss', 0)),
+                "take_profit": float(signal_data.get('signal', {}).get('take_profit', 0)),
+                "expiry": None,
+                "metadata": {
+                    "expected_alpha": 0.02,  # Would come from backtest data
+                    "original_signal": signal_data
+                },
+                "processed_by_cerebro": False,
+                "created_at": datetime.utcnow().isoformat()
+            }
+
+            # Publish to Pub/Sub
+            message_data = json.dumps(standardized_signal).encode('utf-8')
+            future = self.pubsub_publisher.publish(self.pubsub_topic_path, message_data)
+            message_id = future.result(timeout=5.0)
+
+            logger.info(f"✅ Signal published to Cerebro microservice: {message_id}")
+            logger.info(f"   → Signal ID: {standardized_signal['signal_id']}")
+            logger.info(f"   → Instrument: {standardized_signal['instrument']}")
+            logger.info(f"   → Action: {standardized_signal['action']}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to publish to Cerebro microservice: {e}")
+            return False
+
     def process_new_signal(self, signal_data: Dict) -> Dict:
         """
         Process a new signal from signal_collector
@@ -81,9 +153,28 @@ class SignalProcessor:
             Processing result dictionary
         """
         logger.info("="*80)
-        logger.info("PROCESSING NEW SIGNAL")
+        logger.info("🔥 PROCESSING NEW SIGNAL")
         logger.info("="*80)
 
+        # Try microservices path first (if Pub/Sub available)
+        if self.pubsub_publisher:
+            logger.info("🚀 Routing to MVP microservices (Cerebro → Execution)")
+            logger.info(f"   Strategy: {signal_data.get('strategy_name', 'Unknown')}")
+            logger.info(f"   Signal: {signal_data.get('signal', {})}")
+
+            if self._send_to_cerebro_microservice(signal_data):
+                logger.info("="*80)
+                return {
+                    'success': True,
+                    'message': 'Signal routed to microservices',
+                    'mode': 'microservices',
+                    'signal_id': signal_data.get('signalID')
+                }
+            else:
+                logger.warning("⚠️  Microservices routing failed - falling back to legacy processing")
+
+        # Legacy processing path (original V1 logic)
+        logger.info("📊 Using legacy processing (V1)")
         try:
             # 1. Parse signal
             signal = TradingSignal.from_webhook(signal_data)

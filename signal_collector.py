@@ -13,6 +13,13 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Try to import Pub/Sub for MVP microservices bridge
+try:
+    from google.cloud import pubsub_v1
+    PUBSUB_AVAILABLE = True
+except ImportError:
+    PUBSUB_AVAILABLE = False
+
 # Setup logging with custom formatters
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -50,6 +57,19 @@ class WebhookSignalCollector:
 
         # Try to connect to MongoDB
         self.connect_to_mongodb()
+
+        # Initialize Pub/Sub publisher for MVP microservices
+        self.pubsub_publisher = None
+        self.pubsub_topic_path = None
+        if PUBSUB_AVAILABLE:
+            try:
+                project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
+                self.pubsub_publisher = pubsub_v1.PublisherClient()
+                self.pubsub_topic_path = self.pubsub_publisher.topic_path(project_id, 'standardized-signals')
+                logger.info("✅ Pub/Sub bridge enabled - signals will route to microservices")
+            except Exception as e:
+                logger.info(f"⚠️  Pub/Sub initialization failed: {e}")
+                self.pubsub_publisher = None
 
     def connect_to_mongodb(self):
         """Connect to MongoDB Atlas"""
@@ -344,7 +364,14 @@ class WebhookSignalCollector:
         except Exception as e:
             logger.info(f"⚠️  Error sending Telegram notification: {e}")
 
-        # Process signal through Mathematricks Trader
+        # MVP: Send signal to microservices via Pub/Sub
+        if self.pubsub_publisher:
+            try:
+                self._publish_to_microservices(signal_data)
+            except Exception as e:
+                logger.info(f"⚠️  Error publishing to microservices: {e}")
+
+        # Process signal through Mathematricks Trader (legacy)
         try:
             # Import here to avoid circular imports
             from src.execution.signal_processor import get_signal_processor
@@ -357,6 +384,58 @@ class WebhookSignalCollector:
             pass
         except Exception as e:
             logger.info(f"⚠️  Error processing signal in Mathematricks Trader: {e}")
+
+    def _publish_to_microservices(self, signal_data: dict):
+        """Publish signal to MVP microservices via Pub/Sub"""
+        if not self.pubsub_publisher or not self.pubsub_topic_path:
+            return
+
+        # Generate better signal ID: {strategy}_{YYYYMMDD}_{HHMMSS}_{original_id}
+        now = datetime.datetime.utcnow()
+        strategy_name = signal_data.get('strategy_name', 'Unknown').replace(' ', '_').replace('-', '_')
+        date_str = now.strftime('%Y%m%d')
+        time_str = now.strftime('%H%M%S')
+
+        # Use original signalID if available, otherwise use milliseconds
+        original_id = signal_data.get('signalID') or signal_data.get('signal_id')
+        if original_id:
+            signal_id = f"{strategy_name}_{date_str}_{time_str}_{original_id}"
+        else:
+            ms = int(now.microsecond / 1000)
+            signal_id = f"{strategy_name}_{date_str}_{time_str}{ms:03d}"
+
+        # Convert to standardized format for Cerebro
+        standardized_signal = {
+            "signal_id": signal_id,
+            "strategy_id": signal_data.get('strategy_name', 'Unknown'),
+            "timestamp": signal_data.get('timestamp', datetime.datetime.utcnow().isoformat()),
+            "instrument": signal_data.get('signal', {}).get('ticker', ''),
+            "direction": "LONG",  # Simplified - would parse from signal
+            "action": signal_data.get('signal', {}).get('action', 'ENTRY').upper(),
+            "order_type": signal_data.get('signal', {}).get('order_type', 'MARKET').upper(),
+            "price": float(signal_data.get('signal', {}).get('price', 0)),
+            "quantity": float(signal_data.get('signal', {}).get('quantity', 1)),
+            "stop_loss": float(signal_data.get('signal', {}).get('stop_loss', 0)),
+            "take_profit": float(signal_data.get('signal', {}).get('take_profit', 0)),
+            "expiry": None,
+            "metadata": {
+                "expected_alpha": 0.02,  # Would come from backtest data
+                "original_signal": signal_data
+            },
+            "processed_by_cerebro": False,
+            "created_at": datetime.datetime.utcnow().isoformat()
+        }
+
+        # Publish to Pub/Sub
+        message_data = json.dumps(standardized_signal).encode('utf-8')
+        future = self.pubsub_publisher.publish(self.pubsub_topic_path, message_data)
+        message_id = future.result(timeout=5.0)
+
+        logger.info(f"\n🚀 Routing to MVP microservices (Cerebro → Execution)")
+        logger.info(f"✅ Signal published to Cerebro: {message_id}")
+        logger.info(f"   → Signal ID: {standardized_signal['signal_id']}")
+        logger.info(f"   → Instrument: {standardized_signal['instrument']}")
+        logger.info(f"   → Action: {standardized_signal['action']}")
 
     class SignalHandler(BaseHTTPRequestHandler):
         def __init__(self, collector, *args, **kwargs):
