@@ -227,11 +227,11 @@ def get_account_state() -> Dict[str, Any]:
                 "margin_required": 0
             })
 
-        # Get open orders
-        open_orders = ib.openOrders()
+        # Get open orders (use openTrades() for Trade objects, not openOrders())
+        open_trades = ib.openTrades()
         orders_list = []
 
-        for trade in open_orders:
+        for trade in open_trades:
             orders_list.append({
                 "order_id": str(trade.order.orderId),
                 "instrument": trade.contract.symbol,

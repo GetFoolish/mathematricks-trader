@@ -11,6 +11,8 @@
 - Be very organized in your work. If you rewrite a function, make sure you remove the old one. If u make a new file, ask yourself, what is the best place to keep this file, and put the file in the right place. I don't want a messy repo by the time you are done with your work.
 - Always, before we push code to github or CICD deployment, lets first test everything we have developed locally. and if everything is approved and working properly, only then we will go into deployment
 - Do not take shortcuts, always write real code, which can be used in production, as opposed to dummy code. If u want to test something with dummy code, write a quick 'bash test' and run it without saving it to the project, cause that makes the project messy.
+- If there is a situation where you think it'll be better to ask the user for direction, please give them options to chose from, explain each decision, and let them decide.
+- If you give me commands to run, always give them to me in a way that i can copy paste it. Right now, there are extra spaces when i copy it from your window.
 
 ---
 
@@ -135,6 +137,35 @@ python signal_sender.py --ticker AAPL --action BUY --price 150.25
   - [ ] Insert into `strategy_backtest_data` collection
   - [ ] Usage: `python tools/ingest_backtest_data.py --data-dir <path>`
 
+#### 4a. Strategy Configuration Management (Backend)
+- [ ] Add `strategy_configurations` collection to MongoDB schemas
+  ```python
+  {
+    "strategy_id": str,  # Unique identifier (e.g., "SPX_1-D_Opt")
+    "strategy_name": str,  # Human-readable name
+    "status": str,  # ACTIVE | INACTIVE | TESTING
+    "trading_mode": str,  # LIVE | PAPER
+    "account": str,  # IBKR_Main | IBKR_Futures | Binance_Main
+    "include_in_optimization": bool,  # Whether to include in portfolio optimization
+    "risk_limits": {
+      "max_position_size": float,
+      "max_daily_loss": float
+    },
+    "developer_contact": str,  # Email/Slack
+    "notes": str,  # Free-text notes
+    "created_at": datetime,
+    "updated_at": datetime
+  }
+  ```
+
+- [ ] Update `services/mongodb_schemas.md` with strategy_configurations schema
+
+- [ ] Create strategy configuration helper module
+  - [ ] Create `services/cerebro_service/strategy_config.py`
+  - [ ] Function: `load_strategy_configs() -> Dict[str, Dict]`
+  - [ ] Function: `get_strategy_config(strategy_id: str) -> Dict`
+  - [ ] Function: `is_strategy_active(strategy_id: str) -> bool`
+
 #### 5. Enhance Cerebro Position Sizing
 - [ ] Modify `services/cerebro_service/main.py`
   - [ ] Add function to load active allocation from MongoDB on startup
@@ -163,9 +194,9 @@ python signal_sender.py --ticker AAPL --action BUY --price 150.25
     5. Log results
   - [ ] Add to cerebro_service/main.py startup
 
-### Phase B: Backend - Portfolio Allocation APIs
+### Phase B: Backend - Portfolio Allocation & Strategy Management APIs
 
-#### 7. Add API Endpoints
+#### 7. Add Portfolio Allocation API Endpoints
 Location: `services/account_data_service/main.py` (or create new PortfolioService)
 
 - [ ] GET `/api/portfolio/allocations/current`
@@ -194,7 +225,103 @@ Location: `services/account_data_service/main.py` (or create new PortfolioServic
   - Returns latest optimization run with correlation matrix
   - For displaying in frontend
 
-### Phase C: Testing & Validation
+#### 7a. Add Strategy Management API Endpoints
+Location: `services/account_data_service/main.py`
+
+- [ ] GET `/api/strategies`
+  - List all strategies with configurations
+  - Query params: `status` (filter), `account` (filter), `search` (text search)
+  - Response: `[{"strategy_id": str, "strategy_name": str, "status": str, ...}, ...]`
+
+- [ ] GET `/api/strategies/{strategy_id}`
+  - Get single strategy configuration
+  - Include backtest data if available (join with strategy_backtest_data)
+  - Response: `{"strategy_id": str, ..., "backtest": {...}}`
+
+- [ ] POST `/api/strategies`
+  - Create new strategy configuration
+  - Body: `{"strategy_id": str, "strategy_name": str, "status": str, "account": str, ...}`
+  - Validates that strategy_id is unique
+  - Response: `{"strategy_id": str, "created_at": datetime}`
+
+- [ ] PUT `/api/strategies/{strategy_id}`
+  - Update strategy configuration
+  - Body: `{"status": str, "account": str, "trading_mode": str, ...}`
+  - Response: `{"strategy_id": str, "updated_at": datetime}`
+
+- [ ] DELETE `/api/strategies/{strategy_id}`
+  - Delete strategy configuration
+  - Only allow if strategy has no active allocations
+  - Response: `{"success": true}`
+
+- [ ] POST `/api/strategies/{strategy_id}/sync-backtest`
+  - Trigger backtest data ingestion/sync for this strategy
+  - Calls ingestion tool in background
+  - Response: `{"status": "processing", "job_id": str}`
+
+### Phase C: Integration & Service Updates
+
+#### 7b. Integrate Strategy Configuration into Services
+
+**SignalIngestionService Integration:**
+- [ ] Modify `signal_collector.py` integration point
+  - [ ] Before processing signal, load strategy config
+  - [ ] Check if `strategy.status == ACTIVE`
+  - [ ] If INACTIVE, reject signal with log: "Strategy {id} is INACTIVE"
+  - [ ] If TESTING, add special tag to signal for tracking
+
+**CerebroService Integration:**
+- [ ] Modify `services/cerebro_service/main.py`
+  - [ ] Load strategy configs on startup
+  - [ ] When processing signal, check strategy config:
+    - [ ] Get trading_mode (LIVE vs PAPER)
+    - [ ] Get account assignment
+    - [ ] Get risk_limits
+  - [ ] Add strategy metadata to order:
+    ```python
+    order_data = {
+      ...
+      "account": strategy_config["account"],
+      "trading_mode": strategy_config["trading_mode"],
+      "risk_limits": strategy_config["risk_limits"]
+    }
+    ```
+  - [ ] In position sizing, respect risk_limits.max_position_size
+
+**Portfolio Optimizer Integration:**
+- [ ] Modify `portfolio_optimizer.py`
+  - [ ] Before optimization, filter strategies:
+    ```python
+    active_strategies = {
+      sid: data
+      for sid, data in strategies.items()
+      if strategy_configs[sid]["status"] == "ACTIVE"
+      and strategy_configs[sid]["include_in_optimization"]
+    }
+    ```
+  - [ ] Log which strategies are excluded and why
+  - [ ] Only optimize the filtered set
+
+**ExecutionService Integration:**
+- [ ] Modify `services/execution_service/main.py`
+  - [ ] When receiving order, check `order_data["trading_mode"]`
+  - [ ] If PAPER mode:
+    - [ ] Log order details
+    - [ ] DO NOT submit to broker
+    - [ ] Create mock execution confirmation
+    - [ ] Publish to account-updates with "PAPER" tag
+  - [ ] If LIVE mode:
+    - [ ] Route to correct account from `order_data["account"]`
+    - [ ] Submit to broker as normal
+
+#### 7c. Strategy Config → Backtest Sync Workflow
+- [ ] Create background job handler for `/api/strategies/{id}/sync-backtest`
+  - [ ] Accept CSV file upload or path to existing CSV
+  - [ ] Call `ingest_backtest_data.py` tool with strategy_id parameter
+  - [ ] Update strategy_configurations with last_sync timestamp
+  - [ ] Return success/failure status
+
+### Phase D: Testing & Validation
 
 #### 8. Test Data Ingestion
 - [ ] Run ingestion tool on portfolio_combiner data
@@ -238,6 +365,50 @@ Location: `services/account_data_service/main.py` (or create new PortfolioServic
   - Position sizing uses correct allocation %
   - Capital allocated = equity × allocation %
   - Margin checks still working
+
+#### 12. Test Strategy Configuration Management
+- [ ] **Test Strategy CRUD APIs:**
+  ```bash
+  # Create strategy
+  curl -X POST http://localhost:8002/api/strategies \
+    -H "Content-Type: application/json" \
+    -d '{"strategy_id": "SPX_1-D_Opt", "strategy_name": "SPX Options", "status": "TESTING", "account": "IBKR_Main", "trading_mode": "PAPER", "include_in_optimization": true}'
+
+  # Get all strategies
+  curl http://localhost:8002/api/strategies
+
+  # Update strategy
+  curl -X PUT http://localhost:8002/api/strategies/SPX_1-D_Opt \
+    -H "Content-Type: application/json" \
+    -d '{"status": "ACTIVE", "trading_mode": "LIVE"}'
+
+  # Get single strategy
+  curl http://localhost:8002/api/strategies/SPX_1-D_Opt
+  ```
+
+- [ ] **Test Signal Rejection for INACTIVE Strategy:**
+  - [ ] Set strategy status to INACTIVE
+  - [ ] Send signal for that strategy
+  - [ ] Verify signal is rejected with log: "Strategy {id} is INACTIVE"
+
+- [ ] **Test PAPER vs LIVE Mode:**
+  - [ ] Set strategy to PAPER mode
+  - [ ] Send signal
+  - [ ] Verify order is logged but NOT submitted to broker
+  - [ ] Switch to LIVE mode
+  - [ ] Send signal
+  - [ ] Verify order IS submitted to broker
+
+- [ ] **Test Optimization Filtering:**
+  - [ ] Create 3 strategies: A (ACTIVE + include_opt), B (ACTIVE + no opt), C (INACTIVE + include_opt)
+  - [ ] Run portfolio optimization
+  - [ ] Verify only strategy A is included in optimization
+  - [ ] Check logs for exclusion reasons for B and C
+
+- [ ] **Test Account Routing:**
+  - [ ] Set strategy to account: IBKR_Futures
+  - [ ] Send signal
+  - [ ] Verify ExecutionService routes to correct account
 
 ---
 
@@ -285,6 +456,13 @@ Location: `services/account_data_service/main.py` (or create new PortfolioServic
   - getAccountState()
   - getRecentSignals()
   - getRecentOrders()
+- [ ] Create `src/api/strategies.ts`:
+  - getAllStrategies(filters)
+  - getStrategy(strategyId)
+  - createStrategy(data)
+  - updateStrategy(strategyId, data)
+  - deleteStrategy(strategyId)
+  - syncBacktest(strategyId)
 
 ### Phase B: Pages & Components
 
@@ -320,11 +498,49 @@ Location: `services/account_data_service/main.py` (or create new PortfolioServic
 - [ ] Recent Orders & Executions table
 - [ ] Cerebro Decisions log (collapsible details)
 
+#### 6a. Strategy Management Page
+- [ ] Create `src/pages/StrategiesPage.tsx`
+- [ ] **Strategies Table Component:**
+  - [ ] Columns: Strategy ID, Name, Status, Account, Mode, Include in Optimization, Actions
+  - [ ] Status badge (Green=ACTIVE, Yellow=TESTING, Gray=INACTIVE)
+  - [ ] Mode badge (Blue=LIVE, Gray=PAPER)
+  - [ ] Inline toggles for Status and Mode (update on change)
+  - [ ] Account dropdown (update on change)
+  - [ ] Include in Optimization checkbox (update on change)
+  - [ ] Actions: Edit, Sync Backtest, Delete buttons
+  - [ ] Search bar (filter by strategy ID or name)
+  - [ ] Filter dropdowns (Status, Account, Mode)
+- [ ] **Add New Strategy Button:**
+  - [ ] Opens modal with form
+  - [ ] Fields: Strategy ID*, Name*, Status*, Account*, Mode*, Include in Opt, Risk Limits, Dev Contact, Notes
+  - [ ] Validation: Required fields, unique strategy_id
+  - [ ] Submit → POST /api/strategies
+- [ ] **Edit Strategy Modal:**
+  - [ ] Same form as Add, pre-populated
+  - [ ] Submit → PUT /api/strategies/{id}
+- [ ] **Delete Confirmation Modal:**
+  - [ ] Warning: "Are you sure? This cannot be undone"
+  - [ ] Check for active allocations before allowing delete
+- [ ] **Sync Backtest Feature:**
+  - [ ] Click "Sync Backtest" → shows progress indicator
+  - [ ] Calls POST /api/strategies/{id}/sync-backtest
+  - [ ] Shows success/error toast notification
+- [ ] **Expandable Row for Backtest Data:**
+  - [ ] Click "View Backtest Data" → row expands
+  - [ ] Shows: Sharpe Ratio, Max Drawdown, Win Rate, Volatility, Backtest Period
+  - [ ] If no backtest data, show warning: "No backtest data available"
+
 #### 7. Layout & Navigation
 - [ ] Create `src/components/Layout.tsx`
-- [ ] Sidebar navigation
+- [ ] Sidebar navigation with links:
+  - [ ] Dashboard (/)
+  - [ ] Allocations (/allocations)
+  - [ ] **Strategies (/strategies)** ← NEW
+  - [ ] Trading Activity (/activity)
+  - [ ] Logout
 - [ ] Top bar with user info
 - [ ] Router setup in `src/main.tsx`
+  - [ ] Add route for /strategies → StrategiesPage
 
 ### Phase C: Testing & Polish
 

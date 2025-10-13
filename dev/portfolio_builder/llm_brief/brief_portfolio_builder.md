@@ -495,6 +495,44 @@ The plan is divided into three main phases: **MVP Development & Initial Deployme
     *   Test allocation approval workflow.
     *   Verify position sizing uses correct strategy allocations.
 
+8.  **Strategy Configuration Management (Backend):**
+    *   **MongoDB Collection: `strategy_configurations`**
+        *   Purpose: Central registry of all strategies with their operational settings.
+        *   Fields:
+            *   `strategy_id`: Unique identifier (e.g., "SPX_1-D_Opt", "Forex").
+            *   `strategy_name`: Human-readable name.
+            *   `status`: ACTIVE | INACTIVE | TESTING.
+            *   `trading_mode`: LIVE | PAPER.
+            *   `account`: IBKR_Main | IBKR_Futures | Binance_Main.
+            *   `include_in_optimization`: Boolean - whether to include in portfolio optimization.
+            *   `risk_limits`: { max_position_size, max_daily_loss }.
+            *   `developer_contact`: Email/Slack for strategy developer.
+            *   `notes`: Free-text notes.
+            *   `created_at`, `updated_at`: Timestamps.
+    *   **Strategy Management APIs:**
+        *   GET `/api/strategies` - List all strategies with configs.
+        *   GET `/api/strategies/{strategy_id}` - Get single strategy config.
+        *   POST `/api/strategies` - Create new strategy config.
+        *   PUT `/api/strategies/{strategy_id}` - Update strategy config.
+        *   DELETE `/api/strategies/{strategy_id}` - Delete strategy config.
+        *   POST `/api/strategies/{strategy_id}/sync-backtest` - Trigger backtest data ingestion for this strategy.
+    *   **Integration Points:**
+        *   **SignalIngestionService**: Before processing signal, check if `strategy.status == ACTIVE`. Reject if INACTIVE.
+        *   **CerebroService**:
+            *   Load strategy configs on startup.
+            *   Only include strategies with `include_in_optimization == true` in portfolio optimization.
+            *   When sizing positions, respect strategy's `risk_limits`.
+            *   Log which strategies are excluded from optimization.
+        *   **ExecutionService**:
+            *   Route orders to correct `account` based on strategy config.
+            *   Respect `trading_mode` (LIVE vs PAPER) - if PAPER, log order but don't submit to broker.
+    *   **Workflow:**
+        1. Developer uploads backtest CSV → runs ingestion tool → data in `strategy_backtest_data`.
+        2. Portfolio manager creates entry in `strategy_configurations` via frontend.
+        3. Sets: Status=ACTIVE, Account=IBKR_Main, Mode=PAPER, Include in optimization=Yes.
+        4. Portfolio optimizer runs → only considers ACTIVE strategies with optimization flag.
+        5. Signal arrives → system checks config → routes to correct account + mode.
+
 ### Milestone 1.3: Simple Admin Frontend
 
 **Goal:** Build a basic web dashboard for portfolio managers to monitor trading and manage allocations.
@@ -539,13 +577,56 @@ The plan is divided into three main phases: **MVP Development & Initial Deployme
     *   **Cerebro Decisions Log:**
         *   Show detailed position sizing calculations from Cerebro logs.
 
-4.  **Login Page (`/login`):**
+4.  **Strategy Management (`/strategies`):**
+    *   **Purpose:** Control panel for which strategies are active, where they trade, and in what mode.
+    *   **Strategies Table:**
+        *   Columns:
+            *   Strategy ID
+            *   Strategy Name
+            *   Status (Toggle: ACTIVE / INACTIVE / TESTING)
+            *   Account (Dropdown: IBKR_Main, IBKR_Futures, Binance_Main)
+            *   Trading Mode (Toggle: LIVE / PAPER)
+            *   Include in Optimization (Toggle: Yes / No)
+            *   Actions (Edit, Sync Backtest, Delete)
+        *   Filters: Status, Account, Mode
+        *   Search by strategy ID or name
+    *   **Add New Strategy Button:**
+        *   Opens modal with form:
+            *   Strategy ID (text input, required)
+            *   Strategy Name (text input, required)
+            *   Status (dropdown)
+            *   Account (dropdown)
+            *   Trading Mode (radio buttons)
+            *   Include in Optimization (checkbox)
+            *   Risk Limits: Max Position Size ($), Max Daily Loss ($)
+            *   Developer Contact (email)
+            *   Notes (textarea)
+    *   **Edit Strategy Modal:**
+        *   Same form as add, pre-populated with existing data.
+    *   **Sync Backtest Button:**
+        *   Triggers `/api/strategies/{id}/sync-backtest` endpoint.
+        *   Shows progress indicator.
+        *   Displays success/error message.
+    *   **Visual Indicators:**
+        *   Green badge for ACTIVE strategies.
+        *   Yellow badge for TESTING.
+        *   Gray badge for INACTIVE.
+        *   Red border for strategies missing backtest data.
+        *   Blue badge for LIVE mode, Gray for PAPER.
+    *   **Backtest Data Link:**
+        *   For each strategy, show "View Backtest Data" link.
+        *   Opens expandable row showing: Sharpe Ratio, Max Drawdown, Win Rate, Backtest Period.
+
+5.  **Login Page (`/login`):**
     *   Simple username/password authentication.
     *   Store hashed passwords in MongoDB (`users` collection).
     *   Use JWT tokens for session management.
 
 **API Integration:**
-*   Connect to `AccountDataService` and portfolio allocation endpoints.
+*   Connect to `AccountDataService` for account metrics, portfolio allocations, and strategy management.
+*   Strategy Management endpoints: `/api/strategies/*`
+*   Portfolio Allocation endpoints: `/api/portfolio/allocations/*`
+*   Trading Activity endpoints: `/api/signals/*`, `/api/orders/*`
 *   Use React Query for caching and real-time updates.
 
 **Deployment:**

@@ -153,6 +153,25 @@ COLLECTOR_PID=$!
 echo $COLLECTOR_PID > "$LOG_DIR/signal_collector.pid"
 echo "✓ signal_collector started (PID: $COLLECTOR_PID)"
 
+sleep 2
+
+# Start Admin Frontend
+echo ""
+echo -e "${YELLOW}Step 7: Starting Admin Frontend (port 5173)...${NC}"
+cd "$PROJECT_ROOT/frontend-admin"
+
+# Check if node_modules exists
+if [ ! -d "node_modules" ]; then
+    echo "Installing frontend dependencies..."
+    npm install
+fi
+
+npm run dev > "$LOG_DIR/frontend.log" 2>&1 &
+FRONTEND_PID=$!
+echo $FRONTEND_PID > "$LOG_DIR/frontend.pid"
+echo "✓ Admin Frontend started (PID: $FRONTEND_PID)"
+cd "$PROJECT_ROOT"
+
 echo ""
 echo "=========================================="
 echo -e "${GREEN}✓ ALL SERVICES RUNNING!${NC}"
@@ -161,14 +180,20 @@ echo ""
 echo "Services:"
 echo "  • Pub/Sub Emulator: localhost:8085"
 echo "  • AccountDataService: http://localhost:8002"
-echo "  • CerebroService: Background (consumes from Pub/Sub)"
+echo "  • CerebroService: http://localhost:8001"
 echo "  • ExecutionService: Background (consumes from Pub/Sub)"
 echo "  • signal_collector: Monitoring staging.mathematricks.fund"
+echo "  • Admin Frontend: http://localhost:5173"
+echo ""
+echo "Admin Dashboard:"
+echo "  Open browser: http://localhost:5173"
+echo "  Login: username=admin, password=admin"
 echo ""
 echo "Logs:"
 echo "  tail -f logs/signal_collector.log     # Signal collection"
 echo "  tail -f logs/cerebro_service.log      # Position sizing decisions"
 echo "  tail -f logs/execution_service.log    # Order execution"
+echo "  tail -f logs/frontend.log             # Frontend dev server"
 echo ""
 echo "To send a test signal:"
 echo "  python signal_sender.py --ticker SPY --action BUY --price 450.25"
