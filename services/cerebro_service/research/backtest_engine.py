@@ -4,11 +4,13 @@ Runs walk-forward analysis for portfolio constructors.
 """
 import pandas as pd
 import numpy as np
+import os
 from datetime import datetime, timedelta
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from ..portfolio_constructor.base import PortfolioConstructor
 from ..portfolio_constructor.context import PortfolioContext
+from .tearsheet_generator import generate_tearsheet
 
 
 class WalkForwardBacktest:
@@ -29,7 +31,8 @@ class WalkForwardBacktest:
         test_days: int = 63,
         walk_forward_type: str = 'anchored',  # 'anchored' or 'rolling'
         apply_drawdown_protection: bool = False,
-        max_drawdown_threshold: float = 0.20
+        max_drawdown_threshold: float = 0.20,
+        output_dir: Optional[str] = None
     ):
         """
         Initialize walk-forward backtest engine.
@@ -41,6 +44,7 @@ class WalkForwardBacktest:
             walk_forward_type: 'anchored' (expanding train) or 'rolling' (fixed train window)
             apply_drawdown_protection: If True, reduce leverage when drawdown exceeds threshold
             max_drawdown_threshold: Drawdown threshold for protection (e.g., 0.20 = 20%)
+            output_dir: Directory to save outputs (default: constructor's outputs/ folder)
             
         Walk-forward types:
         - anchored: Train on all data from start to test_start (expanding window)
@@ -57,6 +61,24 @@ class WalkForwardBacktest:
         self.apply_drawdown_protection = apply_drawdown_protection
         self.max_drawdown_threshold = max_drawdown_threshold
         self.test_periods = []
+        
+        # Set output directory - use constructor's outputs folder if not specified
+        if output_dir is None:
+            # Get the constructor's module file path
+            constructor_module = constructor.__class__.__module__
+            # e.g., 'services.cerebro_service.portfolio_constructor.max_hybrid.strategy'
+            # We want: 'services/cerebro_service/portfolio_constructor/max_hybrid/outputs'
+            module_parts = constructor_module.split('.')
+            if 'portfolio_constructor' in module_parts:
+                idx = module_parts.index('portfolio_constructor')
+                constructor_name = module_parts[idx + 1]  # e.g., 'max_hybrid'
+                output_dir = f'services/cerebro_service/portfolio_constructor/{constructor_name}/outputs'
+            else:
+                # Fallback to root outputs folder
+                output_dir = 'outputs/portfolio_tearsheets'
+        
+        self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
     
     def run(self, strategies_data: Dict[str, Dict]) -> Dict[str, Any]:
         """
@@ -195,11 +217,22 @@ class WalkForwardBacktest:
         
         combined_results['metrics'] = metrics
         combined_results['window_allocations'] = window_results  # Include for CSV export
+        combined_results['strategies_data'] = strategies_data  # Include for correlation matrix
+        
+        # Step 5: Save all outputs
+        print("\n[5/5] Saving outputs...")
+        self._save_outputs(combined_results, strategies_data)
         
         return combined_results
     
     def _align_strategies(self, strategies_data: Dict) -> Dict:
-        """Align all strategies to common dates"""
+        """
+        Align all strategies to master timeline (outer join).
+        
+        Uses the UNION of all dates (master timeline approach).
+        Strategies with missing dates get 0% returns (fillna(0)).
+        This prevents truncating to the shortest strategy.
+        """
         # Convert to DataFrame format
         dfs = []
         for sid, data in strategies_data.items():
@@ -213,13 +246,13 @@ class WalkForwardBacktest:
             df = df.sort_index()
             dfs.append(df)
         
-        # Merge all strategies
-        merged = pd.concat(dfs, axis=1, join='inner')  # Inner join to get common dates
+        # Merge all strategies - OUTER JOIN for master timeline
+        merged = pd.concat(dfs, axis=1, join='outer')  # Outer join to get ALL dates
         
         if len(merged) == 0:
             return {}
         
-        # Fill NaN with 0 (if any)
+        # Fill NaN with 0 (strategies not trading on certain dates)
         merged = merged.fillna(0)
         
         # Ensure sorted by date
@@ -422,3 +455,86 @@ class WalkForwardBacktest:
             'total_days': len(returns),
             'annual_volatility_pct': std_return * np.sqrt(252) * 100
         }
+    
+    def _save_outputs(self, results: Dict, strategies_data: Dict):
+        """
+        Save all backtest outputs to files.
+        
+        Saves:
+        1. Portfolio equity curve CSV
+        2. Allocations history CSV
+        3. Correlation matrix CSV
+        4. QuantStats HTML tearsheet
+        """
+        # Generate timestamp for filenames
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        constructor_name = self.constructor.__class__.__name__.replace('Constructor', '')
+        base_filename = f"{constructor_name}_{timestamp}"
+        
+        # 1. Save portfolio equity curve
+        equity_df = pd.DataFrame({
+            'date': results['dates'],
+            'equity': results['portfolio_equity_curve'],
+            'returns': results['portfolio_returns']
+        })
+        equity_path = os.path.join(self.output_dir, f"{base_filename}_equity.csv")
+        equity_df.to_csv(equity_path, index=False)
+        print(f"  ✓ Saved equity curve: {equity_path}")
+        
+        # 2. Save allocations history
+        allocations_records = []
+        for window in results['window_allocations']:
+            record = {
+                'window': window['window_num'],
+                'date': window['test_start'],
+            }
+            # Add each strategy allocation
+            for strat_id, alloc in window['allocations'].items():
+                record[strat_id] = alloc
+            allocations_records.append(record)
+        
+        allocations_df = pd.DataFrame(allocations_records)
+        allocations_path = os.path.join(self.output_dir, f"{base_filename}_allocations.csv")
+        allocations_df.to_csv(allocations_path, index=False)
+        print(f"  ✓ Saved allocations: {allocations_path}")
+        
+        # 3. Save correlation matrix
+        # Build full returns matrix from strategies_data
+        returns_dfs = []
+        for strat_id, data in strategies_data.items():
+            df = pd.DataFrame({
+                'date': data['dates'],
+                strat_id: data['returns']
+            })
+            df['date'] = pd.to_datetime(df['date'])
+            df = df.set_index('date')
+            returns_dfs.append(df)
+        
+        # Merge and calculate correlation
+        full_returns = pd.concat(returns_dfs, axis=1, join='outer').fillna(0)
+        correlation_matrix = full_returns.corr()
+        
+        # Round to 2 decimal places for readability
+        correlation_matrix = correlation_matrix.round(2)
+        
+        corr_path = os.path.join(self.output_dir, f"{base_filename}_correlation.csv")
+        correlation_matrix.to_csv(corr_path)
+        print(f"  ✓ Saved correlation matrix: {corr_path}")
+        
+        # 4. Generate QuantStats tearsheet
+        returns_series = pd.Series(
+            results['portfolio_returns'],
+            index=pd.to_datetime(results['dates'])
+        )
+        
+        tearsheet_path = os.path.join(self.output_dir, f"{base_filename}_tearsheet.html")
+        generate_tearsheet(
+            returns_series=returns_series,
+            output_path=tearsheet_path,
+            title=f"{constructor_name} Portfolio - {timestamp}"
+        )
+        print(f"  ✓ Saved tearsheet: {tearsheet_path}")
+        
+        print(f"\n  📁 All outputs saved to: {self.output_dir}/")
+        print(f"     Base filename: {base_filename}")
+

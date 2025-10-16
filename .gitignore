@@ -43,6 +43,11 @@ tmp/
 logs/
 *.log
 output/
+outputs/
+
+# Portfolio constructor outputs (keep folders but not contents)
+services/cerebro_service/portfolio_constructor/*/outputs/*
+!services/cerebro_service/portfolio_constructor/*/outputs/.gitkeep
 
 # Portfolio combiner data folders (keep folders but not contents)
 dev/portfolio_combiner/outputs/*
