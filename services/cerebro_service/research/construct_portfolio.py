@@ -8,11 +8,15 @@ Usage:
     python services/cerebro_service/research/construct_portfolio.py --constructor max_sharpe
     python services/cerebro_service/research/construct_portfolio.py --constructor max_hybrid
     python services/cerebro_service/research/construct_portfolio.py --constructor max_cagr_sharpe
+    
+    # Run with saved config
+    python services/cerebro_service/research/construct_portfolio.py --constructor max_hybrid --config path/to/config.json
 
 This script:
 1. Loads strategy data from MongoDB
 2. Runs walk-forward backtest with the specified constructor
 3. Automatically generates and saves:
+   - Configuration JSON (for reproducibility)
    - Portfolio equity curve CSV
    - Allocations history CSV
    - Strategy correlation matrix CSV
@@ -21,6 +25,7 @@ This script:
 import sys
 import os
 import argparse
+import json
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -91,12 +96,13 @@ def load_strategies_from_mongodb():
     return strategies_data
 
 
-def get_constructor(constructor_name: str):
+def get_constructor(constructor_name: str, config_path: str = None):
     """
     Dynamically import and instantiate the requested constructor.
     
     Args:
         constructor_name: Name of constructor (e.g., 'max_cagr', 'max_sharpe')
+        config_path: Optional path to config JSON file to override parameters
         
     Returns:
         Instantiated constructor object
@@ -128,10 +134,31 @@ def get_constructor(constructor_name: str):
     module = __import__(module_path, fromlist=[class_name])
     constructor_class = getattr(module, class_name)
     
-    # Instantiate with default parameters
-    constructor = constructor_class()
+    # Load config if provided
+    constructor_params = {}
+    if config_path:
+        print(f"\n📄 Loading config from: {config_path}")
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        
+        # Extract constructor parameters from config
+        if 'constructor' in config and 'config' in config['constructor']:
+            constructor_params = config['constructor']['config']
+            # Remove metadata fields that aren't constructor parameters
+            constructor_params.pop('type', None)
+            
+            print(f"  ✓ Loaded constructor config:")
+            for key, value in constructor_params.items():
+                print(f"    - {key}: {value}")
     
-    print(f"\n✓ Loaded constructor: {class_name}")
+    # Instantiate constructor with config parameters
+    if constructor_params:
+        constructor = constructor_class(**constructor_params)
+        print(f"\n✓ Loaded constructor: {class_name} (with config overrides)")
+    else:
+        constructor = constructor_class()
+        print(f"\n✓ Loaded constructor: {class_name} (default parameters)")
+    
     return constructor
 
 
@@ -142,9 +169,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Run with default parameters
   python services/cerebro_service/research/construct_portfolio.py --constructor max_cagr
   python services/cerebro_service/research/construct_portfolio.py --constructor max_sharpe
   python services/cerebro_service/research/construct_portfolio.py --constructor max_hybrid
+  
+  # Run with saved config (parameters will be overridden)
+  python services/cerebro_service/research/construct_portfolio.py --constructor max_hybrid --config path/to/config.json
   
 Available constructors:
   - max_cagr: Maximize CAGR with drawdown constraint
@@ -161,6 +192,13 @@ Available constructors:
         required=True,
         choices=['max_cagr', 'max_cagr_v2', 'max_sharpe', 'max_hybrid', 'max_cagr_sharpe'],
         help='Portfolio constructor to test'
+    )
+    
+    parser.add_argument(
+        '--config',
+        type=str,
+        default=None,
+        help='Path to config JSON file (overrides constructor default parameters)'
     )
     
     parser.add_argument(
@@ -199,6 +237,8 @@ Available constructors:
     print("PORTFOLIO CONSTRUCTOR BACKTEST")
     print("="*80)
     print(f"Constructor: {args.constructor}")
+    if args.config:
+        print(f"Config File: {args.config}")
     print(f"Train Days: {args.train_days}")
     print(f"Test Days: {args.test_days}")
     print(f"Walk-Forward: {args.walk_forward_type}")
@@ -216,8 +256,8 @@ Available constructors:
             print("\n❌ No strategy data found in MongoDB")
             return 1
         
-        # Get constructor
-        constructor = get_constructor(args.constructor)
+        # Get constructor (with optional config override)
+        constructor = get_constructor(args.constructor, args.config)
         
         # Initialize backtest engine
         backtest = WalkForwardBacktest(

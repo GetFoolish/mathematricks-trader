@@ -5,6 +5,7 @@ Runs walk-forward analysis for portfolio constructors.
 import pandas as pd
 import numpy as np
 import os
+import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
@@ -461,17 +462,41 @@ class WalkForwardBacktest:
         Save all backtest outputs to files.
         
         Saves:
-        1. Portfolio equity curve CSV
-        2. Allocations history CSV
-        3. Correlation matrix CSV
-        4. QuantStats HTML tearsheet
+        1. Configuration JSON
+        2. Portfolio equity curve CSV
+        3. Allocations history CSV
+        4. Correlation matrix CSV
+        5. QuantStats HTML tearsheet
         """
         # Generate timestamp for filenames
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         constructor_name = self.constructor.__class__.__name__.replace('Constructor', '')
         base_filename = f"{constructor_name}_{timestamp}"
         
-        # 1. Save portfolio equity curve
+        # 1. Save configuration
+        config = {
+            'constructor': {
+                'name': self.constructor.__class__.__name__,
+                'type': constructor_name,
+                'config': self.constructor.get_config()
+            },
+            'backtest': {
+                'train_days': self.train_days,
+                'test_days': self.test_days,
+                'walk_forward_type': self.walk_forward_type,
+                'apply_drawdown_protection': self.apply_drawdown_protection,
+                'max_drawdown_threshold': self.max_drawdown_threshold
+            },
+            'timestamp': timestamp,
+            'output_dir': self.output_dir
+        }
+        
+        config_path = os.path.join(self.output_dir, f"{base_filename}_config.json")
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+        print(f"  ✓ Saved config: {config_path}")
+        
+        # 2. Save portfolio equity curve
         equity_df = pd.DataFrame({
             'date': results['dates'],
             'equity': results['portfolio_equity_curve'],
@@ -481,7 +506,7 @@ class WalkForwardBacktest:
         equity_df.to_csv(equity_path, index=False)
         print(f"  ✓ Saved equity curve: {equity_path}")
         
-        # 2. Save allocations history
+        # 3. Save allocations history
         allocations_records = []
         for window in results['window_allocations']:
             record = {
@@ -498,7 +523,7 @@ class WalkForwardBacktest:
         allocations_df.to_csv(allocations_path, index=False)
         print(f"  ✓ Saved allocations: {allocations_path}")
         
-        # 3. Save correlation matrix
+        # 4. Save correlation matrix
         # Build full returns matrix from strategies_data
         returns_dfs = []
         for strat_id, data in strategies_data.items():
@@ -521,7 +546,7 @@ class WalkForwardBacktest:
         correlation_matrix.to_csv(corr_path)
         print(f"  ✓ Saved correlation matrix: {corr_path}")
         
-        # 4. Generate QuantStats tearsheet
+        # 5. Generate QuantStats tearsheet
         returns_series = pd.Series(
             results['portfolio_returns'],
             index=pd.to_datetime(results['dates'])
@@ -537,4 +562,5 @@ class WalkForwardBacktest:
         
         print(f"\n  📁 All outputs saved to: {self.output_dir}/")
         print(f"     Base filename: {base_filename}")
+
 

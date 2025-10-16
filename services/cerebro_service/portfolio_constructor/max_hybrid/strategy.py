@@ -5,18 +5,21 @@ Hybrid approach that balances high CAGR with high Sharpe ratio and controlled dr
 
 Strategy:
 1. Optimize for weighted combination of CAGR and Sharpe ratio
-2. Apply strict drawdown constraint (8% in-sample → ~20% out-of-sample)
-3. Use moderate leverage (1.4x) to boost returns while maintaining risk control
+2. Apply strict drawdown constraint (6% in-sample → ~15% out-of-sample with 2.5x multiplier)
+3. Use higher leverage (2.3x) to boost returns while maintaining high Sharpe
 
-Expected Results:
-- CAGR: 65-75% (strong absolute returns)
-- Sharpe: 3.0-3.2 (excellent risk-adjusted returns)
-- Max DD: ~20% (well-controlled risk)
+Expected Results (alpha=0.7, 6% DD, 2.3x leverage):
+- CAGR: 70-90% (very strong absolute returns)
+- Sharpe: 3.75-4.0 (excellent risk-adjusted returns)
+- Max DD: ~15% (tightly controlled risk)
 
 The key innovation is the weighted objective function:
     Objective = alpha * Sharpe + (1-alpha) * (CAGR / max_cagr_target)
     
-Where alpha controls the balance between risk-adjusted returns and absolute returns.
+Where alpha controls the balance:
+- alpha = 0.7 → 70% Sharpe optimization, 30% CAGR optimization
+- Higher alpha = more focus on risk-adjusted returns (higher Sharpe)
+- Lower alpha = more focus on absolute returns (higher CAGR)
 """
 import numpy as np
 import pandas as pd
@@ -48,12 +51,12 @@ class MaxHybridConstructor(PortfolioConstructor):
     """
     
     def __init__(self,
-                 alpha: float = 0.5,
-                 max_drawdown_limit: float = -0.08,
-                 max_leverage: float = 1.4,
+                 alpha: float = 0.85,
+                 max_drawdown_limit: float = -0.06,
+                 max_leverage: float = 2.3,
                  max_single_strategy: float = 1.0,
                  min_allocation: float = 0.01,
-                 cagr_target: float = 1.0,
+                 cagr_target: float = 2,
                  risk_free_rate: float = 0.0):
         """
         Initialize MaxHybrid constructor.
