@@ -61,34 +61,76 @@ def load_strategies_from_mongodb():
     for doc in strategies_cursor:
         strategy_id = doc.get('strategy_id') or doc.get('name') or str(doc.get('_id'))
         
-        if 'backtest_data' not in doc:
-            continue
-            
-        backtest_data = doc['backtest_data']
-        
-        if 'daily_returns' in backtest_data and isinstance(backtest_data['daily_returns'], list):
-            daily_returns = backtest_data['daily_returns']
-            if len(daily_returns) > 0:
-                if isinstance(daily_returns[0], dict):
-                    dates = [datetime.fromisoformat(item['date']) if isinstance(item.get('date'), str)
-                            else item['date'] for item in daily_returns]
-                    returns = [float(item['return']) for item in daily_returns]
-                else:
-                    if 'dates' in backtest_data:
-                        dates = [datetime.fromisoformat(d) if isinstance(d, str) else d 
-                                for d in backtest_data['dates']]
-                        returns = [float(r) for r in daily_returns]
-                    else:
-                        continue
+        # NEW UNIFIED STRUCTURE: raw_data_backtest_full at top level
+        if 'raw_data_backtest_full' in doc and isinstance(doc['raw_data_backtest_full'], list):
+            raw_data = doc['raw_data_backtest_full']
+            if len(raw_data) > 0 and isinstance(raw_data[0], dict):
+                dates = [datetime.fromisoformat(item['date']) if isinstance(item.get('date'), str)
+                        else item['date'] for item in raw_data]
+                returns = [float(item['return']) for item in raw_data]
+                margin_used = [float(item.get('margin_used', 0)) for item in raw_data]
+                notional = [float(item.get('notional_value', 0)) for item in raw_data]
+                account_equity = [float(item.get('account_equity', 100000)) for item in raw_data]
                 
                 strategies_data[strategy_id] = {
                     'dates': dates,
                     'returns': returns,
-                    'margin_used': [0] * len(returns),
-                    'notional': [0] * len(returns)
+                    'margin_used': margin_used,
+                    'notional': notional,
+                    'account_equity': account_equity
                 }
-                
-                print(f"  ✓ Loaded {strategy_id}: {len(returns)} days of data")
+                print(f"  ✓ Loaded {strategy_id}: {len(returns)} days of data (unified structure)")
+                continue
+        
+        # LEGACY STRUCTURE: backtest_data.raw_data_backtest_full
+        if 'backtest_data' in doc:
+            backtest_data = doc['backtest_data']
+            
+            # Prefer raw_data_backtest_full (has margin and notional data)
+            if 'raw_data_backtest_full' in backtest_data and isinstance(backtest_data['raw_data_backtest_full'], list):
+                raw_data = backtest_data['raw_data_backtest_full']
+                if len(raw_data) > 0 and isinstance(raw_data[0], dict):
+                    dates = [datetime.fromisoformat(item['date']) if isinstance(item.get('date'), str)
+                            else item['date'] for item in raw_data]
+                    returns = [float(item['return']) for item in raw_data]
+                    margin_used = [float(item.get('margin_used', 0)) for item in raw_data]
+                    notional = [float(item.get('notional_value', 0)) for item in raw_data]
+                    account_equity = [float(item.get('account_equity', 100000)) for item in raw_data]
+                    
+                    strategies_data[strategy_id] = {
+                        'dates': dates,
+                        'returns': returns,
+                        'margin_used': margin_used,
+                        'notional': notional,
+                        'account_equity': account_equity
+                    }
+                    print(f"  ✓ Loaded {strategy_id}: {len(returns)} days of data (legacy structure)")
+                    continue
+            
+            # Fallback to daily_returns (backward compatibility)
+            if 'daily_returns' in backtest_data and isinstance(backtest_data['daily_returns'], list):
+                daily_returns = backtest_data['daily_returns']
+                if len(daily_returns) > 0:
+                    if isinstance(daily_returns[0], dict):
+                        dates = [datetime.fromisoformat(item['date']) if isinstance(item.get('date'), str)
+                                else item['date'] for item in daily_returns]
+                        returns = [float(item['return']) for item in daily_returns]
+                    else:
+                        if 'dates' in backtest_data:
+                            dates = [datetime.fromisoformat(d) if isinstance(d, str) else d 
+                                    for d in backtest_data['dates']]
+                            returns = [float(r) for r in daily_returns]
+                        else:
+                            continue
+                    
+                    strategies_data[strategy_id] = {
+                        'dates': dates,
+                        'returns': returns,
+                        'margin_used': [0] * len(returns),  # Not available in old format
+                        'notional': [0] * len(returns),      # Not available in old format
+                        'account_equity': [100000] * len(returns)  # Not available in old format
+                    }
+                    print(f"  ✓ Loaded {strategy_id}: {len(returns)} days of data (legacy daily_returns)")
     
     print(f"\n  ✓ Total strategies loaded: {len(strategies_data)}")
     

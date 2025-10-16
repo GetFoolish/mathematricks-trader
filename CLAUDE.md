@@ -52,366 +52,56 @@ python signal_sender.py --ticker AAPL --action BUY --price 150.25
 ```
 
 ---
+You're absolutely right! Let me document what we accomplished and what's still pending:
 
-## Next: Milestone 1.2 - Simple MPT-Based Portfolio Optimization
+Phase 2 & Phase 3 Status - CRITICAL CONTEXT
+Why We Started This (The Original Problem)
+The portfolio equity CSV was missing the margin_used_pct column, and when we added it, we discovered it was fundamentally broken:
 
-**Goal:** Replace flat 5% position sizing with intelligent MPT-based allocations.
+2017: margin_used_pct = 85%
+2025: margin_used_pct = 0.5%
+Root Cause: Margin data from strategies is in absolute dollars (e.g., $85k), but portfolio equity grew 110x (from $100k → $11.4M). The margin dollars stayed constant while equity grew, making the percentage drop artificially.
 
-### Phase A: Backend - Portfolio Optimizer
+The Correct Solution Architecture
+This way, as portfolio equity grows, margin scales proportionally.
 
-#### 1. Fix Small Bug
-- [ ] Fix ExecutionService get_account_state() bug at line 234
-  - Issue: `'MarketOrder' object has no attribute 'order'`
-  - Location: services/execution_service/main.py:234
+Phase 3 - COMPLETED ✅
+Margin Constraint in Optimization
 
-#### 2. Create Portfolio Optimizer Module
-- [ ] Create `services/cerebro_service/portfolio_optimizer.py`
-  - [ ] Implement correlation matrix calculation from daily returns
-  - [ ] Implement scipy maximize Sharpe ratio optimization
-  - [ ] Apply constraints:
-    - Each strategy weight ≥ 0% (no shorts)
-    - Sum of weights ≤ 200% (max 2x leverage)
-    - Optional: max 50% per single strategy
-  - [ ] Function: `optimize_portfolio(strategies: Dict) -> Dict[str, float]`
-    - Input: strategy_id → backtest metrics
-    - Output: strategy_id → recommended allocation %
+Location: services/cerebro_service/portfolio_constructor/max_hybrid/allocator.py
+Implementation: Added constraint to scipy optimizer
+Constraint: max(portfolio_margin) <= account_equity × max_leverage × 0.8
+Results: CAGR 74.61%, Sharpe 3.43 (vs 79.72%/3.50 unconstrained)
+Status: WORKING - ensures portfolio is tradeable within margin limits
+Phase 2 - BLOCKED (Needs Account Equity Data)
+Update evaluate_signal() with Real Margin Data
 
-#### 3. MongoDB Collections for Portfolio Data
-- [ ] Create `strategy_backtest_data` collection schema
-  ```python
-  {
-    "strategy_id": str,
-    "daily_returns": [float],  # Array of daily returns
-    "mean_return_daily": float,
-    "volatility_daily": float,
-    "sharpe_ratio": float,
-    "max_drawdown": float,
-    "margin_per_unit": float,
-    "backtest_period": {"start": date, "end": date},
-    "created_at": datetime,
-    "updated_at": datetime
-  }
-  ```
+Location: services/cerebro_service/portfolio_constructor/max_hybrid/signal_evaluator.py
+Goal: Replace hardcoded 50% margin assumption with actual historical margin
+Implementation:
+Blocker: Need account_equity field in all historical data
+What We're Fixing NOW
+Unified Document Structure: Merging strategy_configurations + strategy_backtest_data into single strategies collection
+Synthetic Data Generation: Auto-generate missing columns (PnL, Notional, Margin, Account Equity) from minimal CSV (Date + Returns)
+Account Equity Column: The KEY missing piece - needed to calculate proper margin percentages
+Files Modified
+✅ load_strategies_from_folder.py - Unified structure + synthetic data
+✅ construct_portfolio.py - Read new unified structure
+⏸️ backtest_engine.py - Needs margin% calculation fix (50% done)
+Next Steps After This
+Re-ingest all strategies with synthetic account_equity
+Fix backtest_engine.py margin calculation using account_equity normalization
+Verify equity CSV shows consistent margin_used_pct over time
+Complete Phase 2 (evaluate_signal margin checks)
+Test live signal processing
+DO NOT FORGET: The equity CSV needs these columns:
 
-- [ ] Create `portfolio_allocations` collection schema
-  ```python
-  {
-    "allocation_id": str,  # Format: ALLOC_{YYYYMMDD}_{HHMMSS}
-    "allocations": {  # Dict of strategy_id: weight %
-      "SPX_1-D_Opt": 30.0,
-      "Forex": 25.0,
-      ...
-    },
-    "status": str,  # ACTIVE | PENDING_APPROVAL | ARCHIVED
-    "metrics": {
-      "expected_sharpe": float,
-      "expected_volatility": float,
-      "total_allocation_pct": float,
-      "leverage_ratio": float
-    },
-    "approved_by": str,  # user_id or "system"
-    "approved_at": datetime,
-    "created_at": datetime
-  }
-  ```
-
-- [ ] Create `portfolio_optimization_runs` collection schema
-  ```python
-  {
-    "run_id": str,  # Format: OPT_{YYYYMMDD}_{HHMMSS}
-    "recommended_allocations": {...},
-    "correlation_matrix": [[float]],
-    "strategy_returns": {...},
-    "strategy_volatility": {...},
-    "optimization_method": str,  # "maximize_sharpe"
-    "constraints_used": {...},
-    "status": str,  # COMPLETED | FAILED
-    "error_message": str,  # If failed
-    "created_at": datetime
-  }
-  ```
-
-#### 4. Backtest Data Ingestion Tool
-- [ ] Create `tools/ingest_backtest_data.py`
-  - [ ] Read strategy CSV files from `dev/portfolio_combiner/outputs/latest/strategy_performance_data/`
-  - [ ] Parse daily returns, calculate metrics
-  - [ ] Insert into `strategy_backtest_data` collection
-  - [ ] Usage: `python tools/ingest_backtest_data.py --data-dir <path>`
-
-#### 4a. Strategy Configuration Management (Backend)
-- [ ] Add `strategy_configurations` collection to MongoDB schemas
-  ```python
-  {
-    "strategy_id": str,  # Unique identifier (e.g., "SPX_1-D_Opt")
-    "strategy_name": str,  # Human-readable name
-    "status": str,  # ACTIVE | INACTIVE | TESTING
-    "trading_mode": str,  # LIVE | PAPER
-    "account": str,  # IBKR_Main | IBKR_Futures | Binance_Main
-    "include_in_optimization": bool,  # Whether to include in portfolio optimization
-    "risk_limits": {
-      "max_position_size": float,
-      "max_daily_loss": float
-    },
-    "developer_contact": str,  # Email/Slack
-    "notes": str,  # Free-text notes
-    "created_at": datetime,
-    "updated_at": datetime
-  }
-  ```
-
-- [ ] Update `services/mongodb_schemas.md` with strategy_configurations schema
-
-- [ ] Create strategy configuration helper module
-  - [ ] Create `services/cerebro_service/strategy_config.py`
-  - [ ] Function: `load_strategy_configs() -> Dict[str, Dict]`
-  - [ ] Function: `get_strategy_config(strategy_id: str) -> Dict`
-  - [ ] Function: `is_strategy_active(strategy_id: str) -> bool`
-
-#### 5. Enhance Cerebro Position Sizing
-- [ ] Modify `services/cerebro_service/main.py`
-  - [ ] Add function to load active allocation from MongoDB on startup
-  - [ ] Modify `calculate_position_size()`:
-    ```python
-    # Old: allocated_capital = account_equity * 0.05
-    # New:
-    strategy_allocation_pct = active_allocation.get(signal.strategy_id, 0)
-    if strategy_allocation_pct == 0:
-        logger.warning(f"No allocation for {signal.strategy_id}, rejecting")
-        return {"approved": False, "reason": "NO_ALLOCATION"}
-    allocated_capital = account_equity * (strategy_allocation_pct / 100)
-    ```
-  - [ ] Update position sizing logs to show allocation %
-  - [ ] Still apply 40% margin limit checks
-
-#### 6. Daily Optimization Scheduler
-- [ ] Create `services/cerebro_service/scheduler.py`
-  - [ ] Use APScheduler
-  - [ ] Schedule optimization to run daily at midnight
-  - [ ] Function: `run_daily_optimization()`
-    1. Fetch all strategy backtest data from MongoDB
-    2. Run portfolio_optimizer.optimize_portfolio()
-    3. Save results to `portfolio_optimization_runs`
-    4. Create new allocation with status=PENDING_APPROVAL
-    5. Log results
-  - [ ] Add to cerebro_service/main.py startup
-
-### Phase B: Backend - Portfolio Allocation & Strategy Management APIs
-
-#### 7. Add Portfolio Allocation API Endpoints
-Location: `services/account_data_service/main.py` (or create new PortfolioService)
-
-- [ ] GET `/api/portfolio/allocations/current`
-  - Returns currently ACTIVE allocation
-  - Response: `{"allocation_id": str, "allocations": {...}, "metrics": {...}}`
-
-- [ ] GET `/api/portfolio/allocations/latest-recommendation`
-  - Returns latest PENDING_APPROVAL allocation
-  - Response: `{"allocation_id": str, "allocations": {...}, "metrics": {...}}`
-
-- [ ] POST `/api/portfolio/allocations/approve`
-  - Body: `{"allocation_id": str, "approved_by": str}`
-  - Sets allocation to ACTIVE, archives old ACTIVE
-  - Notifies Cerebro to reload allocation
-
-- [ ] PUT `/api/portfolio/allocations/custom`
-  - Body: `{"allocations": {...}, "approved_by": str}`
-  - Portfolio manager manually edits and approves
-  - Creates new ACTIVE allocation
-
-- [ ] GET `/api/portfolio/allocations/history`
-  - Returns past allocations with pagination
-  - Query params: `limit`, `offset`
-
-- [ ] GET `/api/portfolio/optimization/latest`
-  - Returns latest optimization run with correlation matrix
-  - For displaying in frontend
-
-#### 7a. Add Strategy Management API Endpoints
-Location: `services/account_data_service/main.py`
-
-- [ ] GET `/api/strategies`
-  - List all strategies with configurations
-  - Query params: `status` (filter), `account` (filter), `search` (text search)
-  - Response: `[{"strategy_id": str, "strategy_name": str, "status": str, ...}, ...]`
-
-- [ ] GET `/api/strategies/{strategy_id}`
-  - Get single strategy configuration
-  - Include backtest data if available (join with strategy_backtest_data)
-  - Response: `{"strategy_id": str, ..., "backtest": {...}}`
-
-- [ ] POST `/api/strategies`
-  - Create new strategy configuration
-  - Body: `{"strategy_id": str, "strategy_name": str, "status": str, "account": str, ...}`
-  - Validates that strategy_id is unique
-  - Response: `{"strategy_id": str, "created_at": datetime}`
-
-- [ ] PUT `/api/strategies/{strategy_id}`
-  - Update strategy configuration
-  - Body: `{"status": str, "account": str, "trading_mode": str, ...}`
-  - Response: `{"strategy_id": str, "updated_at": datetime}`
-
-- [ ] DELETE `/api/strategies/{strategy_id}`
-  - Delete strategy configuration
-  - Only allow if strategy has no active allocations
-  - Response: `{"success": true}`
-
-- [ ] POST `/api/strategies/{strategy_id}/sync-backtest`
-  - Trigger backtest data ingestion/sync for this strategy
-  - Calls ingestion tool in background
-  - Response: `{"status": "processing", "job_id": str}`
-
-### Phase C: Integration & Service Updates
-
-#### 7b. Integrate Strategy Configuration into Services
-
-**SignalIngestionService Integration:**
-- [ ] Modify `signal_collector.py` integration point
-  - [ ] Before processing signal, load strategy config
-  - [ ] Check if `strategy.status == ACTIVE`
-  - [ ] If INACTIVE, reject signal with log: "Strategy {id} is INACTIVE"
-  - [ ] If TESTING, add special tag to signal for tracking
-
-**CerebroService Integration:**
-- [ ] Modify `services/cerebro_service/main.py`
-  - [ ] Load strategy configs on startup
-  - [ ] When processing signal, check strategy config:
-    - [ ] Get trading_mode (LIVE vs PAPER)
-    - [ ] Get account assignment
-    - [ ] Get risk_limits
-  - [ ] Add strategy metadata to order:
-    ```python
-    order_data = {
-      ...
-      "account": strategy_config["account"],
-      "trading_mode": strategy_config["trading_mode"],
-      "risk_limits": strategy_config["risk_limits"]
-    }
-    ```
-  - [ ] In position sizing, respect risk_limits.max_position_size
-
-**Portfolio Optimizer Integration:**
-- [ ] Modify `portfolio_optimizer.py`
-  - [ ] Before optimization, filter strategies:
-    ```python
-    active_strategies = {
-      sid: data
-      for sid, data in strategies.items()
-      if strategy_configs[sid]["status"] == "ACTIVE"
-      and strategy_configs[sid]["include_in_optimization"]
-    }
-    ```
-  - [ ] Log which strategies are excluded and why
-  - [ ] Only optimize the filtered set
-
-**ExecutionService Integration:**
-- [ ] Modify `services/execution_service/main.py`
-  - [ ] When receiving order, check `order_data["trading_mode"]`
-  - [ ] If PAPER mode:
-    - [ ] Log order details
-    - [ ] DO NOT submit to broker
-    - [ ] Create mock execution confirmation
-    - [ ] Publish to account-updates with "PAPER" tag
-  - [ ] If LIVE mode:
-    - [ ] Route to correct account from `order_data["account"]`
-    - [ ] Submit to broker as normal
-
-#### 7c. Strategy Config → Backtest Sync Workflow
-- [ ] Create background job handler for `/api/strategies/{id}/sync-backtest`
-  - [ ] Accept CSV file upload or path to existing CSV
-  - [ ] Call `ingest_backtest_data.py` tool with strategy_id parameter
-  - [ ] Update strategy_configurations with last_sync timestamp
-  - [ ] Return success/failure status
-
-### Phase D: Testing & Validation
-
-#### 8. Test Data Ingestion
-- [ ] Run ingestion tool on portfolio_combiner data
-  ```bash
-  python tools/ingest_backtest_data.py --data-dir dev/portfolio_combiner/outputs/run_*/strategy_performance_data/
-  ```
-- [ ] Verify data in MongoDB (use MongoDB Compass or mongosh)
-- [ ] Check: 7-14 strategies ingested with daily returns
-
-#### 9. Test Optimization
-- [ ] Manually trigger optimization:
-  ```bash
-  python -c "from services.cerebro_service.scheduler import run_daily_optimization; run_daily_optimization()"
-  ```
-- [ ] Verify:
-  - [ ] Correlation matrix calculated correctly
-  - [ ] Optimization converges
-  - [ ] Allocations sum to reasonable total (100-200%)
-  - [ ] Results saved to MongoDB
-- [ ] Check logs for any warnings/errors
-
-#### 10. Test Allocation Approval Workflow
-- [ ] Use curl or Postman to test APIs:
-  ```bash
-  # Get latest recommendation
-  curl http://localhost:8002/api/portfolio/allocations/latest-recommendation
-
-  # Approve it
-  curl -X POST http://localhost:8002/api/portfolio/allocations/approve \
-    -H "Content-Type: application/json" \
-    -d '{"allocation_id": "ALLOC_...", "approved_by": "admin"}'
-
-  # Verify it's now current
-  curl http://localhost:8002/api/portfolio/allocations/current
-  ```
-
-#### 11. Test Position Sizing with Allocations
-- [ ] Restart Cerebro (it should load new ACTIVE allocation)
-- [ ] Send test signal for a strategy
-- [ ] Verify in logs:
-  - Position sizing uses correct allocation %
-  - Capital allocated = equity × allocation %
-  - Margin checks still working
-
-#### 12. Test Strategy Configuration Management
-- [ ] **Test Strategy CRUD APIs:**
-  ```bash
-  # Create strategy
-  curl -X POST http://localhost:8002/api/strategies \
-    -H "Content-Type: application/json" \
-    -d '{"strategy_id": "SPX_1-D_Opt", "strategy_name": "SPX Options", "status": "TESTING", "account": "IBKR_Main", "trading_mode": "PAPER", "include_in_optimization": true}'
-
-  # Get all strategies
-  curl http://localhost:8002/api/strategies
-
-  # Update strategy
-  curl -X PUT http://localhost:8002/api/strategies/SPX_1-D_Opt \
-    -H "Content-Type: application/json" \
-    -d '{"status": "ACTIVE", "trading_mode": "LIVE"}'
-
-  # Get single strategy
-  curl http://localhost:8002/api/strategies/SPX_1-D_Opt
-  ```
-
-- [ ] **Test Signal Rejection for INACTIVE Strategy:**
-  - [ ] Set strategy status to INACTIVE
-  - [ ] Send signal for that strategy
-  - [ ] Verify signal is rejected with log: "Strategy {id} is INACTIVE"
-
-- [ ] **Test PAPER vs LIVE Mode:**
-  - [ ] Set strategy to PAPER mode
-  - [ ] Send signal
-  - [ ] Verify order is logged but NOT submitted to broker
-  - [ ] Switch to LIVE mode
-  - [ ] Send signal
-  - [ ] Verify order IS submitted to broker
-
-- [ ] **Test Optimization Filtering:**
-  - [ ] Create 3 strategies: A (ACTIVE + include_opt), B (ACTIVE + no opt), C (INACTIVE + include_opt)
-  - [ ] Run portfolio optimization
-  - [ ] Verify only strategy A is included in optimization
-  - [ ] Check logs for exclusion reasons for B and C
-
-- [ ] **Test Account Routing:**
-  - [ ] Set strategy to account: IBKR_Futures
-  - [ ] Send signal
-  - [ ] Verify ExecutionService routes to correct account
-
----
+date
+equity (portfolio equity in dollars)
+returns_pct (daily return percentage)
+margin_used (total margin in dollars)
+margin_used_pct ← THE WHOLE REASON WE'RE HERE
+notional_value (total notional in dollars)
 
 ## Next: Milestone 1.3 - Simple Admin Frontend
 

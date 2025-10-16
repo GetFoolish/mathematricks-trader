@@ -70,7 +70,7 @@ def ingest_strategy_data(csv_folder_path):
                     'return': row['Daily Returns (%)']
                 })
 
-            # Build raw_data_backtest_full (complete format with margin/notional)
+            # Build raw_data_backtest_full (complete format with margin/notional/account_equity)
             raw_data_backtest_full = []
             for idx, row in df.iterrows():
                 raw_data_backtest_full.append({
@@ -78,7 +78,8 @@ def ingest_strategy_data(csv_folder_path):
                     'return': row['Daily Returns (%)'],
                     'pnl': float(row['Daily P&L ($)']),
                     'notional_value': float(row['Maximum Daily Notional Value']),
-                    'margin_used': float(row['Maximum Daily Margin Utilization ($)'])
+                    'margin_used': float(row['Maximum Daily Margin Utilization ($)']),
+                    'account_equity': float(row['Account Equity ($)'])  # NEW - needed for margin %
                 })
 
             # Calculate basic metrics for backward compatibility

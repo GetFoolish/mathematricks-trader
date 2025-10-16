@@ -159,11 +159,43 @@ class MaxHybridConstructor(PortfolioConstructor):
         # Create returns matrix for optimization (rows = days, cols = strategies)
         returns_matrix = np.array(aligned_returns_list).T
         
+        # Phase 3: Extract and align margin data (if available)
+        margin_data_list = []
+        has_margin_data = False
+        
+        for sid, df in context.strategy_histories.items():
+            if sid not in strategy_ids:
+                continue
+            
+            if 'margin_used' in df.columns and len(df) > 0:
+                margin_values = df['margin_used'].values
+                margin_data_list.append(margin_values)
+                has_margin_data = True
+            else:
+                # Fallback: assume 10% of notional as margin (typical for futures)
+                # This is just for backward compatibility
+                margin_data_list.append(np.zeros(len(df)))
+        
+        # Align margin data (same way as returns)
+        margin_matrix = None
+        if has_margin_data and len(margin_data_list) == len(strategy_ids):
+            aligned_margin_list = [margin[-min_length:] for margin in margin_data_list]
+            margin_matrix = np.array(aligned_margin_list).T  # rows = days, cols = strategies
+            
+            # Log margin statistics
+            avg_margins = [margin.mean() for margin in aligned_margin_list]
+            max_margins = [margin.max() for margin in aligned_margin_list]
+            logger.info(f"\n📊 Margin Analysis (aligned period):")
+            for sid, avg_m, max_m in zip(strategy_ids, avg_margins, max_margins):
+                logger.info(f"  {sid}: Avg=${avg_m:,.0f}, Max=${max_m:,.0f}")
+        else:
+            logger.warning("⚠️  No margin data available - margin constraint disabled")
+        
         # Calculate covariance matrix
         df = pd.DataFrame({sid: returns for sid, returns in zip(strategy_ids, aligned_returns_list)})
         cov_matrix = df.cov().values
         
-        logger.info(f"Mean returns (daily, full history): {mean_returns}")
+        logger.info(f"\nMean returns (daily, full history): {mean_returns}")
         logger.info(f"Volatilities (daily, aligned period): {np.sqrt(np.diag(cov_matrix))}")
         
         # Optimization
@@ -201,11 +233,48 @@ class MaxHybridConstructor(PortfolioConstructor):
             max_dd = self._calculate_max_drawdown(portfolio_returns)
             return max_dd - self.max_drawdown_limit  # Positive if satisfied
         
+        # Margin constraint (Phase 3)
+        def margin_constraint(weights):
+            """
+            Ensure portfolio margin usage doesn't exceed account equity × max_leverage.
+            
+            This is DIFFERENT from allocation constraint:
+            - Allocation constraint: sum(weights) <= max_leverage (e.g., 230%)
+            - Margin constraint: actual margin used <= equity × safety_factor
+            
+            The margin constraint is MORE restrictive because it accounts for
+            actual broker margin requirements, not just position sizing.
+            """
+            if margin_matrix is None:
+                # No margin data - constraint is automatically satisfied
+                return 1.0
+            
+            # Calculate portfolio margin for each day
+            portfolio_margin_daily = np.dot(margin_matrix, weights)
+            
+            # Get max margin used across all days
+            max_margin_used = portfolio_margin_daily.max()
+            
+            # Account equity (normalized to 100k in backtest)
+            account_equity = 100000.0
+            
+            # Safety factor: use 80% of max_leverage to leave margin buffer
+            # E.g., if max_leverage=2.3, allow up to 1.84x account equity in margin
+            margin_safety_factor = 0.8
+            max_allowed_margin = account_equity * self.max_leverage * margin_safety_factor
+            
+            # Constraint is satisfied if: max_margin_used <= max_allowed_margin
+            # Return positive value if satisfied
+            slack = max_allowed_margin - max_margin_used
+            
+            return slack
+        
         # Constraints
         constraints = [
-            {'type': 'ineq', 'fun': lambda w: self.max_leverage - np.sum(w)},
-            {'type': 'ineq', 'fun': lambda w: np.sum(w)},
-            {'type': 'ineq', 'fun': drawdown_constraint}
+            {'type': 'ineq', 'fun': lambda w: self.max_leverage - np.sum(w)},  # Total allocation <= max_leverage
+            {'type': 'ineq', 'fun': lambda w: np.sum(w)},                       # Total allocation >= 0
+            {'type': 'ineq', 'fun': drawdown_constraint},                       # Max DD <= limit
+            {'type': 'ineq', 'fun': margin_constraint}                          # Margin used <= account × leverage (Phase 3)
         ]
         
         logger.info(f"Running hybrid optimization (alpha={self.alpha:.2f})...")
@@ -244,10 +313,25 @@ class MaxHybridConstructor(PortfolioConstructor):
         cagr = self._calculate_cagr(portfolio_returns)
         max_dd = self._calculate_max_drawdown(portfolio_returns)
         
+        # Calculate actual margin usage (Phase 3)
+        actual_margin_used = None
+        margin_utilization_pct = None
+        if margin_matrix is not None:
+            portfolio_margin_daily = np.dot(margin_matrix, optimal_weights)
+            actual_margin_used = portfolio_margin_daily.max()
+            account_equity = 100000.0
+            margin_utilization_pct = (actual_margin_used / account_equity) * 100
+        
         logger.info(f"\n{'='*80}")
         logger.info("ALLOCATION RESULTS:")
         logger.info(f"{'='*80}")
         logger.info(f"Total Allocation: {total_allocation:.1f}%")
+        
+        if actual_margin_used is not None:
+            logger.info(f"💰 Margin Usage: ${actual_margin_used:,.0f} ({margin_utilization_pct:.1f}% of account)")
+            max_allowed = 100000.0 * self.max_leverage * 0.8
+            logger.info(f"   Max Allowed: ${max_allowed:,.0f} ({self.max_leverage*0.8*100:.0f}% of account)")
+        
         logger.info(f"Expected Daily Return: {portfolio_return*100:.4f}%")
         logger.info(f"Expected Daily Volatility: {portfolio_std*100:.4f}%")
         logger.info(f"Sharpe Ratio (daily): {sharpe_ratio:.4f}")
