@@ -7,7 +7,7 @@ import os
 import logging
 import json
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from google.cloud import pubsub_v1
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -15,6 +15,13 @@ import requests
 import threading
 from fastapi import FastAPI
 import uvicorn
+
+# Portfolio constructor imports
+from portfolio_constructor.base import PortfolioConstructor
+from portfolio_constructor.context import (
+    PortfolioContext, Signal, SignalDecision, Position, Order
+)
+from portfolio_constructor.max_cagr.strategy import MaxCAGRConstructor
 
 # Load environment variables
 load_dotenv('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/.env')
@@ -68,6 +75,28 @@ MVP_CONFIG = {
 # Global: Active portfolio allocations {strategy_id: allocation_pct}
 ACTIVE_ALLOCATIONS = {}
 ALLOCATIONS_LOCK = threading.Lock()
+
+# Global: Portfolio Constructor instance
+PORTFOLIO_CONSTRUCTOR = None
+CONSTRUCTOR_LOCK = threading.Lock()
+
+
+def initialize_portfolio_constructor():
+    """Initialize the portfolio constructor (MaxCAGR strategy)"""
+    global PORTFOLIO_CONSTRUCTOR
+    
+    with CONSTRUCTOR_LOCK:
+        if PORTFOLIO_CONSTRUCTOR is None:
+            logger.info("Initializing Portfolio Constructor (MaxCAGR)")
+            PORTFOLIO_CONSTRUCTOR = MaxCAGRConstructor(
+                max_leverage=2.0,
+                max_drawdown_limit=0.20,
+                rebalance_frequency='monthly',
+                risk_free_rate=0.0
+            )
+            logger.info("✅ Portfolio Constructor initialized")
+    
+    return PORTFOLIO_CONSTRUCTOR
 
 
 def get_account_state(account_name: str) -> Optional[Dict[str, Any]]:
@@ -243,10 +272,219 @@ def check_slippage_rule(signal: Dict[str, Any]) -> bool:
     return True
 
 
+def build_portfolio_context(account_state: Dict[str, Any]) -> PortfolioContext:
+    """
+    Build PortfolioContext from account state for live trading.
+    """
+    # Convert open positions to Position objects
+    positions = []
+    for pos_dict in account_state.get('open_positions', []):
+        positions.append(Position(
+            instrument=pos_dict.get('instrument'),
+            quantity=pos_dict.get('quantity', 0),
+            entry_price=pos_dict.get('entry_price', 0),
+            current_price=pos_dict.get('current_price', 0),
+            unrealized_pnl=pos_dict.get('unrealized_pnl', 0),
+            margin_required=pos_dict.get('margin_required', 0),
+            strategy_id=pos_dict.get('strategy_id')
+        ))
+    
+    # Convert open orders to Order objects
+    orders = []
+    for order_dict in account_state.get('open_orders', []):
+        orders.append(Order(
+            order_id=order_dict.get('order_id'),
+            instrument=order_dict.get('instrument'),
+            side=order_dict.get('side'),
+            quantity=order_dict.get('quantity', 0),
+            order_type=order_dict.get('order_type'),
+            price=order_dict.get('price', 0),
+            strategy_id=order_dict.get('strategy_id')
+        ))
+    
+    # Get current allocations
+    with ALLOCATIONS_LOCK:
+        current_allocations = dict(ACTIVE_ALLOCATIONS)
+    
+    # Build context
+    context = PortfolioContext(
+        account_equity=account_state.get('equity', 0),
+        margin_used=account_state.get('margin_used', 0),
+        margin_available=account_state.get('margin_available', 0),
+        cash_balance=account_state.get('cash_balance', 0),
+        open_positions=positions,
+        open_orders=orders,
+        current_allocations=current_allocations,
+        is_backtest=False,
+        current_date=datetime.utcnow()
+    )
+    
+    return context
+
+
+def convert_signal_dict_to_object(signal_dict: Dict[str, Any]) -> Signal:
+    """Convert signal dictionary to Signal object"""
+    return Signal(
+        signal_id=signal_dict.get('signal_id'),
+        strategy_id=signal_dict.get('strategy_id'),
+        timestamp=signal_dict.get('timestamp') if isinstance(signal_dict.get('timestamp'), datetime) 
+                  else datetime.fromisoformat(signal_dict.get('timestamp')),
+        instrument=signal_dict.get('instrument'),
+        direction=signal_dict.get('direction'),
+        action=signal_dict.get('action'),
+        order_type=signal_dict.get('order_type'),
+        price=signal_dict.get('price', 0),
+        quantity=signal_dict.get('quantity', 0),
+        stop_loss=signal_dict.get('stop_loss'),
+        take_profit=signal_dict.get('take_profit'),
+        expiry=signal_dict.get('expiry'),
+        metadata=signal_dict.get('metadata', {})
+    )
+
+
+def process_signal_with_constructor(signal: Dict[str, Any]):
+    """
+    Process signal using Portfolio Constructor (NEW APPROACH)
+    """
+    signal_id = signal.get('signal_id')
+    logger.info(f"Processing signal {signal_id} with Portfolio Constructor")
+
+    # Step 1: Check slippage rule (keep existing logic)
+    if signal.get('action') == 'ENTRY' and not check_slippage_rule(signal):
+        decision = {
+            "signal_id": signal_id,
+            "decision": "REJECTED",
+            "timestamp": datetime.utcnow(),
+            "reason": "SLIPPAGE_EXCEEDED",
+            "original_quantity": signal.get('quantity', 0),
+            "final_quantity": 0,
+            "risk_assessment": {},
+            "created_at": datetime.utcnow()
+        }
+        cerebro_decisions_collection.insert_one(decision)
+        logger.info(f"Signal {signal_id} rejected due to slippage")
+        return
+
+    # Step 2: Get account state
+    account_name = MVP_CONFIG['default_account']
+    account_state = get_account_state(account_name)
+
+    if not account_state:
+        logger.error(f"Failed to get account state for {account_name}")
+        decision = {
+            "signal_id": signal_id,
+            "decision": "REJECTED",
+            "timestamp": datetime.utcnow(),
+            "reason": "ACCOUNT_STATE_UNAVAILABLE",
+            "original_quantity": signal.get('quantity', 0),
+            "final_quantity": 0,
+            "risk_assessment": {},
+            "created_at": datetime.utcnow()
+        }
+        cerebro_decisions_collection.insert_one(decision)
+        return
+
+    # Step 3: Build context and convert signal
+    context = build_portfolio_context(account_state)
+    signal_obj = convert_signal_dict_to_object(signal)
+    
+    # Step 4: Get portfolio constructor and evaluate signal
+    constructor = initialize_portfolio_constructor()
+    decision_obj: SignalDecision = constructor.evaluate_signal(signal_obj, context)
+    
+    # Log decision
+    logger.info(f"\n{'='*70}")
+    logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {signal.get('instrument')}")
+    logger.info(f"{'='*70}")
+    logger.info(f"Strategy: {signal.get('strategy_id')}")
+    logger.info(f"Action: {decision_obj.action}")
+    logger.info(f"Quantity: {decision_obj.quantity:.2f}")
+    logger.info(f"Reason: {decision_obj.reason}")
+    if decision_obj.allocated_capital:
+        logger.info(f"Allocated Capital: ${decision_obj.allocated_capital:,.2f}")
+    if decision_obj.margin_required:
+        logger.info(f"Margin Required: ${decision_obj.margin_required:,.2f}")
+    logger.info(f"{'='*70}\n")
+    
+    # Step 5: Save decision to MongoDB
+    decision_doc = {
+        "signal_id": signal_id,
+        "decision": decision_obj.action,  # "APPROVE", "REJECT", "RESIZE"
+        "timestamp": datetime.utcnow(),
+        "reason": decision_obj.reason,
+        "original_quantity": signal.get('quantity', 0),
+        "final_quantity": decision_obj.quantity,
+        "risk_assessment": {
+            "allocated_capital": decision_obj.allocated_capital,
+            "margin_required": decision_obj.margin_required,
+            "metadata": decision_obj.metadata
+        },
+        "created_at": datetime.utcnow()
+    }
+    cerebro_decisions_collection.insert_one(decision_doc)
+
+    # Step 6: If approved or resized, create trading order
+    if decision_obj.action in ['APPROVE', 'RESIZE']:
+        # Round to whole shares for IBKR compatibility
+        final_quantity_rounded = round(decision_obj.quantity)
+        
+        if final_quantity_rounded <= 0:
+            logger.warning(f"Rounded quantity is 0, rejecting signal")
+            return
+        
+        order_id = f"{signal_id}_ORD"
+        trading_order = {
+            "order_id": order_id,
+            "signal_id": signal_id,
+            "strategy_id": signal.get('strategy_id'),
+            "account": account_name,
+            "timestamp": datetime.utcnow(),
+            "instrument": signal.get('instrument'),
+            "direction": signal.get('direction'),
+            "action": signal.get('action'),
+            "order_type": signal.get('order_type'),
+            "price": signal.get('price'),
+            "quantity": final_quantity_rounded,
+            "stop_loss": signal.get('stop_loss'),
+            "take_profit": signal.get('take_profit'),
+            "expiry": signal.get('expiry'),
+            "cerebro_decision": {
+                "allocated_capital": decision_obj.allocated_capital,
+                "margin_required": decision_obj.margin_required,
+                "position_size_logic": "PortfolioConstructor:MaxCAGR",
+                "risk_metrics": decision_obj.metadata
+            },
+            "status": "PENDING",
+            "created_at": datetime.utcnow()
+        }
+
+        # Save to MongoDB
+        trading_orders_collection.insert_one(trading_order)
+        logger.info(f"✅ Trading order created: {order_id} for {final_quantity_rounded} shares")
+
+        # Publish to Pub/Sub
+        try:
+            message_data = json.dumps(trading_order, default=str).encode('utf-8')
+            future = publisher.publish(trading_orders_topic, message_data)
+            future.result(timeout=5)
+            logger.info(f"✅ Order published to Pub/Sub topic")
+        except Exception as e:
+            logger.error(f"Failed to publish order to Pub/Sub: {str(e)}")
+
+    # Update signal as processed
+    standardized_signals_collection.update_one(
+        {"signal_id": signal_id},
+        {"$set": {"processed_by_cerebro": True}}
+    )
+
+
 def calculate_position_size(signal: Dict[str, Any], account_state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Calculate position size based on portfolio allocation and risk limits
     Uses strategy-specific allocation from ACTIVE portfolio allocation
+    
+    LEGACY FUNCTION - Kept for backwards compatibility
+    New code should use process_signal_with_constructor() instead
     """
     strategy_id = signal.get('strategy_id')
     account_equity = account_state.get('equity', 0)
@@ -491,7 +729,8 @@ def signals_callback(message):
         data = json.loads(message.data.decode('utf-8'))
         logger.info(f"Received signal: {data.get('signal_id')}")
 
-        process_signal(data)
+        # Use new portfolio constructor approach
+        process_signal_with_constructor(data)
 
         message.ack()
 
@@ -520,6 +759,10 @@ async def startup_event():
     On startup, load allocations and start Pub/Sub subscriber
     """
     logger.info("Cerebro Service starting up...")
+
+    # Initialize portfolio constructor
+    logger.info("Initializing Portfolio Constructor...")
+    initialize_portfolio_constructor()
 
     # Load active portfolio allocations
     logger.info("Loading active portfolio allocations...")
