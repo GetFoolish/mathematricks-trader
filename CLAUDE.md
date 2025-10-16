@@ -103,6 +103,13 @@ margin_used (total margin in dollars)
 margin_used_pct ← THE WHOLE REASON WE'RE HERE
 notional_value (total notional in dollars)
 
+NEEDS WORK (Tomorrow):
+Margin Parameters - 1-10% usage is too low, need to adjust synthetic data parameters
+Frontend Strategies Tab - Update to handle new unified document structure
+Phase 2 - Complete evaluate_signal() with real margin data
+Validation - Verify margin constraint works with corrected percentages
+Live Mode Testing - Send sample signals every 15 seconds and validate how they are being processed.
+
 ## Next: Milestone 1.3 - Simple Admin Frontend
 
 ### Phase A: Setup & Project Structure
