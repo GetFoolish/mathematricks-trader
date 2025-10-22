@@ -16,6 +16,13 @@
 - If you give me commands to run, always give them to me in a way that i can copy paste it. Right now, there are extra spaces when i copy it from your window.
 
 ---
+- in /tools: write a tool that looks at forex sheet and sends signals to the system as needed.
+- Make a list of synthetic data or assumptions that have been made for leslie strategies and write out an email asking for that data. Maybe make a dummy excel sheet for him.
+- Frontend: Portfolio Development, and testing
+- Frontend: Per Strategy (Dashboard)
+- Frontend: Per Strategy Developer. (Dashboard)
+- Frontend: Per Client (Dashboard)
+- Frontend: All (Dashboard)
 
 ## Current Status: Milestone 1.0 ✅ COMPLETE
 

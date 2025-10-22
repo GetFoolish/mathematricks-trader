@@ -401,11 +401,16 @@ def build_portfolio_context(account_state: Dict[str, Any]) -> PortfolioContext:
 
 def convert_signal_dict_to_object(signal_dict: Dict[str, Any]) -> Signal:
     """Convert signal dictionary to Signal object"""
+    # Handle timestamp with 'Z' suffix
+    timestamp_str = signal_dict.get('timestamp')
+    if isinstance(timestamp_str, str) and timestamp_str.endswith('Z'):
+        timestamp_str = timestamp_str[:-1] + '+00:00'
+    
     return Signal(
         signal_id=signal_dict.get('signal_id'),
         strategy_id=signal_dict.get('strategy_id'),
         timestamp=signal_dict.get('timestamp') if isinstance(signal_dict.get('timestamp'), datetime) 
-                  else datetime.fromisoformat(signal_dict.get('timestamp')),
+                  else datetime.fromisoformat(timestamp_str),
         instrument=signal_dict.get('instrument'),
         direction=signal_dict.get('direction'),
         action=signal_dict.get('action'),
