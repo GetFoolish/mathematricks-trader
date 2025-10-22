@@ -45,8 +45,10 @@ app.add_middleware(
 )
 
 # Mount outputs directory for serving tearsheet HTML files
-project_root = '/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader'
-outputs_dir = os.path.join(project_root, 'outputs')
+# Use service-specific outputs directory
+service_dir = os.path.dirname(os.path.abspath(__file__))
+outputs_dir = os.path.join(service_dir, 'outputs')
+os.makedirs(outputs_dir, exist_ok=True)  # Create if doesn't exist
 app.mount("/outputs", StaticFiles(directory=outputs_dir), name="outputs")
 
 # Initialize MongoDB
@@ -1353,6 +1355,31 @@ async def startup_event():
 
     # Start Pub/Sub subscribers
     start_pubsub_subscribers()
+
+    # Initialize default test account if it doesn't exist
+    test_accounts = ["DU1234567", "IBKR_Main"]
+    for account_name in test_accounts:
+        existing = account_state_collection.find_one(
+            {"account": account_name},
+            sort=[("timestamp", -1)]
+        )
+        
+        if not existing:
+            logger.info(f"Creating default account state for {account_name}")
+            default_state = {
+                "account": account_name,
+                "equity": 100000.0,  # $100K starting capital
+                "cash_balance": 100000.0,
+                "margin_used": 0.0,
+                "margin_available": 200000.0,  # 2x leverage available
+                "timestamp": datetime.utcnow(),
+                "created_at": datetime.utcnow(),
+                "positions": [],
+                "open_orders": []
+            }
+            account_state_collection.insert_one(default_state)
+            account_state_cache[account_name] = default_state
+            logger.info(f"✅ Default account {account_name} created")
 
     # TODO: Sync all configured accounts with brokers
     # This is critical for ensuring state consistency

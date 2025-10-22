@@ -15,6 +15,7 @@ import requests
 import threading
 from fastapi import FastAPI
 import uvicorn
+import pandas as pd
 
 # Portfolio constructor imports
 from portfolio_constructor.base import PortfolioConstructor
@@ -22,6 +23,7 @@ from portfolio_constructor.context import (
     PortfolioContext, Signal, SignalDecision, Position, Order
 )
 from portfolio_constructor.max_cagr.strategy import MaxCAGRConstructor
+from portfolio_constructor.max_hybrid.strategy import MaxHybridConstructor
 
 # Load environment variables
 load_dotenv('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/.env')
@@ -52,6 +54,7 @@ trading_orders_collection = db['trading_orders']
 cerebro_decisions_collection = db['cerebro_decisions']
 standardized_signals_collection = db['standardized_signals']
 portfolio_allocations_collection = db['portfolio_allocations']
+strategies_collection = db['strategies']
 
 # Initialize Google Cloud Pub/Sub
 project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
@@ -82,19 +85,24 @@ CONSTRUCTOR_LOCK = threading.Lock()
 
 
 def initialize_portfolio_constructor():
-    """Initialize the portfolio constructor (MaxCAGR strategy)"""
+    """Initialize the portfolio constructor (MaxHybrid strategy)"""
     global PORTFOLIO_CONSTRUCTOR
     
     with CONSTRUCTOR_LOCK:
         if PORTFOLIO_CONSTRUCTOR is None:
-            logger.info("Initializing Portfolio Constructor (MaxCAGR)")
-            PORTFOLIO_CONSTRUCTOR = MaxCAGRConstructor(
-                max_leverage=2.0,
-                max_drawdown_limit=0.20,
-                rebalance_frequency='monthly',
+            logger.info("Initializing Portfolio Constructor (MaxHybrid)")
+            PORTFOLIO_CONSTRUCTOR = MaxHybridConstructor(
+                alpha=0.85,  # 85% Sharpe, 15% CAGR weighting
+                max_drawdown_limit=-0.06,  # -6% max drawdown
+                max_leverage=2.3,  # 230% max allocation
+                max_single_strategy=1.0,  # 100% max per strategy
+                min_allocation=0.01,  # 1% minimum
+                cagr_target=2.0,  # 200% CAGR target for normalization
+                use_fixed_allocations=True,  # 🔒 Use pre-calculated allocations from backtest
+                allocations_config_path=None,  # Uses default: portfolio_allocations.json
                 risk_free_rate=0.0
             )
-            logger.info("✅ Portfolio Constructor initialized")
+            logger.info("✅ Portfolio Constructor initialized (MaxHybrid)")
     
     return PORTFOLIO_CONSTRUCTOR
 
@@ -168,7 +176,71 @@ def reload_allocations():
     global ACTIVE_ALLOCATIONS
     with ALLOCATIONS_LOCK:
         ACTIVE_ALLOCATIONS = load_active_allocations()
-        logger.info(f"Portfolio allocations reloaded: {len(ACTIVE_ALLOCATIONS)} strategies")
+    logger.info(f"Portfolio allocations reloaded: {len(ACTIVE_ALLOCATIONS)} strategies")
+
+
+def load_strategy_histories_from_mongodb() -> Dict[str, pd.DataFrame]:
+    """
+    Load strategy backtest equity curves from MongoDB.
+    
+    Returns:
+        Dict mapping strategy_id to DataFrame with returns
+    """
+    histories = {}
+    
+    try:
+        # Query all ACTIVE strategies from MongoDB
+        strategies = list(strategies_collection.find({"status": "ACTIVE"}))
+        
+        logger.info(f"Loading histories for {len(strategies)} ACTIVE strategies...")
+        
+        for strat_doc in strategies:
+            strategy_id = strat_doc.get('strategy_id')
+            
+            if not strategy_id:
+                continue
+            
+            # Try to extract backtest equity curve from raw_data_backtest_full
+            if 'raw_data_backtest_full' in strat_doc:
+                raw_data = strat_doc['raw_data_backtest_full']
+                
+                # Should be a list of dicts with 'date', 'return', 'account_equity', etc
+                if isinstance(raw_data, list) and len(raw_data) > 0:
+                    try:
+                        # Extract returns from backtest data
+                        dates = [pd.to_datetime(item['date']) for item in raw_data]
+                        returns = [item.get('return', 0) for item in raw_data]
+                        
+                        # Create DataFrame
+                        df = pd.DataFrame({
+                            'returns': returns  # Note: plural 'returns' to match MaxHybrid expectation
+                        }, index=dates)
+                        
+                        # Remove any NaN values
+                        df = df.dropna()
+                        
+                        if len(df) > 0:
+                            histories[strategy_id] = df
+                            logger.info(f"  ✅ {strategy_id}: Loaded {len(df)} backtest returns")
+                        else:
+                            logger.warning(f"  ⚠️  {strategy_id}: Backtest data produced zero valid returns")
+                    
+                    except (KeyError, ValueError, TypeError) as e:
+                        logger.error(f"  ❌ {strategy_id}: Failed to parse backtest data - {e}")
+                else:
+                    logger.warning(f"  ⚠️  {strategy_id}: raw_data_backtest_full is empty or invalid format")
+            else:
+                logger.warning(f"  ⚠️  {strategy_id}: No raw_data_backtest_full field")
+        
+        if histories:
+            logger.info(f"✅ Successfully loaded {len(histories)} strategy histories")
+        else:
+            logger.warning("⚠️  NO strategy histories loaded - optimizer will have no data to work with")
+    
+    except Exception as e:
+        logger.error(f"Error loading strategy histories: {e}", exc_info=True)
+    
+    return histories
 
 
 # ============================================================================
@@ -275,6 +347,7 @@ def check_slippage_rule(signal: Dict[str, Any]) -> bool:
 def build_portfolio_context(account_state: Dict[str, Any]) -> PortfolioContext:
     """
     Build PortfolioContext from account state for live trading.
+    Loads strategy histories from MongoDB (backtest data).
     """
     # Convert open positions to Position objects
     positions = []
@@ -306,6 +379,9 @@ def build_portfolio_context(account_state: Dict[str, Any]) -> PortfolioContext:
     with ALLOCATIONS_LOCK:
         current_allocations = dict(ACTIVE_ALLOCATIONS)
     
+    # Load strategy histories from MongoDB (backtest data)
+    strategy_histories = load_strategy_histories_from_mongodb()
+    
     # Build context
     context = PortfolioContext(
         account_equity=account_state.get('equity', 0),
@@ -315,6 +391,7 @@ def build_portfolio_context(account_state: Dict[str, Any]) -> PortfolioContext:
         open_positions=positions,
         open_orders=orders,
         current_allocations=current_allocations,
+        strategy_histories=strategy_histories,
         is_backtest=False,
         current_date=datetime.utcnow()
     )

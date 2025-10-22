@@ -28,10 +28,94 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
 import logging
+import os
 
 from ..base import PortfolioConstructor, PortfolioContext, SignalDecision, Signal
 
 logger = logging.getLogger(__name__)
+
+# Path for dedicated validation log
+VALIDATION_LOG_PATH = '/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/logs/strategy_validation.log'
+
+
+def validate_live_vs_backtest(
+    strategy_id: str,
+    live_returns: Optional[pd.DataFrame],
+    backtest_returns: pd.DataFrame,
+    logger: logging.Logger
+) -> Dict[str, any]:
+    """
+    Standalone validation function: Compare live performance vs backtest expectations.
+    
+    This is a PLACEHOLDER implementation - will be enhanced with statistical tests.
+    
+    Future enhancements will include:
+    - Sharpe ratio comparison (live vs backtest)
+    - Return distribution tests (KS test, Chi-squared)
+    - Maximum drawdown comparison
+    - Correlation analysis between live and backtest
+    - Regime change detection
+    - Rolling performance metrics
+    
+    Args:
+        strategy_id: Strategy identifier
+        live_returns: Live trading returns DataFrame (if available)
+        backtest_returns: Backtest returns DataFrame for comparison
+        logger: Logger instance
+    
+    Returns:
+        Dict with validation results:
+        - is_valid: bool (always True for now)
+        - warnings: List[str]
+        - action: str ("APPROVE" or "REJECT")
+        - live_days: int
+        - backtest_days: int
+        - validation_implemented: bool
+    """
+    # Ensure log directory exists
+    os.makedirs(os.path.dirname(VALIDATION_LOG_PATH), exist_ok=True)
+    
+    # Log to dedicated validation file
+    with open(VALIDATION_LOG_PATH, 'a') as f:
+        timestamp = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+        f.write(f"\n{'='*80}\n")
+        f.write(f"[{timestamp}] VALIDATION CHECK: {strategy_id}\n")
+        f.write(f"{'='*80}\n")
+        f.write(f"⚠️  WARNING: validate_live_vs_backtest() NOT YET IMPLEMENTED\n")
+        f.write(f"   This is a PLACEHOLDER - auto-approving all strategies\n")
+        f.write(f"\n")
+        f.write(f"Data available:\n")
+        f.write(f"  - Live returns: {'YES' if live_returns is not None else 'NO'}")
+        if live_returns is not None:
+            f.write(f" ({len(live_returns)} days)\n")
+        else:
+            f.write(f"\n")
+        f.write(f"  - Backtest returns: YES ({len(backtest_returns)} days)\n")
+        f.write(f"\n")
+        f.write(f"Future implementation should include:\n")
+        f.write(f"  - Sharpe ratio comparison (live vs backtest)\n")
+        f.write(f"  - Return distribution tests (KS test, Chi-squared)\n")
+        f.write(f"  - Maximum drawdown comparison\n")
+        f.write(f"  - Correlation analysis\n")
+        f.write(f"  - Regime change detection\n")
+        f.write(f"  - Rolling performance metrics\n")
+        f.write(f"\n")
+        f.write(f"ACTION: AUTO-APPROVE (validation not implemented)\n")
+        f.write(f"{'='*80}\n\n")
+    
+    # Also log to console
+    logger.warning(f"⚠️  VALIDATION PLACEHOLDER for {strategy_id}")
+    logger.warning(f"   validate_live_vs_backtest() not yet implemented - auto-approving")
+    logger.warning(f"   See {VALIDATION_LOG_PATH} for details")
+    
+    return {
+        "is_valid": True,
+        "warnings": ["Validation not yet implemented - auto-approving"],
+        "action": "APPROVE",
+        "live_days": len(live_returns) if live_returns is not None else 0,
+        "backtest_days": len(backtest_returns),
+        "validation_implemented": False
+    }
 
 
 class MaxHybridConstructor(PortfolioConstructor):
@@ -57,7 +141,9 @@ class MaxHybridConstructor(PortfolioConstructor):
                  max_single_strategy: float = 1.0,
                  min_allocation: float = 0.01,
                  cagr_target: float = 2,
-                 risk_free_rate: float = 0.0):
+                 risk_free_rate: float = 0.0,
+                 use_fixed_allocations: bool = True,
+                 allocations_config_path: str = None):
         """
         Initialize MaxHybrid constructor.
         
@@ -69,6 +155,8 @@ class MaxHybridConstructor(PortfolioConstructor):
             min_allocation: Minimum allocation threshold
             cagr_target: Target CAGR for normalization (1.0 = 100%)
             risk_free_rate: Risk-free rate for Sharpe calculation
+            use_fixed_allocations: If True, use pre-calculated allocations instead of re-optimizing
+            allocations_config_path: Path to JSON file with fixed allocations
         """
         self.alpha = alpha
         self.max_drawdown_limit = max_drawdown_limit
@@ -77,12 +165,53 @@ class MaxHybridConstructor(PortfolioConstructor):
         self.min_allocation = min_allocation
         self.cagr_target = cagr_target
         self.risk_free_rate = risk_free_rate
+        self.use_fixed_allocations = use_fixed_allocations
+        self.fixed_allocations = None
+        
+        # Load fixed allocations if enabled
+        if self.use_fixed_allocations:
+            if allocations_config_path is None:
+                # Default path: portfolio_allocations.json in cerebro_service directory
+                import os
+                # __file__ = .../cerebro_service/portfolio_constructor/max_hybrid/strategy.py
+                # Need to go up 3 levels to reach cerebro_service/
+                cerebro_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                allocations_config_path = os.path.join(cerebro_dir, 'portfolio_allocations.json')
+            
+            self._load_fixed_allocations(allocations_config_path)
         
         logger.info(f"MaxHybrid Constructor initialized:")
+        logger.info(f"  Mode: {'FIXED ALLOCATIONS' if self.use_fixed_allocations else 'DYNAMIC OPTIMIZATION'}")
+        if self.use_fixed_allocations and self.fixed_allocations:
+            logger.info(f"  Loaded {len(self.fixed_allocations)} fixed allocations")
+            logger.info(f"  Total allocation: {sum(self.fixed_allocations.values()):.1f}%")
         logger.info(f"  Alpha (Sharpe weight): {alpha:.2f}")
         logger.info(f"  Max Drawdown Limit: {max_drawdown_limit*100:.1f}%")
         logger.info(f"  Max Leverage: {max_leverage*100:.0f}%")
         logger.info(f"  Max Single Strategy: {max_single_strategy*100:.0f}%")
+    
+    def _load_fixed_allocations(self, config_path: str):
+        """Load fixed allocations from JSON config file"""
+        import json
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            
+            self.fixed_allocations = config.get('allocations', {})
+            
+            # Filter out zero allocations
+            self.fixed_allocations = {
+                k: v for k, v in self.fixed_allocations.items() if v > 0
+            }
+            
+            logger.info(f"✅ Loaded fixed allocations from: {config_path}")
+            logger.info(f"   Allocations: {self.fixed_allocations}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to load fixed allocations from {config_path}: {e}")
+            logger.warning("⚠️  Falling back to dynamic optimization mode")
+            self.use_fixed_allocations = False
+            self.fixed_allocations = None
     
     def _calculate_cagr(self, returns: np.ndarray) -> float:
         """Calculate CAGR from returns"""
@@ -117,6 +246,16 @@ class MaxHybridConstructor(PortfolioConstructor):
         logger.info("="*80)
         logger.info("MaxHybrid Portfolio Allocation")
         logger.info("="*80)
+        
+        # MODE 1: Use fixed allocations (no re-optimization)
+        if self.use_fixed_allocations and self.fixed_allocations:
+            logger.info("🔒 FIXED ALLOCATION MODE - Using pre-calculated allocations")
+            logger.info(f"   Loaded allocations: {self.fixed_allocations}")
+            logger.info("="*80)
+            return self.fixed_allocations.copy()
+        
+        # MODE 2: Dynamic optimization (original behavior)
+        logger.info("🔄 DYNAMIC OPTIMIZATION MODE - Re-optimizing portfolio")
         
         if not context.strategy_histories:
             logger.warning("No strategy histories available")
@@ -354,36 +493,75 @@ class MaxHybridConstructor(PortfolioConstructor):
             context: Current portfolio context
             
         Returns:
-            SignalDecision with action and size
+            SignalDecision with action and size, including detailed metadata
         """
         # Get current allocations
         allocations = self.allocate_portfolio(context)
         
         strategy_id = signal.strategy_id
         
+        # Calculate total allocation across all strategies
+        total_allocation = sum(allocations.values())
+        
         if strategy_id in allocations and allocations[strategy_id] > 0:
             allocation_pct = allocations[strategy_id]
             
+            # Calculate allocated capital and margin
+            allocated_capital = context.account_equity * (allocation_pct / 100.0)
+            estimated_margin = allocated_capital * 0.5  # Assume 50% margin requirement
+            
             logger.info(f"Signal ACCEPTED: {strategy_id} | Allocation: {allocation_pct:.1f}%")
             
+            # Build detailed metadata for transparency
+            metadata = {
+                'allocation_pct': allocation_pct,
+                'portfolio_equity': context.account_equity,
+                'allocated_capital': allocated_capital,
+                'estimated_margin': estimated_margin,
+                'total_portfolio_allocation': total_allocation,
+                'num_strategies_allocated': len([v for v in allocations.values() if v > 0]),
+                'all_allocations': {k: v for k, v in allocations.items() if v > 0},
+                'max_hybrid_params': {
+                    'alpha': self.alpha,
+                    'max_leverage': self.max_leverage,
+                    'max_drawdown_limit': self.max_drawdown_limit
+                },
+                'position_size_calculation': f"{context.account_equity:,.0f} × {allocation_pct:.2f}% = ${allocated_capital:,.2f}"
+            }
+            
             return SignalDecision(
-                signal_id=signal.signal_id,
-                strategy_id=strategy_id,
-                action="take",
-                size_pct=allocation_pct,
-                reason=f"MaxHybrid allocation: {allocation_pct:.1f}%",
-                timestamp=datetime.now()
+                action="APPROVE",
+                quantity=signal.quantity,  # Keep original quantity, will be adjusted by Cerebro
+                reason=f"MaxHybrid allocation: {allocation_pct:.1f}% (Total portfolio: {total_allocation:.1f}%)",
+                allocated_capital=allocated_capital,
+                margin_required=estimated_margin,
+                metadata=metadata
             )
         else:
             logger.info(f"Signal REJECTED: {strategy_id} | No allocation")
             
+            # Build rejection metadata
+            metadata = {
+                'allocation_pct': 0.0,
+                'portfolio_equity': context.account_equity,
+                'total_portfolio_allocation': total_allocation,
+                'num_strategies_allocated': len([v for v in allocations.values() if v > 0]),
+                'all_allocations': {k: v for k, v in allocations.items() if v > 0},
+                'rejection_reason': 'Strategy did not meet optimization criteria',
+                'max_hybrid_params': {
+                    'alpha': self.alpha,
+                    'max_leverage': self.max_leverage,
+                    'max_drawdown_limit': self.max_drawdown_limit
+                }
+            }
+            
             return SignalDecision(
-                signal_id=signal.signal_id,
-                strategy_id=strategy_id,
-                action="reject",
-                size_pct=0.0,
+                action="REJECT",
+                quantity=0,
                 reason="No allocation in MaxHybrid portfolio",
-                timestamp=datetime.now()
+                allocated_capital=0.0,
+                margin_required=0.0,
+                metadata=metadata
             )
     
     def get_name(self) -> str:

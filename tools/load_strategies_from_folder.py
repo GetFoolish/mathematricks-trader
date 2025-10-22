@@ -5,6 +5,7 @@ Usage: python load_strategies_from_folder.py <path_to_csv_folder>
 """
 import os
 import sys
+import random
 import pandas as pd
 from datetime import datetime
 from pymongo import MongoClient
@@ -168,16 +169,23 @@ def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
                     notional_col = [col for col in df.columns if 'notional' in col.lower()][0]
                     notional_value = float(str(row[notional_col]).replace('$', '').replace(',', '').strip())
                 else:
-                    # Synthetic: use typical position
-                    notional_value = params['typical_contracts'] * notional_per_contract
+                    # Synthetic: only generate notional when strategy is trading (non-zero returns)
+                    if abs(daily_return) < 0.0001:  # No position
+                        notional_value = 0.0
+                    else:
+                        notional_value = params['typical_contracts'] * notional_per_contract
                 
                 # Calculate or extract Margin Used
                 if has_margin:
                     margin_col = [col for col in df.columns if 'margin' in col.lower()][0]
                     margin_used = float(str(row[margin_col]).replace('$', '').replace(',', '').strip())
                 else:
-                    # Synthetic: use typical position
-                    margin_used = params['typical_contracts'] * margin_per_contract
+                    # Synthetic: only generate margin when strategy is trading (non-zero returns)
+                    if abs(daily_return) < 0.0001:  # No position
+                        margin_used = 0.0
+                    else:
+                        # Use typical contracts * margin per contract (fixed position size)
+                        margin_used = params['typical_contracts'] * margin_per_contract
                 
                 # Calculate or extract Account Equity
                 if has_account_equity:

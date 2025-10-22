@@ -1,0 +1,27 @@
+{
+  "_comment": "Fixed portfolio allocations for live trading",
+  "_source": "MaxHybrid backtest run: 2025-04-10 (last window from MaxHybrid_20251020_120858_allocations.csv)",
+  "_metadata": {
+    "backtest_date": "2025-04-10",
+    "constructor": "MaxHybrid",
+    "alpha": 0.85,
+    "max_leverage": 2.3,
+    "max_drawdown_limit": -0.06,
+    "expected_sharpe": 7.15,
+    "expected_cagr": 0.6246,
+    "expected_max_dd": -0.0321
+  },
+  "allocations": {
+    "chong_vansh_strategy": 81.91,
+    "SPX_1-D_Opt": 57.79,
+    "Com1-Met": 43.09,
+    "Com3-Mkt": 17.07,
+    "Forex": 13.23,
+    "Com2-Ag": 10.38,
+    "SPY": 6.54,
+    "TLT": 0.0,
+    "Com4-Misc": 0.0
+  },
+  "total_allocation_pct": 230.0,
+  "mode": "fixed"
+}

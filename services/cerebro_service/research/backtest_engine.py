@@ -68,16 +68,20 @@ class WalkForwardBacktest:
             # Get the constructor's module file path
             constructor_module = constructor.__class__.__module__
             # e.g., 'services.cerebro_service.portfolio_constructor.max_hybrid.strategy'
-            # We want: 'portfolio_constructor/max_hybrid/outputs' (relative to current directory)
+            # We want absolute path: services/cerebro_service/portfolio_constructor/max_hybrid/outputs
             module_parts = constructor_module.split('.')
             if 'portfolio_constructor' in module_parts:
                 idx = module_parts.index('portfolio_constructor')
                 constructor_name = module_parts[idx + 1]  # e.g., 'max_hybrid'
-                # Use relative path from services/cerebro_service directory
-                output_dir = f'portfolio_constructor/{constructor_name}/outputs'
+                # Build absolute path to services/cerebro_service/portfolio_constructor/{constructor_name}/outputs
+                current_file_dir = os.path.dirname(os.path.abspath(__file__))  # research/
+                cerebro_service_dir = os.path.dirname(current_file_dir)  # services/cerebro_service/
+                output_dir = os.path.join(cerebro_service_dir, 'portfolio_constructor', constructor_name, 'outputs')
             else:
                 # Fallback to root outputs folder
-                output_dir = 'outputs/portfolio_tearsheets'
+                current_file_dir = os.path.dirname(os.path.abspath(__file__))
+                cerebro_service_dir = os.path.dirname(current_file_dir)
+                output_dir = os.path.join(cerebro_service_dir, 'outputs', 'portfolio_tearsheets')
         
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)

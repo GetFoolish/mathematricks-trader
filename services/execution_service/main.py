@@ -85,7 +85,8 @@ def create_contract(instrument: str) -> Stock:
     """
     # Simplified: assumes US stocks
     # Full implementation would parse instrument type and create appropriate contract
-    return Stock(instrument, 'SMART', 'USD')
+    contract = Stock(symbol=instrument, exchange='SMART', currency='USD')
+    return contract
 
 
 def create_order(order_data: Dict[str, Any]) -> Order:
