@@ -409,7 +409,7 @@ class WebhookSignalCollector:
             "signal_id": signal_id,
             "strategy_id": signal_data.get('strategy_name', 'Unknown'),
             "timestamp": signal_data.get('timestamp', datetime.datetime.utcnow().isoformat()),
-            "instrument": signal_data.get('signal', {}).get('ticker', ''),
+            "instrument": signal_data.get('signal', {}).get('instrument') or signal_data.get('signal', {}).get('ticker', ''),  # Support both 'instrument' and 'ticker' fields
             "direction": "LONG",  # Simplified - would parse from signal
             "action": signal_data.get('signal', {}).get('action', 'ENTRY').upper(),
             "order_type": signal_data.get('signal', {}).get('order_type', 'MARKET').upper(),

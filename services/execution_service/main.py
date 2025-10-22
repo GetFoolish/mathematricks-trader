@@ -83,9 +83,16 @@ def create_contract(instrument: str) -> Stock:
     Create IBKR contract from instrument symbol
     MVP implementation - handles stocks only
     """
+    logger.info(f"🔍 create_contract called with instrument='{instrument}' (type: {type(instrument)})")
+    
+    if not instrument or instrument.strip() == '':
+        raise ValueError(f"Invalid instrument: '{instrument}' - cannot be empty")
+    
     # Simplified: assumes US stocks
     # Full implementation would parse instrument type and create appropriate contract
     contract = Stock(symbol=instrument, exchange='SMART', currency='USD')
+    
+    logger.info(f"🔍 Created contract: {contract}")
     return contract
 
 
@@ -138,13 +145,33 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
 
         # Create contract and order
         contract = create_contract(order_data['instrument'])
+        
+        # CRITICAL: Qualify the contract with IBKR to get all details
+        logger.info(f"Qualifying contract with IBKR...")
+        qualified_contracts = ib.qualifyContracts(contract)
+        if not qualified_contracts:
+            logger.error(f"Failed to qualify contract: {contract}")
+            return None
+        
+        contract = qualified_contracts[0]
+        logger.info(f"✅ Contract qualified: {contract}")
+        
         order = create_order(order_data)
 
         # Place order
         trade = ib.placeOrder(contract, order)
-        ib.sleep(1)  # Give it a moment to register
-
-        logger.info(f"Submitted order {order_data['order_id']} to IBKR")
+        
+        # Wait for order to be submitted or rejected
+        # ib.sleep() processes events, so errors will come through
+        ib.sleep(2)  # Give IBKR time to validate and accept/reject
+        
+        # Check if order was rejected/cancelled
+        if trade.orderStatus.status in ['Cancelled', 'ApiCancelled', 'PendingCancel', 'Inactive']:
+            logger.error(f"❌ Order {order_data['order_id']} was REJECTED by IBKR: {trade.orderStatus.status}")
+            logger.error(f"   Trade log: {trade.log}")
+            return None
+        
+        logger.info(f"Submitted order {order_data['order_id']} to IBKR - Status: {trade.orderStatus.status}")
 
         return {
             "order_id": order_data['order_id'],
@@ -299,37 +326,54 @@ def process_order_from_queue(order_item: Dict[str, Any]):
         result = submit_order_to_broker(order_data)
 
         if result:
-            # Create execution confirmation
-            execution = {
-                "order_id": order_id,
-                "execution_id": result.get('ib_order_id'),
-                "timestamp": datetime.utcnow(),
-                "account": "IBKR_Main",
-                "instrument": order_data.get('instrument'),
-                "side": "BUY" if order_data.get('direction') == 'LONG' else "SELL",
-                "quantity": result.get('filled', 0),
-                "price": result.get('avg_fill_price', 0),
-                "commission": 0,  # Would get from IBKR execution details
-                "status": "FILLED" if result.get('remaining', 0) == 0 else "PARTIAL_FILL",
-                "broker_response": result
-            }
+            # CRITICAL: Only create execution confirmation if order was actually FILLED or PARTIALLY FILLED
+            # Do NOT create fake fills for orders that are just submitted/pending
+            
+            status = result.get('status', '')
+            filled_qty = result.get('filled', 0)
+            
+            logger.info(f"🔍 Order {order_id} result: status={status}, filled={filled_qty}")
+            
+            # Only proceed if there was an actual fill
+            if status in ['Filled', 'PartiallyFilled'] or filled_qty > 0:
+                # Create execution confirmation
+                execution = {
+                    "order_id": order_id,
+                    "execution_id": result.get('ib_order_id'),
+                    "timestamp": datetime.utcnow(),
+                    "account": "IBKR_Main",
+                    "instrument": order_data.get('instrument'),
+                    "side": "BUY" if order_data.get('direction') == 'LONG' else "SELL",
+                    "quantity": filled_qty,
+                    "price": result.get('avg_fill_price', 0),
+                    "commission": 0,  # Would get from IBKR execution details
+                    "status": "FILLED" if result.get('remaining', 0) == 0 else "PARTIAL_FILL",
+                    "broker_response": result
+                }
 
-            # Store execution
-            execution_confirmations_collection.insert_one({
-                **execution,
-                "created_at": datetime.utcnow()
-            })
+                # Store execution
+                execution_confirmations_collection.insert_one({
+                    **execution,
+                    "created_at": datetime.utcnow()
+                })
 
-            # Publish execution confirmation
-            publish_execution_confirmation(execution)
+                # Publish execution confirmation
+                publish_execution_confirmation(execution)
 
-            # Update order status in database
-            trading_orders_collection.update_one(
-                {"order_id": order_id},
-                {"$set": {"status": execution['status'], "updated_at": datetime.utcnow()}}
-            )
+                # Update order status in database
+                trading_orders_collection.update_one(
+                    {"order_id": order_id},
+                    {"$set": {"status": execution['status'], "updated_at": datetime.utcnow()}}
+                )
 
-            logger.info(f"✅ Order {order_id} executed: {execution['status']}")
+                logger.info(f"✅ Order {order_id} executed: {execution['status']}")
+            else:
+                # Order submitted but not filled yet - just update status
+                logger.info(f"📋 Order {order_id} submitted to IBKR, status: {status}")
+                trading_orders_collection.update_one(
+                    {"order_id": order_id},
+                    {"$set": {"status": status, "ib_order_id": result.get('ib_order_id'), "updated_at": datetime.utcnow()}}
+                )
         else:
             # Order failed
             logger.error(f"❌ Order {order_id} failed to execute")
