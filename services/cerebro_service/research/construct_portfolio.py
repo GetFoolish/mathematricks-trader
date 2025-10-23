@@ -40,22 +40,32 @@ from pymongo import MongoClient
 from services.cerebro_service.research.backtest_engine import WalkForwardBacktest
 
 
-def load_strategies_from_mongodb():
-    """Load strategy data from MongoDB (cloud)."""
+def load_strategies_from_mongodb(filter_strategy_ids=None):
+    """Load strategy data from MongoDB (cloud).
+
+    Args:
+        filter_strategy_ids: Optional list of strategy IDs to load (default: load all)
+    """
     print("\n" + "="*80)
     print("LOADING STRATEGY DATA FROM MONGODB")
     print("="*80)
-    
+
     # Get MongoDB URI from environment
     mongo_uri = os.getenv('MONGODB_URI')
     if not mongo_uri:
         raise ValueError("MONGODB_URI not found in .env file")
-    
+
     client = MongoClient(mongo_uri, tls=True, tlsAllowInvalidCertificates=True)
     db = client['mathematricks_trading']
     strategies_collection = db['strategies']
-    
-    strategies_cursor = strategies_collection.find({})
+
+    # Build query filter
+    query = {}
+    if filter_strategy_ids:
+        query['strategy_id'] = {'$in': filter_strategy_ids}
+        print(f"Filtering for strategies: {filter_strategy_ids}")
+
+    strategies_cursor = strategies_collection.find(query)
     strategies_data = {}
     
     for doc in strategies_cursor:
@@ -271,9 +281,21 @@ Available constructors:
         default=None,
         help='Output directory for results (default: auto-detect from constructor path)'
     )
-    
+
+    parser.add_argument(
+        '--strategies',
+        type=str,
+        default=None,
+        help='Comma-separated list of strategy IDs to include (default: all active strategies)'
+    )
+
     args = parser.parse_args()
-    
+
+    # Parse strategy filter list
+    filter_strategies = None
+    if args.strategies:
+        filter_strategies = [s.strip() for s in args.strategies.split(',')]
+
     # Print header
     print("\n" + "="*80)
     print("PORTFOLIO CONSTRUCTOR BACKTEST")
@@ -288,11 +310,13 @@ Available constructors:
         print(f"Output Dir: {args.output_dir}")
     else:
         print(f"Output Dir: Auto-detect from constructor")
+    if filter_strategies:
+        print(f"Strategy Filter: {', '.join(filter_strategies)}")
     print("="*80)
-    
+
     try:
         # Load strategies from MongoDB
-        strategies_data = load_strategies_from_mongodb()
+        strategies_data = load_strategies_from_mongodb(filter_strategy_ids=filter_strategies)
         
         if not strategies_data:
             print("\n❌ No strategy data found in MongoDB")

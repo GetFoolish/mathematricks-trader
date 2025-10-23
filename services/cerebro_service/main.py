@@ -6,6 +6,9 @@ Implements hard margin limits and basic position sizing for MVP.
 import os
 import logging
 import json
+import subprocess
+import glob
+import shutil
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from google.cloud import pubsub_v1
@@ -13,10 +16,12 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 import requests
 import threading
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 import uvicorn
 import pandas as pd
+import numpy as np
 
 # Portfolio constructor imports
 from portfolio_constructor.base import PortfolioConstructor
@@ -65,6 +70,10 @@ cerebro_decisions_collection = db['cerebro_decisions']
 standardized_signals_collection = db['standardized_signals']
 portfolio_allocations_collection = db['portfolio_allocations']
 strategies_collection = db['strategies']
+
+# NEW: Collections for Allocations Page
+current_allocation_collection = db['current_allocation']  # Part 1: Single document with current allocation
+portfolio_tests_collection = db['portfolio_tests']  # Part 3: List of test runs
 
 # Initialize Google Cloud Pub/Sub
 project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
@@ -1061,6 +1070,298 @@ async def sync_strategy_backtest(strategy_id: str, backtest_data: Dict[str, Any]
     except Exception as e:
         logger.error(f"Error syncing backtest for {strategy_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ALLOCATIONS PAGE APIs (NEW)
+# ============================================================================
+
+@app.get("/api/v1/allocations/current")
+async def get_current_allocation():
+    """
+    Part 1: Get current active allocation
+    Returns the single "approved" allocation that the system is currently using
+    """
+    try:
+        allocation = current_allocation_collection.find_one({}, {'_id': 0})
+        return {
+            "status": "success",
+            "allocation": allocation
+        }
+    except Exception as e:
+        logger.error(f"Error fetching current allocation: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/allocations/approve")
+async def approve_allocation(request: Dict[str, Any]):
+    """
+    Part 2: Approve allocation (makes it current)
+    Replaces the current allocation with the approved one
+    """
+    try:
+        allocations = request.get('allocations')
+        if not allocations:
+            raise HTTPException(status_code=400, detail="allocations field is required")
+
+        # Create new current allocation document
+        new_allocation = {
+            "allocations": allocations,
+            "approved_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+
+        # Replace the current allocation (upsert - insert if doesn't exist)
+        current_allocation_collection.delete_many({})  # Remove all existing
+        current_allocation_collection.insert_one(new_allocation)
+
+        logger.info(f"✅ Approved new allocation with {len(allocations)} strategies")
+
+        return {
+            "status": "success",
+            "message": "Allocation approved and set as current"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error approving allocation: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/portfolio-tests")
+async def get_portfolio_tests():
+    """
+    Part 3: Get list of portfolio tests
+    Returns all test runs sorted by creation date (newest first)
+    """
+    try:
+        tests = list(portfolio_tests_collection.find({}, {'_id': 0}).sort('created_at', -1))
+
+        # Sanitize data - replace NaN/Inf with 0.0 for JSON compatibility
+        for test in tests:
+            if 'allocations' in test:
+                for strategy_id, value in test['allocations'].items():
+                    if pd.isna(value) or not np.isfinite(value):
+                        test['allocations'][strategy_id] = 0.0
+
+            if 'performance' in test:
+                for metric, value in test['performance'].items():
+                    if pd.isna(value) or not np.isfinite(value):
+                        test['performance'][metric] = 0.0
+
+        return {
+            "status": "success",
+            "count": len(tests),
+            "tests": tests
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching portfolio tests: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/v1/portfolio-tests/{test_id}")
+async def delete_portfolio_test(test_id: str):
+    """
+    Part 3: Delete a portfolio test
+    """
+    try:
+        # Get test to find file paths
+        test = portfolio_tests_collection.find_one({"test_id": test_id}, {'_id': 0})
+
+        if not test:
+            raise HTTPException(status_code=404, detail=f"Test {test_id} not found")
+
+        # Delete archived files from research/outputs
+        research_outputs = "/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/services/cerebro_service/research/outputs"
+        test_archive_dir = f"{research_outputs}/{test_id}"
+
+        if os.path.exists(test_archive_dir):
+            shutil.rmtree(test_archive_dir)
+            logger.info(f"Deleted test archive directory: {test_archive_dir}")
+
+        # Delete from MongoDB
+        result = portfolio_tests_collection.delete_one({"test_id": test_id})
+
+        logger.info(f"✅ Deleted portfolio test: {test_id}")
+
+        return {
+            "status": "success",
+            "message": f"Test {test_id} deleted"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting test {test_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/portfolio-tests/{test_id}/tearsheet")
+async def get_tearsheet(test_id: str):
+    """
+    Get the HTML tearsheet for a specific test
+    """
+    try:
+        # Get test from MongoDB
+        test = portfolio_tests_collection.find_one({"test_id": test_id}, {'_id': 0})
+
+        if not test:
+            raise HTTPException(status_code=404, detail=f"Test {test_id} not found")
+
+        # Get tearsheet file path
+        tearsheet_path = test.get('files', {}).get('tearsheet_html')
+
+        if not tearsheet_path or not os.path.exists(tearsheet_path):
+            raise HTTPException(status_code=404, detail="Tearsheet not found for this test")
+
+        return FileResponse(tearsheet_path, media_type="text/html")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving tearsheet for {test_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/portfolio-tests/run")
+async def run_portfolio_test(request: Dict[str, Any]):
+    """
+    Part 4: Run a new portfolio optimization test (Research Lab)
+    Runs construct_portfolio.py with selected strategies and saves results to MongoDB
+    """
+    try:
+        strategies = request.get('strategies', [])
+        constructor = request.get('constructor', 'max_hybrid')
+
+        if not strategies or len(strategies) == 0:
+            raise HTTPException(status_code=400, detail="At least one strategy must be selected")
+
+        # Generate test ID
+        test_id = f"test_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+
+        logger.info(f"🔬 Running portfolio test: {test_id}")
+        logger.info(f"   Constructor: {constructor}")
+        logger.info(f"   Strategies: {strategies}")
+
+        # Create output directory for this test in research/outputs
+        research_outputs = "/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/services/cerebro_service/research/outputs"
+        test_output_dir = f"{research_outputs}/{test_id}"
+        os.makedirs(test_output_dir, exist_ok=True)
+
+        # Run construct_portfolio.py with output directory set to test folder
+        cmd = [
+            "/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/venv/bin/python",
+            "/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/services/cerebro_service/research/construct_portfolio.py",
+            "--constructor", constructor,
+            "--strategies", ",".join(strategies),
+            "--output-dir", test_output_dir
+        ]
+
+        logger.info(f"Executing: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+        if result.returncode != 0:
+            logger.error(f"Portfolio construction failed: {result.stderr}")
+            raise HTTPException(status_code=500, detail=f"Portfolio construction failed: {result.stderr}")
+
+        logger.info(f"Portfolio construction output:\n{result.stdout}")
+
+        # Files are already in the correct location - just need to find them
+        allocation_files = glob.glob(f"{test_output_dir}/*_allocations.csv")
+        equity_files = glob.glob(f"{test_output_dir}/*_equity.csv")
+        correlation_files = glob.glob(f"{test_output_dir}/*_correlation.csv")
+        tearsheet_files = glob.glob(f"{test_output_dir}/*_tearsheet.html")
+
+        if not allocation_files:
+            raise HTTPException(status_code=500, detail="No allocation file generated")
+
+        # Get file paths (should only be one of each since we specified output dir)
+        archived_files = {
+            'allocation_csv': allocation_files[0] if allocation_files else None,
+            'equity_csv': equity_files[0] if equity_files else None,
+            'correlation_csv': correlation_files[0] if correlation_files else None,
+            'tearsheet_html': tearsheet_files[0] if tearsheet_files else None
+        }
+
+        logger.info(f"Test files saved to: {test_output_dir}")
+        logger.info(f"Files: {list(archived_files.values())}")
+
+        # Parse allocations from CSV (last row has final allocations) - use new location
+        allocations_df = pd.read_csv(archived_files['allocation_csv'])
+
+        # Get final window's allocation (last row)
+        final_row = allocations_df.iloc[-1]
+        allocations = {}
+        for strategy_id in strategies:
+            if strategy_id in allocations_df.columns:
+                value = final_row[strategy_id]
+                # Handle NaN/Inf values - replace with 0.0
+                if pd.isna(value) or not np.isfinite(value):
+                    allocations[strategy_id] = 0.0
+                else:
+                    allocations[strategy_id] = float(value)
+
+        # Parse performance metrics from QuantStats tearsheet HTML
+        performance_metrics = {}
+        if 'tearsheet_html' in archived_files and archived_files['tearsheet_html'] and os.path.exists(archived_files['tearsheet_html']):
+            import re
+            with open(archived_files['tearsheet_html'], 'r') as f:
+                html_content = f.read()
+
+            # Extract metrics using regex patterns
+            cagr_match = re.search(r'CAGR[^<]*</td>\s*<td[^>]*>([-\d.]+)%', html_content)
+            sharpe_match = re.search(r'<td[^>]*>Sharpe</td>\s*<td[^>]*>([-\d.]+)</td>', html_content)
+            max_dd_match = re.search(r'<td[^>]*>Max Drawdown</td>\s*<td[^>]*>([-\d.]+)%', html_content)
+            volatility_match = re.search(r'<td[^>]*>Volatility \(ann\.\)</td>\s*<td[^>]*>([-\d.]+)%', html_content)
+
+            performance_metrics = {
+                "cagr": float(cagr_match.group(1)) if cagr_match else 0.0,
+                "sharpe": float(sharpe_match.group(1)) if sharpe_match else 0.0,
+                "max_drawdown": float(max_dd_match.group(1)) if max_dd_match else 0.0,
+                "volatility": float(volatility_match.group(1)) if volatility_match else 0.0
+            }
+
+            logger.info(f"Performance metrics from tearsheet: {performance_metrics}")
+        else:
+            logger.warning("No tearsheet HTML file found - cannot extract performance metrics")
+
+        # Store test results with archived file paths
+        test_result = {
+            "test_id": test_id,
+            "constructor": constructor,
+            "strategies": strategies,
+            "allocations": allocations,
+            "performance": performance_metrics,
+            "files": archived_files,  # All archived file paths
+            "created_at": datetime.utcnow()
+        }
+
+        # Save to MongoDB
+        portfolio_tests_collection.insert_one(test_result)
+
+        logger.info(f"✅ Portfolio test completed: {test_id}")
+
+        return {
+            "status": "success",
+            "message": "Test completed successfully",
+            "test_id": test_id,
+            "allocations": allocations,
+            "performance": performance_metrics
+        }
+
+    except subprocess.TimeoutExpired:
+        logger.error("Portfolio construction timed out after 5 minutes")
+        raise HTTPException(status_code=500, detail="Portfolio construction timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error running portfolio test: {str(e)}")
+        logger.error(f"Full traceback:\n{error_details}")
+        raise HTTPException(status_code=500, detail=f"{str(e)}\n\nCheck server logs for full traceback")
 
 
 # ============================================================================

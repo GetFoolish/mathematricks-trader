@@ -144,32 +144,70 @@ class ApiClient {
   // ============================================================================
 
   async getAllStrategies(): Promise<Strategy[]> {
-    const response = await this.client.get('/api/v1/strategies');
+    const response = await this.cerebroClient.get('/api/v1/strategies');
     return response.data.strategies;
   }
 
   async getStrategy(strategyId: string): Promise<Strategy> {
-    const response = await this.client.get(`/api/v1/strategies/${strategyId}`);
+    const response = await this.cerebroClient.get(`/api/v1/strategies/${strategyId}`);
     return response.data.strategy;
   }
 
   async createStrategy(strategyData: Partial<Strategy>): Promise<{status: string; strategy_id: string}> {
-    const response = await this.client.post('/api/v1/strategies', strategyData);
+    const response = await this.cerebroClient.post('/api/v1/strategies', strategyData);
     return response.data;
   }
 
   async updateStrategy(strategyId: string, updates: Partial<Strategy>) {
-    const response = await this.client.put(`/api/v1/strategies/${strategyId}`, updates);
+    const response = await this.cerebroClient.put(`/api/v1/strategies/${strategyId}`, updates);
     return response.data;
   }
 
   async deleteStrategy(strategyId: string) {
-    const response = await this.client.delete(`/api/v1/strategies/${strategyId}`);
+    const response = await this.cerebroClient.delete(`/api/v1/strategies/${strategyId}`);
     return response.data;
   }
 
   async syncStrategyBacktest(strategyId: string, backtestData: Partial<BacktestData>) {
-    const response = await this.client.post(`/api/v1/strategies/${strategyId}/sync-backtest`, backtestData);
+    const response = await this.cerebroClient.post(`/api/v1/strategies/${strategyId}/sync-backtest`, backtestData);
+    return response.data;
+  }
+
+  // ============================================================================
+  // NEW: Portfolio Research & Testing APIs (Cerebro)
+  // ============================================================================
+
+  // Part 1: Current Allocation
+  async getCurrentAllocation() {
+    const response = await this.cerebroClient.get('/api/v1/allocations/current');
+    return response.data;
+  }
+
+  // Part 2: Approve Allocation (makes it current)
+  async approveAllocation(allocations: Record<string, number>) {
+    const response = await this.cerebroClient.post('/api/v1/allocations/approve', {
+      allocations
+    });
+    return response.data;
+  }
+
+  // Part 3: Portfolio Tests
+  async getPortfolioTests() {
+    const response = await this.cerebroClient.get('/api/v1/portfolio-tests');
+    return response.data;
+  }
+
+  async deletePortfolioTest(testId: string) {
+    const response = await this.cerebroClient.delete(`/api/v1/portfolio-tests/${testId}`);
+    return response.data;
+  }
+
+  // Part 4: Run Portfolio Test (Research Lab)
+  async runPortfolioTest(strategies: string[], constructor: string) {
+    const response = await this.cerebroClient.post('/api/v1/portfolio-tests/run', {
+      strategies,
+      constructor
+    });
     return response.data;
   }
 

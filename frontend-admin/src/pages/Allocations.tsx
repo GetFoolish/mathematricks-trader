@@ -1,1102 +1,788 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../services/api';
-import { Check, X, Edit, ChevronDown, ChevronRight, TrendingUp, BarChart, ExternalLink, FileText } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { Check, Edit, Trash2, Play, TrendingUp, X, FileText } from 'lucide-react';
 
 export const Allocations: React.FC = () => {
   const queryClient = useQueryClient();
-  const [showApproveModal, setShowApproveModal] = useState(false);
-  const [approverName, setApproverName] = useState('');
-  const [expandedAllocationId, setExpandedAllocationId] = useState<string | null>(null);
-  const [selectedAllocationForApproval, setSelectedAllocationForApproval] = useState<any>(null);
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [editedAllocations, setEditedAllocations] = useState<Record<string, number>>({});
-  const [allocationName, setAllocationName] = useState('');
-  const [simulationResults, setSimulationResults] = useState<Record<string, any>>({});
-  const [simulationErrors, setSimulationErrors] = useState<Record<string, string>>({});
-  const [tearsheetResults, setTearsheetResults] = useState<Record<string, any>>({});
-  const [tearsheetErrors, setTearsheetErrors] = useState<Record<string, string>>({});
 
-  // Fetch current allocation
+  // State for Part 1: Edit mode
+  const [isEditingCurrent, setIsEditingCurrent] = useState(false);
+
+  // State for Part 2: Allocation Editor
+  const [editorAllocations, setEditorAllocations] = useState<Record<string, number>>({});
+  const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
+
+  // State for Part 3: Table sorting
+  const [sortField, setSortField] = useState<string>('created_at');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+
+  // State for Part 4: Research Lab
+  const [selectedStrategies, setSelectedStrategies] = useState<string[]>([]);
+  const [selectedConstructor, setSelectedConstructor] = useState<string>('max_hybrid');
+  const [isStrategyModalOpen, setIsStrategyModalOpen] = useState(false);
+
+  // ============================================================================
+  // API QUERIES
+  // ============================================================================
+
+  // Fetch current allocation (Part 1)
   const { data: currentAllocation } = useQuery({
     queryKey: ['currentAllocation'],
     queryFn: () => apiClient.getCurrentAllocation(),
   });
 
-  // Fetch latest recommendation
-  const { data: latestRecommendation } = useQuery({
-    queryKey: ['latestRecommendation'],
-    queryFn: () => apiClient.getLatestRecommendation(),
-  });
-
-  // Fetch allocation history
-  const { data: allocationHistory } = useQuery({
-    queryKey: ['allocationHistory'],
-    queryFn: () => apiClient.getAllocationHistory(20),
-  });
-
-  // Fetch latest optimization run (for correlation matrix)
-  const { data: optimizationRun } = useQuery({
-    queryKey: ['latestOptimizationRun'],
-    queryFn: () => apiClient.getLatestOptimizationRun(),
-  });
-
-  // Fetch all strategies (for tearsheet URLs)
-  const { data: strategies } = useQuery({
+  // Fetch all strategies (for Part 4: Research Lab)
+  const { data: strategiesData } = useQuery({
     queryKey: ['strategies'],
     queryFn: () => apiClient.getAllStrategies(),
   });
 
-  // Approve allocation mutation
+  // Fetch portfolio tests list (Part 3)
+  const { data: portfolioTests, isLoading: isLoadingTests, error: testsError } = useQuery({
+    queryKey: ['portfolioTests'],
+    queryFn: () => apiClient.getPortfolioTests(),
+  });
+
+  // ============================================================================
+  // MUTATIONS
+  // ============================================================================
+
+  // Approve allocation (Part 2 -> Part 1)
   const approveMutation = useMutation({
-    mutationFn: (data: { allocationId: string; approvedBy: string }) =>
-      apiClient.approveAllocation(data.allocationId, data.approvedBy),
+    mutationFn: (allocations: Record<string, number>) =>
+      apiClient.approveAllocation(allocations),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['currentAllocation'] });
-      queryClient.invalidateQueries({ queryKey: ['latestRecommendation'] });
-      queryClient.invalidateQueries({ queryKey: ['allocationHistory'] });
-      setShowApproveModal(false);
-      setApproverName('');
+      setEditorAllocations({});
+      setSelectedTestId(null);
     },
   });
 
-  // Create custom allocation mutation (PENDING_APPROVAL)
-  const createCustomAllocationMutation = useMutation({
-    mutationFn: (data: { allocations: Record<string, number>; createdBy: string; notes?: string }) =>
-      apiClient.createCustomAllocation(data.allocations, data.createdBy, data.notes),
-    onSuccess: (data) => {
-      console.log('✅ Custom allocation created:', data);
-      queryClient.invalidateQueries({ queryKey: ['currentAllocation'] });
-      queryClient.invalidateQueries({ queryKey: ['latestRecommendation'] });
-      queryClient.invalidateQueries({ queryKey: ['allocationHistory'] });
-      setShowEditModal(false);
-      setShowApproveModal(false);
-      setApproverName('');
-      setEditedAllocations({});
-      setAllocationName('');
-    },
-    onError: (error: any) => {
-      console.error('❌ Failed to create custom allocation:', error);
-      alert(`Failed to create allocation: ${error?.response?.data?.detail || error.message || 'Unknown error'}`);
+  // Delete portfolio test (Part 3)
+  const deleteTestMutation = useMutation({
+    mutationFn: (testId: string) => apiClient.deletePortfolioTest(testId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['portfolioTests'] });
+      if (selectedTestId === arguments[0]) {
+        setEditorAllocations({});
+        setSelectedTestId(null);
+      }
     },
   });
 
-  // Simulation mutation
-  const simulationMutation = useMutation({
-    mutationFn: (allocationId: string) => apiClient.simulateAllocation(allocationId),
-    onSuccess: (data, allocationId) => {
-      setSimulationResults(prev => ({ ...prev, [allocationId]: data }));
-      setSimulationErrors(prev => ({ ...prev, [allocationId]: '' }));
-    },
-    onError: (error: any, allocationId) => {
-      const errorMsg = error?.response?.data?.detail || error.message || 'Simulation failed';
-      setSimulationErrors(prev => ({ ...prev, [allocationId]: errorMsg }));
-      console.error('Simulation error:', error);
-    },
-  });
-
-  // Tearsheet generation mutation
-  const tearsheetMutation = useMutation({
-    mutationFn: (allocationId: string) => apiClient.generateTearsheet(allocationId),
-    onSuccess: (data, allocationId) => {
-      setTearsheetResults(prev => ({ ...prev, [allocationId]: data }));
-      setTearsheetErrors(prev => ({ ...prev, [allocationId]: '' }));
-    },
-    onError: (error: any, allocationId) => {
-      const errorMsg = error?.response?.data?.detail || error.message || 'Tearsheet generation failed';
-      setTearsheetErrors(prev => ({ ...prev, [allocationId]: errorMsg }));
-      console.error('Tearsheet error:', error);
+  // Run new portfolio test (Part 4)
+  const runTestMutation = useMutation({
+    mutationFn: (params: { strategies: string[]; constructor: string }) =>
+      apiClient.runPortfolioTest(params.strategies, params.constructor),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['portfolioTests'] });
+      // Auto-scroll to Part 3 after test completes
+      setTimeout(() => {
+        document.querySelector('[data-part="portfolio-tests"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
     },
   });
 
-  // Auto-simulate when allocation is expanded
-  useEffect(() => {
-    if (expandedAllocationId &&
-        !simulationResults[expandedAllocationId] &&
-        !simulationErrors[expandedAllocationId] &&
-        !simulationMutation.isPending) {
-      console.log(`Auto-simulating allocation: ${expandedAllocationId}`);
-      simulationMutation.mutate(expandedAllocationId);
-    }
-  }, [expandedAllocationId]);
+  // ============================================================================
+  // HANDLERS
+  // ============================================================================
 
-  // Auto-generate tearsheet when allocation is expanded
-  useEffect(() => {
-    if (expandedAllocationId &&
-        !tearsheetResults[expandedAllocationId] &&
-        !tearsheetErrors[expandedAllocationId] &&
-        !tearsheetMutation.isPending) {
-      console.log(`Auto-generating tearsheet for allocation: ${expandedAllocationId}`);
-      tearsheetMutation.mutate(expandedAllocationId);
-    }
-  }, [expandedAllocationId]);
-
-  const handleApprove = () => {
-    if (selectedAllocationForApproval && approverName.trim()) {
-      approveMutation.mutate({
-        allocationId: selectedAllocationForApproval.allocation_id,
-        approvedBy: approverName,
-      });
+  const handleEditCurrent = () => {
+    if (currentAllocation?.allocation?.allocations) {
+      // Sort once when entering edit mode, preserve order during editing
+      const sortedEntries = Object.entries(currentAllocation.allocation.allocations)
+        .sort(([, a], [, b]) => (b as number) - (a as number));
+      const sortedAllocations = Object.fromEntries(sortedEntries);
+      setEditorAllocations(sortedAllocations);
+      setSelectedTestId(null);
+      setIsEditingCurrent(true);
     }
   };
 
-  const handleApproveClick = (allocation: any) => {
-    setSelectedAllocationForApproval(allocation);
-    setShowApproveModal(true);
+  const handleCancelEdit = () => {
+    setIsEditingCurrent(false);
+    setEditorAllocations({});
+    setSelectedTestId(null);
   };
 
-  const handleEditClick = (allocation: any) => {
-    setSelectedAllocationForApproval(allocation);
-    setEditedAllocations({ ...allocation.allocations });
-    setAllocationName(''); // Clear name for new allocation
-    setShowEditModal(true);
+  const handleSaveEdit = () => {
+    if (Object.keys(editorAllocations).length > 0) {
+      approveMutation.mutate(editorAllocations);
+      setIsEditingCurrent(false);
+    }
+  };
+
+  const handleNormalize = () => {
+    const total = getTotalAllocation();
+    if (total === 0) return;
+
+    const normalized: Record<string, number> = {};
+    Object.entries(editorAllocations).forEach(([strategyId, allocation]) => {
+      normalized[strategyId] = (allocation / total) * 100;
+    });
+    setEditorAllocations(normalized);
+  };
+
+  const handleLoadTest = (test: any) => {
+    // Sort once when loading test, preserve order during editing
+    const sortedEntries = Object.entries(test.allocations)
+      .sort(([, a], [, b]) => (b as number) - (a as number));
+    const sortedAllocations = Object.fromEntries(sortedEntries);
+    setEditorAllocations(sortedAllocations);
+    setSelectedTestId(test.test_id);
+    setIsEditingCurrent(false);
   };
 
   const handleAllocationChange = (strategyId: string, value: string) => {
     const numValue = parseFloat(value) || 0;
-    setEditedAllocations(prev => ({ ...prev, [strategyId]: numValue }));
+    setEditorAllocations(prev => ({ ...prev, [strategyId]: numValue }));
   };
 
-  const getTotalAllocation = () => {
-    return Object.values(editedAllocations).reduce((sum, val) => sum + val, 0);
-  };
-
-  const handleSaveCustomAllocation = () => {
-    console.log('🔵 handleSaveCustomAllocation called');
-    console.log('  - selectedAllocationForApproval:', selectedAllocationForApproval?.allocation_id);
-    console.log('  - approverName:', approverName);
-    console.log('  - allocationName:', allocationName);
-    console.log('  - editedAllocations:', editedAllocations);
-    console.log('  - totalAllocation:', getTotalAllocation());
-
-    if (selectedAllocationForApproval && approverName.trim()) {
-      const baseName = allocationName.trim() || 'Custom Portfolio';
-      const notes = `${baseName} | Edited from ${selectedAllocationForApproval.allocation_id} - ${selectedAllocationForApproval.optimization_label || selectedAllocationForApproval.optimization_mode || 'N/A'}`;
-
-      console.log('  - Creating allocation with notes:', notes);
-
-      createCustomAllocationMutation.mutate({
-        allocations: editedAllocations,
-        createdBy: approverName,
-        notes,
-      });
-    } else {
-      console.log('  ❌ Validation failed - not calling mutation');
-      console.log('  - Has selectedAllocationForApproval?', !!selectedAllocationForApproval);
-      console.log('  - Has approverName?', !!approverName.trim());
+  const handleApprove = () => {
+    if (Object.keys(editorAllocations).length > 0) {
+      approveMutation.mutate(editorAllocations);
     }
   };
 
-  const getTearsheetUrl = (strategyId: string) => {
-    const strategy = strategies?.find((s: any) => s.strategy_id === strategyId);
-    return strategy?.tearsheet_url;
+  const handleDeleteTest = (testId: string) => {
+    if (confirm('Are you sure you want to delete this test?')) {
+      deleteTestMutation.mutate(testId);
+    }
+  };
+
+  const handleRunTest = () => {
+    if (selectedStrategies.length === 0) {
+      alert('Please select at least one strategy');
+      return;
+    }
+    runTestMutation.mutate({
+      strategies: selectedStrategies,
+      constructor: selectedConstructor,
+    });
+  };
+
+  const toggleStrategy = (strategyId: string) => {
+    setSelectedStrategies(prev =>
+      prev.includes(strategyId)
+        ? prev.filter(id => id !== strategyId)
+        : [...prev, strategyId]
+    );
+  };
+
+  const getTotalAllocation = () => {
+    return Object.values(editorAllocations).reduce((sum, val) => sum + val, 0);
+  };
+
+  const strategies = strategiesData || [];
+  const tests = portfolioTests?.tests || [];
+
+  // Sort tests
+  const sortedTests = [...tests].sort((a, b) => {
+    let aVal, bVal;
+
+    switch (sortField) {
+      case 'cagr':
+        aVal = a.performance?.cagr || 0;
+        bVal = b.performance?.cagr || 0;
+        break;
+      case 'sharpe':
+        aVal = a.performance?.sharpe || 0;
+        bVal = b.performance?.sharpe || 0;
+        break;
+      case 'max_drawdown':
+        aVal = a.performance?.max_drawdown || 0;
+        bVal = b.performance?.max_drawdown || 0;
+        break;
+      case 'volatility':
+        aVal = a.performance?.volatility || 0;
+        bVal = b.performance?.volatility || 0;
+        break;
+      case 'num_strategies':
+        aVal = a.strategies?.length || 0;
+        bVal = b.strategies?.length || 0;
+        break;
+      case 'created_at':
+        aVal = new Date(a.created_at).getTime();
+        bVal = new Date(b.created_at).getTime();
+        break;
+      default:
+        aVal = 0;
+        bVal = 0;
+    }
+
+    return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+  });
+
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('desc');
+    }
   };
 
   return (
     <div className="space-y-6">
-      {/* Current Active Allocation */}
+      {/* ====================================================================== */}
+      {/* PART 1: CURRENT ALLOCATION                                            */}
+      {/* ====================================================================== */}
       <div className="card">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-white">Current Active Allocation</h3>
-          {currentAllocation && (
-            <span className="px-3 py-1 bg-green-900/30 text-green-400 rounded-full text-sm font-medium">
-              ACTIVE
-            </span>
+          <h3 className="text-xl font-bold text-white">Part 1: Current Allocation</h3>
+          {currentAllocation?.allocation && !isEditingCurrent && (
+            <button
+              onClick={handleEditCurrent}
+              className="btn-secondary flex items-center gap-2"
+            >
+              <Edit className="h-4 w-4" />
+              Edit
+            </button>
+          )}
+          {isEditingCurrent && (
+            <div className="flex gap-2">
+              <button
+                onClick={handleCancelEdit}
+                className="btn-secondary flex items-center gap-2"
+              >
+                <X className="h-4 w-4" />
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                disabled={approveMutation.isPending || getTotalAllocation() === 0}
+                className="btn-success flex items-center gap-2"
+              >
+                <Check className="h-4 w-4" />
+                {approveMutation.isPending ? 'Saving...' : 'Save'}
+              </button>
+            </div>
           )}
         </div>
 
-        {currentAllocation ? (
+        {(isEditingCurrent ? Object.keys(editorAllocations).length > 0 : currentAllocation?.allocation?.allocations) ? (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 pb-4 border-b border-gray-700">
-              <div>
-                <p className="text-sm text-gray-400">Allocation ID</p>
-                <p className="text-white font-medium">{currentAllocation.allocation_id}</p>
-              </div>
+            <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-700">
               <div>
                 <p className="text-sm text-gray-400">Total Allocation</p>
-                <p className="text-white font-medium">
-                  {currentAllocation.expected_metrics.total_allocation_pct.toFixed(1)}%
+                <p className="text-white font-bold text-xl">
+                  {isEditingCurrent
+                    ? getTotalAllocation().toFixed(1)
+                    : Object.values(currentAllocation.allocation.allocations).reduce((sum, val) => sum + val, 0).toFixed(1)
+                  }%
                 </p>
               </div>
               <div>
-                <p className="text-sm text-gray-400">Leverage Ratio</p>
-                <p className="text-white font-medium">
-                  {currentAllocation.expected_metrics.leverage_ratio.toFixed(2)}x
+                <p className="text-sm text-gray-400">Number of Strategies</p>
+                <p className="text-white font-bold text-xl">
+                  {isEditingCurrent
+                    ? Object.keys(editorAllocations).length
+                    : Object.keys(currentAllocation.allocation.allocations).length
+                  }
                 </p>
               </div>
               <div>
-                <p className="text-sm text-gray-400">Expected Sharpe (Annual)</p>
+                <p className="text-sm text-gray-400">Last Updated</p>
                 <p className="text-white font-medium">
-                  {currentAllocation.expected_metrics.expected_sharpe_annual?.toFixed(2) || 'N/A'}
+                  {new Date(currentAllocation.allocation.updated_at).toLocaleString()}
                 </p>
               </div>
             </div>
 
+            {isEditingCurrent && (
+              <button
+                onClick={handleNormalize}
+                className="btn-secondary text-sm"
+              >
+                Normalize to 100%
+              </button>
+            )}
+
             <div className="space-y-3">
-              {Object.entries(currentAllocation.allocations)
-                .sort(([, a], [, b]) => b - a)
+              {Object.entries(isEditingCurrent ? editorAllocations : currentAllocation.allocation.allocations)
+                .sort(isEditingCurrent ? () => 0 : ([, a], [, b]) => (b as number) - (a as number))
                 .map(([strategyId, allocation]) => (
-                  <div key={strategyId} className="flex items-center justify-between">
-                    <div className="flex-1">
+                  <div key={strategyId}>
+                    <div className="flex items-center justify-between mb-2">
                       <p className="text-white font-medium">{strategyId}</p>
-                      <div className="mt-1 bg-gray-700 rounded-full h-2.5 overflow-hidden">
+                      <span className="text-white font-semibold w-20 text-right">
+                        {(allocation as number).toFixed(1)}%
+                      </span>
+                    </div>
+                    {isEditingCurrent ? (
+                      <input
+                        type="range"
+                        value={allocation as number}
+                        onChange={(e) => handleAllocationChange(strategyId, e.target.value)}
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        className="w-full h-2.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-blue-500"
+                      />
+                    ) : (
+                      <div className="bg-gray-700 rounded-full h-2.5 overflow-hidden">
                         <div
-                          className="bg-blue-500 h-full transition-all"
-                          style={{ width: `${allocation}%` }}
+                          className="bg-green-500 h-full transition-all"
+                          style={{ width: `${(allocation as number)}%` }}
                         />
                       </div>
-                    </div>
-                    <span className="ml-4 text-white font-semibold w-16 text-right">
-                      {allocation.toFixed(1)}%
-                    </span>
+                    )}
                   </div>
                 ))}
             </div>
           </div>
         ) : (
-          <div className="text-center py-8">
-            <p className="text-gray-400">No active allocation found</p>
+          <div className="text-center py-12">
+            <p className="text-gray-400 mb-2">No active allocation found</p>
+            <p className="text-sm text-gray-500">Run a test in Research Lab and approve it to set current allocation</p>
           </div>
         )}
       </div>
 
-      {/* Recommended Allocation (Pending Approval) */}
-      {latestRecommendation && (
-        <div className="card border-2 border-yellow-500/50">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-lg font-semibold text-white">Recommended Allocation</h3>
-              <p className="text-sm text-gray-400 mt-1">
-                Generated: {new Date(latestRecommendation.timestamp).toLocaleString()}
-              </p>
-            </div>
-            <span className="px-3 py-1 bg-yellow-900/30 text-yellow-400 rounded-full text-sm font-medium">
-              PENDING APPROVAL
-            </span>
-          </div>
-
-          {/* Comparison Table */}
-          {currentAllocation && (
-            <div className="mb-6 overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr>
-                    <th className="table-header">Strategy</th>
-                    <th className="table-header">Current %</th>
-                    <th className="table-header">Recommended %</th>
-                    <th className="table-header">Change</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-700">
-                  {Object.keys({ ...currentAllocation.allocations, ...latestRecommendation.allocations })
-                    .map((strategyId) => {
-                      const current = currentAllocation.allocations[strategyId] || 0;
-                      const recommended = latestRecommendation.allocations[strategyId] || 0;
-                      const change = recommended - current;
-                      return (
-                        <tr key={strategyId} className="hover:bg-gray-700/50">
-                          <td className="table-cell font-medium">{strategyId}</td>
-                          <td className="table-cell">{current.toFixed(1)}%</td>
-                          <td className="table-cell font-semibold">{recommended.toFixed(1)}%</td>
-                          <td className={`table-cell font-semibold ${
-                            change > 0 ? 'text-green-500' : change < 0 ? 'text-red-500' : 'text-gray-400'
-                          }`}>
-                            {change > 0 ? '+' : ''}{change.toFixed(1)}%
-                          </td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Action Buttons */}
-          <div className="flex gap-3">
-            <button
-              onClick={() => handleApproveClick(latestRecommendation)}
-              disabled={approveMutation.isPending}
-              className="btn-success flex items-center gap-2"
-            >
-              <Check className="h-4 w-4" />
-              Approve
-            </button>
-            <button
-              onClick={() => handleEditClick(latestRecommendation)}
-              className="btn-secondary flex items-center gap-2"
-            >
-              <Edit className="h-4 w-4" />
-              Edit & Approve
-            </button>
-            <button className="btn-danger flex items-center gap-2">
-              <X className="h-4 w-4" />
-              Reject
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Correlation Matrix Heatmap */}
-      {optimizationRun && optimizationRun.correlation_matrix && (
+      {/* ====================================================================== */}
+      {/* PART 2: ALLOCATION EDITOR                                             */}
+      {/* ====================================================================== */}
+      {!isEditingCurrent && (
         <div className="card">
-          <h3 className="text-lg font-semibold text-white mb-4">Strategy Correlation Matrix</h3>
-          <p className="text-sm text-gray-400 mb-4">
-            Correlation values range from -1 (perfectly negatively correlated) to +1 (perfectly positively correlated)
-          </p>
-          <div className="overflow-x-auto">
-            <div className="inline-block min-w-full">
-              <div className="grid gap-1" style={{
-                gridTemplateColumns: `100px repeat(${optimizationRun.strategies_used.length}, minmax(80px, 1fr))`
-              }}>
-                {/* Header row */}
-                <div></div>
-                {optimizationRun.strategies_used.map((strategy) => (
-                  <div key={strategy} className="text-xs text-gray-400 font-medium p-2 text-center">
-                    <div className="transform -rotate-45 origin-left">{strategy}</div>
-                  </div>
-                ))}
-
-                {/* Data rows */}
-                {optimizationRun.strategies_used.map((rowStrategy, rowIdx) => (
-                  <React.Fragment key={rowStrategy}>
-                    <div className="text-xs text-gray-400 font-medium p-2 flex items-center">
-                      {rowStrategy}
-                    </div>
-                    {optimizationRun.correlation_matrix[rowIdx].map((correlation, colIdx) => {
-                      const intensity = Math.abs(correlation);
-                      const isPositive = correlation >= 0;
-                      const bgColor = isPositive
-                        ? `rgba(34, 197, 94, ${intensity * 0.7})`
-                        : `rgba(239, 68, 68, ${intensity * 0.7})`;
-
-                      return (
-                        <div
-                          key={colIdx}
-                          className="p-2 text-center text-xs font-medium text-white rounded"
-                          style={{ backgroundColor: bgColor }}
-                          title={`${rowStrategy} vs ${optimizationRun.strategies_used[colIdx]}: ${correlation.toFixed(3)}`}
-                        >
-                          {correlation.toFixed(2)}
-                        </div>
-                      );
-                    })}
-                  </React.Fragment>
-                ))}
-              </div>
-            </div>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-bold text-white">Part 2: Allocation Editor</h3>
+            {Object.keys(editorAllocations).length > 0 && (
+              <button
+                onClick={handleApprove}
+                disabled={approveMutation.isPending || getTotalAllocation() === 0}
+                className="btn-success flex items-center gap-2"
+              >
+                <Check className="h-4 w-4" />
+                {approveMutation.isPending ? 'Approving...' : 'Approve'}
+              </button>
+            )}
           </div>
-        </div>
-      )}
 
-      {/* Allocation History */}
-      <div className="card">
-        <h3 className="text-lg font-semibold text-white mb-4">Allocation History</h3>
-        <div className="space-y-2">
-          {allocationHistory?.map((allocation) => {
-            const isExpanded = expandedAllocationId === allocation.allocation_id;
-            const isPending = allocation.status === 'PENDING_APPROVAL';
+          {Object.keys(editorAllocations).length > 0 ? (
+            <div className="space-y-4">
+              {/* Total Allocation Display */}
+              <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-700">
+                <div>
+                  <p className="text-sm text-gray-400">Total Allocation</p>
+                  <p className={`font-bold text-xl ${
+                    getTotalAllocation() > 230 ? 'text-red-400' :
+                    getTotalAllocation() > 200 ? 'text-yellow-400' :
+                    'text-green-400'
+                  }`}>
+                    {getTotalAllocation().toFixed(1)}%
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">Number of Strategies</p>
+                  <p className="text-white font-bold text-xl">
+                    {Object.keys(editorAllocations).length}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">Source</p>
+                  <p className="text-white font-medium">
+                    {selectedTestId || 'Current Allocation'}
+                  </p>
+                </div>
+              </div>
 
-            return (
-              <div key={allocation.allocation_id} className="border border-gray-700 rounded-lg overflow-hidden">
-                {/* Header Row (Clickable) */}
-                <div
-                  onClick={() => setExpandedAllocationId(isExpanded ? null : allocation.allocation_id)}
-                  className="flex items-center justify-between p-4 hover:bg-gray-700/50 cursor-pointer"
-                >
-                  <div className="flex items-center gap-4 flex-1">
-                    <div className="text-gray-400">
-                      {isExpanded ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-                    </div>
-                    <div className="flex-1 grid grid-cols-6 gap-4">
-                      <div>
-                        <p className="text-xs text-gray-400">Allocation ID</p>
-                        <p className="text-white font-mono text-xs">{allocation.allocation_id}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-400">Mode</p>
-                        <p className="text-white text-sm">{allocation.optimization_label || allocation.optimization_mode || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-400">Status</p>
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          allocation.status === 'ACTIVE'
-                            ? 'bg-green-900/30 text-green-400'
-                            : allocation.status === 'PENDING_APPROVAL'
-                            ? 'bg-yellow-900/30 text-yellow-400'
-                            : 'bg-gray-700 text-gray-400'
-                        }`}>
-                          {allocation.status}
+              {getTotalAllocation() > 230 && (
+                <div className="p-3 bg-red-900/30 border border-red-500 rounded-lg">
+                  <p className="text-red-400 text-sm">⚠️ Total exceeds maximum leverage (230%)</p>
+                </div>
+              )}
+
+              <button
+                onClick={handleNormalize}
+                className="btn-secondary text-sm"
+              >
+                Normalize to 100%
+              </button>
+
+              {/* Editable Strategy Allocations with Sliders */}
+              <div className="space-y-3">
+                {Object.entries(editorAllocations)
+                  .map(([strategyId, allocation]) => (
+                    <div key={strategyId}>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-white font-medium">{strategyId}</p>
+                        <span className="text-white font-semibold w-20 text-right">
+                          {allocation.toFixed(1)}%
                         </span>
                       </div>
-                      <div>
-                        <p className="text-xs text-gray-400">Total Allocation</p>
-                        <p className="text-white font-medium">{allocation.expected_metrics.total_allocation_pct.toFixed(1)}%</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-400">Sharpe (Annual)</p>
-                        <p className="text-white font-medium">{allocation.expected_metrics.expected_sharpe_annual?.toFixed(2) || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-400">Date</p>
-                        <p className="text-white text-sm">{new Date(allocation.created_at).toLocaleDateString()}</p>
-                      </div>
+                      <input
+                        type="range"
+                        value={allocation}
+                        onChange={(e) => handleAllocationChange(strategyId, e.target.value)}
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        className="w-full h-2.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-blue-500"
+                      />
                     </div>
-                  </div>
-                </div>
+                  ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-12">
+              <p className="text-gray-400 mb-2">No allocation loaded</p>
+              <p className="text-sm text-gray-500">Click "Edit" on Current Allocation or select a test from Portfolio Tests List</p>
+            </div>
+          )}
+        </div>
+      )}
 
-                {/* Expanded Details */}
-                {isExpanded && (
-                  <div className="border-t border-gray-700 p-6 bg-gray-800/50">
-                    <div className="grid grid-cols-2 gap-6 mb-6">
-                      {/* Metrics */}
-                      <div>
-                        <h4 className="text-sm font-semibold text-white mb-3">Expected Metrics</h4>
-                        <div className="space-y-2">
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Total Allocation:</span>
-                            <span className="text-white font-medium">{allocation.expected_metrics.total_allocation_pct.toFixed(1)}%</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Leverage Ratio:</span>
-                            <span className="text-white font-medium">{allocation.expected_metrics.leverage_ratio.toFixed(2)}x</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Sharpe (Annual):</span>
-                            <span className="text-white font-medium">{allocation.expected_metrics.expected_sharpe_annual?.toFixed(2) || 'N/A'}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Daily Return:</span>
-                            <span className="text-white font-medium">{(allocation.expected_metrics.expected_daily_return * 100)?.toFixed(4) || 'N/A'}%</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Daily Volatility:</span>
-                            <span className="text-white font-medium">{(allocation.expected_metrics.expected_daily_volatility * 100)?.toFixed(4) || 'N/A'}%</span>
-                          </div>
-                        </div>
-                      </div>
+      {/* ====================================================================== */}
+      {/* PART 3: PORTFOLIO TESTS LIST                                          */}
+      {/* ====================================================================== */}
+      <div className="card" data-part="portfolio-tests">
+        <h3 className="text-xl font-bold text-white mb-4">Part 3: Portfolio Tests List</h3>
 
-                      {/* Info */}
-                      <div>
-                        <h4 className="text-sm font-semibold text-white mb-3">Details</h4>
-                        <div className="space-y-2">
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Optimization Mode:</span>
-                            <span className="text-white font-medium">{allocation.optimization_label || 'N/A'}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Approved By:</span>
-                            <span className="text-white font-medium">{allocation.approved_by || '-'}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-400">Created:</span>
-                            <span className="text-white font-medium">{new Date(allocation.created_at).toLocaleString()}</span>
-                          </div>
-                          {allocation.approved_at && (
-                            <div className="flex justify-between">
-                              <span className="text-gray-400">Approved:</span>
-                              <span className="text-white font-medium">{new Date(allocation.approved_at).toLocaleString()}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
+        {isLoadingTests ? (
+          <div className="text-center py-12">
+            <div className="inline-block animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-3"></div>
+            <p className="text-gray-400">Loading portfolio tests...</p>
+          </div>
+        ) : testsError ? (
+          <div className="text-center py-12">
+            <p className="text-red-400 mb-2">❌ Error loading tests</p>
+            <p className="text-sm text-gray-500">{(testsError as any)?.message || 'Unknown error occurred'}</p>
+          </div>
+        ) : tests.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-700">
+                  <th className="text-left p-3 text-gray-400 font-medium text-sm">Test ID</th>
+                  <th className="text-left p-3 text-gray-400 font-medium text-sm">Constructor</th>
+                  <th
+                    className="text-left p-3 text-gray-400 font-medium text-sm cursor-pointer hover:text-white"
+                    onClick={() => handleSort('num_strategies')}
+                    title="Click to sort"
+                  >
+                    <div className="flex items-center gap-1">
+                      # Strategies {sortField === 'num_strategies' && (sortDirection === 'asc' ? '↑' : '↓')}
                     </div>
-
-                    {/* Strategy Allocations */}
-                    <div className="mb-6">
-                      <h4 className="text-sm font-semibold text-white mb-3">Strategy Allocations</h4>
-                      <div className="space-y-3">
-                        {Object.entries(allocation.allocations)
-                          .sort(([, a], [, b]) => (b as number) - (a as number))
-                          .map(([strategyId, pct]) => {
-                            const tearsheetUrl = getTearsheetUrl(strategyId);
-                            return (
-                              <div key={strategyId} className="flex items-center justify-between">
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <p className="text-white font-medium text-sm">{strategyId}</p>
-                                    {tearsheetUrl && (
-                                      <a
-                                        href={tearsheetUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        onClick={(e) => e.stopPropagation()}
-                                        className="text-blue-400 hover:text-blue-300"
-                                        title="View Strategy Tearsheet"
-                                      >
-                                        <ExternalLink className="h-3 w-3" />
-                                      </a>
-                                    )}
-                                  </div>
-                                  <div className="mt-1 bg-gray-700 rounded-full h-2 overflow-hidden">
-                                    <div
-                                      className="bg-blue-500 h-full transition-all"
-                                      style={{ width: `${pct}%` }}
-                                    />
-                                  </div>
-                                </div>
-                                <span className="ml-4 text-white font-semibold w-20 text-right">
-                                  {(pct as number).toFixed(2)}%
-                                </span>
-                              </div>
-                            );
-                          })}
-                      </div>
+                  </th>
+                  <th
+                    className="text-right p-3 text-gray-400 font-medium text-sm cursor-pointer hover:text-white"
+                    onClick={() => handleSort('cagr')}
+                    title="Click to sort"
+                  >
+                    <div className="flex items-center justify-end gap-1">
+                      CAGR % {sortField === 'cagr' && (sortDirection === 'asc' ? '↑' : '↓')}
                     </div>
-
-                    {/* Simulation & Equity Curve */}
-                    <div className="border-t border-gray-700 pt-4">
-                      <div className="flex items-center justify-between mb-4">
-                        <h4 className="text-sm font-semibold text-white flex items-center gap-2">
-                          <BarChart className="h-4 w-4" />
-                          Portfolio Simulation
-                        </h4>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              simulationMutation.mutate(allocation.allocation_id);
-                            }}
-                            disabled={simulationMutation.isPending}
-                            className="btn-primary text-sm py-1 px-3 flex items-center gap-2"
-                          >
-                            <TrendingUp className="h-3 w-3" />
-                            {simulationMutation.isPending ? 'Running...' : 'Run Simulation'}
-                          </button>
-                          {/* Tearsheet Button - Auto-generated on expand */}
-                          {tearsheetMutation.isPending ? (
-                            <div className="btn-secondary text-sm py-1 px-3 flex items-center gap-2 opacity-70 cursor-wait">
-                              <FileText className="h-3 w-3 animate-pulse" />
-                              Generating Tearsheet...
-                            </div>
-                          ) : tearsheetResults[allocation.allocation_id] ? (
-                            <a
-                              href={`http://localhost:8002${tearsheetResults[allocation.allocation_id].tearsheet_url}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="btn-success text-sm py-1 px-3 flex items-center gap-2"
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                              Open Tearsheet
-                            </a>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      {simulationErrors[allocation.allocation_id] ? (
-                        <div className="bg-red-900/30 border border-red-500 rounded-lg p-4">
-                          <p className="text-red-400 text-sm font-semibold mb-2">Simulation Error:</p>
-                          <p className="text-red-300 text-sm">{simulationErrors[allocation.allocation_id]}</p>
-                          <p className="text-red-400/70 text-xs mt-3">
-                            This usually means strategy backtest data is missing the required fields (daily_returns and dates).
-                          </p>
-                        </div>
-                      ) : simulationResults[allocation.allocation_id] ? (
-                        <div className="space-y-4">
-                          {/* Validation Status Banner */}
-                          {simulationResults[allocation.allocation_id]?.validation_status && (
-                            <div className={`p-4 rounded-lg border-2 ${
-                              simulationResults[allocation.allocation_id].validation_status === 'PASS'
-                                ? 'bg-green-900/20 border-green-500'
-                                : simulationResults[allocation.allocation_id].validation_status === 'WARNING'
-                                ? 'bg-yellow-900/20 border-yellow-500'
-                                : 'bg-red-900/20 border-red-500'
-                            }`}>
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-3">
-                                  <span className={`text-2xl ${
-                                    simulationResults[allocation.allocation_id].validation_status === 'PASS'
-                                      ? 'text-green-400'
-                                      : simulationResults[allocation.allocation_id].validation_status === 'WARNING'
-                                      ? 'text-yellow-400'
-                                      : 'text-red-400'
-                                  }`}>
-                                    {simulationResults[allocation.allocation_id].validation_status === 'PASS' ? '✅' :
-                                     simulationResults[allocation.allocation_id].validation_status === 'WARNING' ? '⚠️' : '❌'}
-                                  </span>
-                                  <div>
-                                    <h4 className={`font-bold ${
-                                      simulationResults[allocation.allocation_id].validation_status === 'PASS'
-                                        ? 'text-green-400'
-                                        : simulationResults[allocation.allocation_id].validation_status === 'WARNING'
-                                        ? 'text-yellow-400'
-                                        : 'text-red-400'
-                                    }`}>
-                                      Validation: {simulationResults[allocation.allocation_id].validation_status}
-                                    </h4>
-                                    <p className="text-sm text-gray-300">
-                                      {simulationResults[allocation.allocation_id].validation_status === 'PASS'
-                                        ? 'Portfolio meets all risk thresholds'
-                                        : simulationResults[allocation.allocation_id].validation_status === 'WARNING'
-                                        ? 'Portfolio approaching risk limits - review recommended'
-                                        : 'Portfolio exceeds risk limits - requires adjustment'}
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="flex gap-4">
-                                  <div className="text-right">
-                                    <p className="text-xs text-gray-400">Max Margin</p>
-                                    <p className={`font-bold ${
-                                      (simulationResults[allocation.allocation_id].max_margin_utilization || 0) > 80
-                                        ? 'text-red-400'
-                                        : (simulationResults[allocation.allocation_id].max_margin_utilization || 0) > 70
-                                        ? 'text-yellow-400'
-                                        : 'text-green-400'
-                                    }`}>
-                                      {(simulationResults[allocation.allocation_id].max_margin_utilization || 0).toFixed(2)}%
-                                    </p>
-                                  </div>
-                                  <div className="text-right">
-                                    <p className="text-xs text-gray-400">Max Leverage</p>
-                                    <p className={`font-bold ${
-                                      (simulationResults[allocation.allocation_id].max_leverage || 0) > 2.0
-                                        ? 'text-red-400'
-                                        : (simulationResults[allocation.allocation_id].max_leverage || 0) > 1.5
-                                        ? 'text-yellow-400'
-                                        : 'text-green-400'
-                                    }`}>
-                                      {(simulationResults[allocation.allocation_id].max_leverage || 0).toFixed(2)}x
-                                    </p>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Simulated Metrics */}
-                          {simulationResults[allocation.allocation_id]?.metrics && (
-                            <div className="grid grid-cols-3 gap-4 p-4 bg-gray-700/50 rounded-lg">
-                              <div>
-                                <p className="text-xs text-gray-400">CAGR</p>
-                                <p className="text-white font-bold text-lg">{simulationResults[allocation.allocation_id].metrics.cagr || 'N/A'}%</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-400">Sharpe Ratio</p>
-                                <p className="text-white font-bold text-lg">{simulationResults[allocation.allocation_id].metrics.sharpe_ratio || 'N/A'}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-400">Max Drawdown</p>
-                                <p className="text-red-400 font-bold text-lg">{simulationResults[allocation.allocation_id].metrics.max_drawdown || 'N/A'}%</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-400">Volatility (Annual)</p>
-                                <p className="text-white font-semibold">{simulationResults[allocation.allocation_id].metrics.volatility_annual || 'N/A'}%</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-400">Period</p>
-                                <p className="text-white font-semibold">{simulationResults[allocation.allocation_id].metrics.total_days || 'N/A'} days</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-400">Date Range</p>
-                                <p className="text-white text-xs">{simulationResults[allocation.allocation_id].metrics.start_date || 'N/A'} to {simulationResults[allocation.allocation_id].metrics.end_date || 'N/A'}</p>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Equity Curve */}
-                          {simulationResults[allocation.allocation_id]?.equity_curve?.dates && simulationResults[allocation.allocation_id]?.equity_curve?.values && (
-                            <div className="bg-gray-900/50 rounded-lg p-4">
-                              <h5 className="text-sm font-semibold text-white mb-3">Equity Curve</h5>
-                              <ResponsiveContainer width="100%" height={300}>
-                                <LineChart
-                                  data={simulationResults[allocation.allocation_id].equity_curve.dates.map((date: string, idx: number) => ({
-                                    date,
-                                    value: simulationResults[allocation.allocation_id].equity_curve.values[idx]
-                                  }))}
-                                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                                >
-                                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                                <XAxis
-                                  dataKey="date"
-                                  stroke="#9CA3AF"
-                                  tick={{ fontSize: 10 }}
-                                  tickFormatter={(value) => {
-                                    const date = new Date(value);
-                                    return `${date.getMonth() + 1}/${date.getFullYear().toString().slice(2)}`;
-                                  }}
-                                  interval="preserveStartEnd"
-                                  minTickGap={50}
-                                />
-                                <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} />
-                                <Tooltip
-                                  contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '8px' }}
-                                  labelStyle={{ color: '#9CA3AF' }}
-                                  itemStyle={{ color: '#3B82F6' }}
-                                  formatter={(value: any) => [`$${value.toFixed(4)}`, 'Portfolio Value']}
-                                  labelFormatter={(label) => `Date: ${label}`}
-                                />
-                                <Legend wrapperStyle={{ color: '#9CA3AF' }} />
-                                <Line
-                                  type="monotone"
-                                  dataKey="value"
-                                  stroke="#3B82F6"
-                                  strokeWidth={2}
-                                  dot={false}
-                                  name="Portfolio Value"
-                                />
-                              </LineChart>
-                            </ResponsiveContainer>
-                          </div>
-                          )}
-
-                          {/* Margin Utilization Chart */}
-                          {simulationResults[allocation.allocation_id]?.margin_utilization?.dates && simulationResults[allocation.allocation_id]?.margin_utilization?.values && (
-                            <div className="bg-gray-900/50 rounded-lg p-4">
-                              <h5 className="text-sm font-semibold text-white mb-3">Margin Utilization (%)</h5>
-                              <ResponsiveContainer width="100%" height={250}>
-                                <LineChart
-                                  data={simulationResults[allocation.allocation_id].margin_utilization.dates.map((date: string, idx: number) => ({
-                                    date,
-                                    value: simulationResults[allocation.allocation_id].margin_utilization.values[idx]
-                                  }))}
-                                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                                >
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                                  <XAxis
-                                    dataKey="date"
-                                    stroke="#9CA3AF"
-                                    tick={{ fontSize: 10 }}
-                                    tickFormatter={(value) => {
-                                      const date = new Date(value);
-                                      return `${date.getMonth() + 1}/${date.getFullYear().toString().slice(2)}`;
-                                    }}
-                                    interval="preserveStartEnd"
-                                    minTickGap={50}
-                                  />
-                                  <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} />
-                                  <Tooltip
-                                    contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '8px' }}
-                                    labelStyle={{ color: '#9CA3AF' }}
-                                    itemStyle={{ color: '#F59E0B' }}
-                                    formatter={(value: any) => [`${value.toFixed(2)}%`, 'Margin Used']}
-                                    labelFormatter={(label) => `Date: ${label}`}
-                                  />
-                                  <Legend wrapperStyle={{ color: '#9CA3AF' }} />
-                                  <Line
-                                    type="monotone"
-                                    dataKey="value"
-                                    stroke="#F59E0B"
-                                    strokeWidth={2}
-                                    dot={false}
-                                    name="Margin Utilization"
-                                  />
-                                </LineChart>
-                              </ResponsiveContainer>
-                            </div>
-                          )}
-
-                          {/* Leverage History Chart */}
-                          {simulationResults[allocation.allocation_id]?.leverage_history?.dates && simulationResults[allocation.allocation_id]?.leverage_history?.values && (
-                            <div className="bg-gray-900/50 rounded-lg p-4">
-                              <h5 className="text-sm font-semibold text-white mb-3">Notional Leverage</h5>
-                              <ResponsiveContainer width="100%" height={250}>
-                                <LineChart
-                                  data={simulationResults[allocation.allocation_id].leverage_history.dates.map((date: string, idx: number) => ({
-                                    date,
-                                    value: simulationResults[allocation.allocation_id].leverage_history.values[idx]
-                                  }))}
-                                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                                >
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                                  <XAxis
-                                    dataKey="date"
-                                    stroke="#9CA3AF"
-                                    tick={{ fontSize: 10 }}
-                                    tickFormatter={(value) => {
-                                      const date = new Date(value);
-                                      return `${date.getMonth() + 1}/${date.getFullYear().toString().slice(2)}`;
-                                    }}
-                                    interval="preserveStartEnd"
-                                    minTickGap={50}
-                                  />
-                                  <YAxis stroke="#9CA3AF" tick={{ fontSize: 12 }} />
-                                  <Tooltip
-                                    contentStyle={{ backgroundColor: '#1F2937', border: '1px solid #374151', borderRadius: '8px' }}
-                                    labelStyle={{ color: '#9CA3AF' }}
-                                    itemStyle={{ color: '#10B981' }}
-                                    formatter={(value: any) => [`${value.toFixed(2)}x`, 'Leverage']}
-                                    labelFormatter={(label) => `Date: ${label}`}
-                                  />
-                                  <Legend wrapperStyle={{ color: '#9CA3AF' }} />
-                                  <Line
-                                    type="monotone"
-                                    dataKey="value"
-                                    stroke="#10B981"
-                                    strokeWidth={2}
-                                    dot={false}
-                                    name="Notional Leverage"
-                                  />
-                                </LineChart>
-                              </ResponsiveContainer>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <p className="text-gray-500 text-sm text-center py-4">
-                          Click "Run Simulation" to calculate historical performance and view equity curve
-                        </p>
-                      )}
-
-                      {/* Tearsheet Result */}
-                      {tearsheetResults[allocation.allocation_id] && (
-                        <div className="mt-4 p-4 bg-green-900/20 border border-green-500 rounded-lg">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <p className="text-green-400 font-semibold mb-1">✅ Tearsheet Generated Successfully</p>
-                              <p className="text-sm text-gray-300">
-                                Trading days: {tearsheetResults[allocation.allocation_id].trading_days} |
-                                Period: {tearsheetResults[allocation.allocation_id].date_range.start} to {tearsheetResults[allocation.allocation_id].date_range.end}
-                              </p>
-                            </div>
-                            <a
-                              href={`http://localhost:8002${tearsheetResults[allocation.allocation_id].tearsheet_url}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="btn-primary text-sm py-2 px-4 flex items-center gap-2"
-                            >
-                              <ExternalLink className="h-4 w-4" />
-                              View Tearsheet
-                            </a>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Tearsheet Error */}
-                      {tearsheetErrors[allocation.allocation_id] && (
-                        <div className="mt-4 p-4 bg-red-900/20 border border-red-500 rounded-lg">
-                          <p className="text-red-400 font-semibold mb-1">❌ Tearsheet Generation Failed</p>
-                          <p className="text-sm text-red-300">{tearsheetErrors[allocation.allocation_id]}</p>
-                        </div>
-                      )}
+                  </th>
+                  <th
+                    className="text-right p-3 text-gray-400 font-medium text-sm cursor-pointer hover:text-white"
+                    onClick={() => handleSort('sharpe')}
+                    title="Click to sort"
+                  >
+                    <div className="flex items-center justify-end gap-1">
+                      Sharpe {sortField === 'sharpe' && (sortDirection === 'asc' ? '↑' : '↓')}
                     </div>
-
-                    {/* Actions */}
-                    <div className="flex gap-3 pt-4 border-t border-gray-700">
-                      {isPending && (
-                        <>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleApproveClick(allocation);
-                            }}
-                            className="btn-success flex items-center gap-2"
-                          >
-                            <Check className="h-4 w-4" />
-                            Approve
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleEditClick(allocation);
-                            }}
-                            className="btn-secondary flex items-center gap-2"
-                          >
-                            <Edit className="h-4 w-4" />
-                            Edit & Approve
-                          </button>
-                          <button className="btn-danger flex items-center gap-2">
-                            <X className="h-4 w-4" />
-                            Reject
-                          </button>
-                        </>
-                      )}
-                      {!isPending && (
+                  </th>
+                  <th
+                    className="text-right p-3 text-gray-400 font-medium text-sm cursor-pointer hover:text-white"
+                    onClick={() => handleSort('max_drawdown')}
+                    title="Click to sort"
+                  >
+                    <div className="flex items-center justify-end gap-1">
+                      Max DD % {sortField === 'max_drawdown' && (sortDirection === 'asc' ? '↑' : '↓')}
+                    </div>
+                  </th>
+                  <th
+                    className="text-right p-3 text-gray-400 font-medium text-sm cursor-pointer hover:text-white"
+                    onClick={() => handleSort('volatility')}
+                    title="Click to sort"
+                  >
+                    <div className="flex items-center justify-end gap-1">
+                      Vol % {sortField === 'volatility' && (sortDirection === 'asc' ? '↑' : '↓')}
+                    </div>
+                  </th>
+                  <th
+                    className="text-left p-3 text-gray-400 font-medium text-sm cursor-pointer hover:text-white"
+                    onClick={() => handleSort('created_at')}
+                    title="Click to sort"
+                  >
+                    <div className="flex items-center gap-1">
+                      Created {sortField === 'created_at' && (sortDirection === 'asc' ? '↑' : '↓')}
+                    </div>
+                  </th>
+                  <th className="text-center p-3 text-gray-400 font-medium text-sm">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedTests.map((test: any) => (
+                  <tr
+                    key={test.test_id}
+                    className={`border-b border-gray-700/50 cursor-pointer transition-colors ${
+                      selectedTestId === test.test_id
+                        ? 'bg-blue-900/20'
+                        : 'hover:bg-gray-700/30'
+                    }`}
+                    onClick={() => handleLoadTest(test)}
+                  >
+                    <td className="p-3 text-white font-mono text-sm">{test.test_id}</td>
+                    <td className="p-3 text-white">{test.constructor}</td>
+                    <td className="p-3 text-white" title={test.strategies?.join(', ')}>
+                      <span className="cursor-help">{test.strategies?.length || 0}</span>
+                    </td>
+                    <td className={`p-3 text-right font-semibold ${
+                      (test.performance?.cagr || 0) > 50 ? 'text-green-400' :
+                      (test.performance?.cagr || 0) > 20 ? 'text-blue-400' :
+                      'text-white'
+                    }`}>
+                      {test.performance?.cagr ? test.performance.cagr.toFixed(1) : '-'}
+                    </td>
+                    <td className={`p-3 text-right font-semibold ${
+                      (test.performance?.sharpe || 0) > 2 ? 'text-green-400' :
+                      (test.performance?.sharpe || 0) > 1 ? 'text-blue-400' :
+                      'text-white'
+                    }`}>
+                      {test.performance?.sharpe ? test.performance.sharpe.toFixed(2) : '-'}
+                    </td>
+                    <td className="p-3 text-right text-red-400">
+                      {test.performance?.max_drawdown ? test.performance.max_drawdown.toFixed(1) : '-'}
+                    </td>
+                    <td className="p-3 text-right text-white">
+                      {test.performance?.volatility ? test.performance.volatility.toFixed(1) : '-'}
+                    </td>
+                    <td className="p-3 text-white text-sm">
+                      {new Date(test.created_at).toLocaleString()}
+                    </td>
+                    <td className="p-3">
+                      <div className="flex items-center justify-center gap-2">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleEditClick(allocation);
+                            window.open(`http://localhost:8001/api/v1/portfolio-tests/${test.test_id}/tearsheet`, '_blank');
                           }}
-                          className="btn-secondary flex items-center gap-2"
+                          className="text-blue-400 hover:text-blue-300 transition-colors"
+                          title="View Tearsheet"
                         >
-                          <Edit className="h-4 w-4" />
-                          Duplicate & Edit
+                          <FileText className="h-4 w-4" />
                         </button>
-                      )}
-                    </div>
-                  </div>
-                )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteTest(test.test_id);
+                          }}
+                          disabled={deleteTestMutation.isPending}
+                          className="text-red-400 hover:text-red-300 transition-colors"
+                          title="Delete test"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-center py-12">
+            <p className="text-gray-400 mb-2">No portfolio tests found</p>
+            <p className="text-sm text-gray-500">Run a test in Research Lab below to get started</p>
+          </div>
+        )}
+      </div>
+
+      {/* ====================================================================== */}
+      {/* PART 4: RESEARCH LAB                                                  */}
+      {/* ====================================================================== */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+              <TrendingUp className="h-6 w-6 text-blue-500" />
+              Part 4: Research Lab
+            </h3>
+            <p className="text-sm text-gray-400 mt-1">Select strategies and run portfolio optimization tests</p>
+          </div>
+          <button
+            onClick={handleRunTest}
+            disabled={runTestMutation.isPending || selectedStrategies.length === 0}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-semibold transition-all ${
+              runTestMutation.isPending
+                ? 'bg-yellow-600 text-white cursor-wait'
+                : selectedStrategies.length === 0
+                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                : 'bg-blue-600 hover:bg-blue-500 text-white'
+            }`}
+          >
+            <Play className={`h-4 w-4 ${runTestMutation.isPending ? 'animate-spin' : ''}`} />
+            {runTestMutation.isPending ? 'Running Test...' : 'Run Test'}
+          </button>
+        </div>
+
+        {/* Loading/Success Banner */}
+        {runTestMutation.isPending && (
+          <div className="mb-4 p-4 bg-yellow-900/30 border border-yellow-500 rounded-lg">
+            <div className="flex items-center gap-3">
+              <div className="animate-spin h-5 w-5 border-2 border-yellow-500 border-t-transparent rounded-full"></div>
+              <div>
+                <p className="text-yellow-400 font-semibold">Test is running...</p>
+                <p className="text-sm text-yellow-300">
+                  Optimizing portfolio with {selectedStrategies.length} strategies using {selectedConstructor}
+                </p>
               </div>
-            );
-          })}
+            </div>
+          </div>
+        )}
+
+        {runTestMutation.isSuccess && !runTestMutation.isPending && (
+          <div className="mb-4 p-4 bg-green-900/30 border border-green-500 rounded-lg">
+            <p className="text-green-400 font-semibold">✅ Test completed successfully!</p>
+            <p className="text-sm text-green-300 mt-1">Results added to Portfolio Tests List above</p>
+          </div>
+        )}
+
+        {runTestMutation.isError && (
+          <div className="mb-4 p-4 bg-red-900/30 border border-red-500 rounded-lg">
+            <p className="text-red-400 font-semibold">❌ Test Failed</p>
+            <p className="text-sm text-red-300 mt-1">
+              {(runTestMutation.error as any)?.message || 'Unknown error occurred'}
+            </p>
+          </div>
+        )}
+
+        {/* Constructor Selection */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-300 mb-2">
+            Portfolio Constructor
+          </label>
+          <select
+            value={selectedConstructor}
+            onChange={(e) => setSelectedConstructor(e.target.value)}
+            className="input w-full max-w-xs"
+          >
+            <option value="max_hybrid">MaxHybrid - Balanced Sharpe + CAGR</option>
+            <option value="max_sharpe">MaxSharpe - Risk-Adjusted Returns</option>
+            <option value="max_cagr">MaxCAGR - Maximum Growth</option>
+            <option value="max_cagr_v2">MaxCAGR v2 - Growth Optimized</option>
+            <option value="max_cagr_sharpe">MaxCAGR+Sharpe - Hybrid Growth</option>
+          </select>
+        </div>
+
+        {/* Strategy Selection */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-3">
+            Selected Strategies ({selectedStrategies.length})
+          </label>
+          <div className="space-y-3">
+            {selectedStrategies.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {selectedStrategies.map((strategyId) => (
+                  <div
+                    key={strategyId}
+                    className="px-3 py-2 bg-blue-900/30 border border-blue-500 rounded-lg flex items-center gap-2"
+                  >
+                    <span className="text-blue-400 font-medium">{strategyId}</span>
+                    <button
+                      onClick={() => toggleStrategy(strategyId)}
+                      className="text-blue-400 hover:text-blue-300"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-500 text-sm">No strategies selected</p>
+            )}
+            <button
+              onClick={() => setIsStrategyModalOpen(true)}
+              className="btn-secondary"
+            >
+              Select Strategies
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Approve Modal */}
-      {showApproveModal && selectedAllocationForApproval && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-xl font-bold text-white mb-4">Approve Allocation</h3>
-            <p className="text-gray-400 mb-2">
-              Are you sure you want to approve allocation:
-            </p>
-            <p className="font-mono text-sm text-white mb-1">{selectedAllocationForApproval.allocation_id}</p>
-            <p className="text-sm text-gray-400 mb-4">
-              Mode: {selectedAllocationForApproval.optimization_label || selectedAllocationForApproval.optimization_mode || 'N/A'}
-            </p>
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Your Name
-              </label>
-              <input
-                type="text"
-                value={approverName}
-                onChange={(e) => setApproverName(e.target.value)}
-                className="input"
-                placeholder="Enter your name"
-                autoFocus
-              />
-            </div>
-            <div className="flex gap-3">
+      {/* ====================================================================== */}
+      {/* STRATEGY SELECTION MODAL                                              */}
+      {/* ====================================================================== */}
+      {isStrategyModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg shadow-xl max-w-3xl w-full max-h-[80vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-700">
+              <h3 className="text-xl font-bold text-white">Select Strategies</h3>
               <button
-                onClick={handleApprove}
-                disabled={!approverName.trim() || approveMutation.isPending}
-                className="btn-success flex-1"
+                onClick={() => setIsStrategyModalOpen(false)}
+                className="text-gray-400 hover:text-white"
               >
-                {approveMutation.isPending ? 'Approving...' : 'Confirm'}
-              </button>
-              <button
-                onClick={() => {
-                  setShowApproveModal(false);
-                  setSelectedAllocationForApproval(null);
-                }}
-                disabled={approveMutation.isPending}
-                className="btn-secondary"
-              >
-                Cancel
+                <X className="h-6 w-6" />
               </button>
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* Edit Modal */}
-      {showEditModal && selectedAllocationForApproval && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-2xl w-full mx-4 my-8">
-            <h3 className="text-xl font-bold text-white mb-4">Edit Allocation</h3>
-            <p className="text-gray-400 mb-4">
-              Adjust allocation percentages for: <span className="font-mono text-sm text-white">{selectedAllocationForApproval.allocation_id}</span>
-            </p>
-
-            {/* Allocation Name */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Allocation Name / Label
-              </label>
-              <input
-                type="text"
-                value={allocationName}
-                onChange={(e) => setAllocationName(e.target.value)}
-                className="input"
-                placeholder="e.g., Q4 2025 Conservative Mix"
-              />
-              <p className="text-xs text-gray-400 mt-1">
-                Give this allocation a descriptive name (optional - will auto-generate if empty)
-              </p>
-            </div>
-
-            {/* Total Allocation Display */}
-            <div className={`mb-4 p-4 rounded-lg ${
-              getTotalAllocation() > 200 ? 'bg-red-900/30 border border-red-500' :
-              getTotalAllocation() > 100 ? 'bg-yellow-900/30 border border-yellow-500' :
-              'bg-green-900/30 border border-green-500'
-            }`}>
-              <div className="flex justify-between items-center">
-                <span className="text-white font-semibold">Total Allocation:</span>
-                <span className={`text-2xl font-bold ${
-                  getTotalAllocation() > 200 ? 'text-red-400' :
-                  getTotalAllocation() > 100 ? 'text-yellow-400' :
-                  'text-green-400'
-                }`}>
-                  {getTotalAllocation().toFixed(2)}%
-                </span>
-              </div>
-              {getTotalAllocation() > 200 && (
-                <p className="text-red-400 text-sm mt-2">⚠️ Total exceeds maximum leverage (200%)</p>
-              )}
-            </div>
-
-            {/* Strategy Allocations (Editable) */}
-            <div className="space-y-3 max-h-96 overflow-y-auto mb-4">
-              {Object.entries(editedAllocations)
-                .sort(([, a], [, b]) => b - a)
-                .map(([strategyId, allocation]) => (
-                  <div key={strategyId} className="flex items-center gap-4 p-3 bg-gray-700/50 rounded-lg">
-                    <div className="flex-1">
-                      <label className="text-white font-medium text-sm">{strategyId}</label>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        value={allocation}
-                        onChange={(e) => handleAllocationChange(strategyId, e.target.value)}
-                        step="0.1"
-                        min="0"
-                        max="50"
-                        className="input w-24 text-right"
-                      />
-                      <span className="text-gray-400">%</span>
+            {/* Modal Body - Scrollable */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {strategies.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-gray-400">No strategies available</p>
+                  <p className="text-sm text-gray-500 mt-2">
+                    Add strategies in the Strategies tab first
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {strategies.map((strategy: any) => (
+                  <div
+                    key={strategy.strategy_id}
+                    onClick={() => toggleStrategy(strategy.strategy_id)}
+                    className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                      selectedStrategies.includes(strategy.strategy_id)
+                        ? 'border-blue-500 bg-blue-900/20'
+                        : 'border-gray-700 hover:border-gray-600 hover:bg-gray-700/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${
+                        selectedStrategies.includes(strategy.strategy_id)
+                          ? 'border-blue-500 bg-blue-500'
+                          : 'border-gray-600'
+                      }`}>
+                        {selectedStrategies.includes(strategy.strategy_id) && (
+                          <Check className="h-3 w-3 text-white" />
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-white font-medium">{strategy.strategy_id}</p>
+                        <div className="flex items-center gap-3 mt-1">
+                          <p className="text-xs text-gray-400">{strategy.asset_class || 'Unknown'}</p>
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            strategy.status === 'ACTIVE'
+                              ? 'bg-green-900/30 text-green-400'
+                              : 'bg-gray-700 text-gray-400'
+                          }`}>
+                            {strategy.status}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                ))}
-            </div>
-
-            {/* Creator Name */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Your Name (Creator) <span className="text-red-400">*</span>
-              </label>
-              <input
-                type="text"
-                value={approverName}
-                onChange={(e) => setApproverName(e.target.value)}
-                className="input"
-                placeholder="Enter your name"
-              />
-              {!approverName.trim() && (
-                <p className="text-xs text-red-400 mt-1">⚠️ Required field</p>
+                  ))}
+                </div>
               )}
             </div>
 
-            {/* Actions */}
-            <div className="flex gap-3">
+            {/* Modal Footer */}
+            <div className="p-6 border-t border-gray-700 flex justify-between items-center">
+              <p className="text-gray-400 text-sm">
+                {selectedStrategies.length} strateg{selectedStrategies.length === 1 ? 'y' : 'ies'} selected
+              </p>
               <button
-                onClick={() => {
-                  console.log('🔵 Button clicked!');
-                  console.log('  - approverName filled?', !!approverName.trim());
-                  console.log('  - total allocation:', getTotalAllocation());
-                  console.log('  - is pending?', createCustomAllocationMutation.isPending);
-                  handleSaveCustomAllocation();
-                }}
-                disabled={!approverName.trim() || getTotalAllocation() > 200 || createCustomAllocationMutation.isPending}
-                className="btn-primary flex-1"
-                title={
-                  !approverName.trim() ? 'Please enter your name' :
-                  getTotalAllocation() > 200 ? 'Total allocation exceeds 200%' :
-                  createCustomAllocationMutation.isPending ? 'Creating...' :
-                  'Create this allocation'
-                }
+                onClick={() => setIsStrategyModalOpen(false)}
+                className="btn-primary"
               >
-                {createCustomAllocationMutation.isPending ? 'Creating...' : 'Create Allocation'}
-              </button>
-              <button
-                onClick={() => {
-                  setShowEditModal(false);
-                  setSelectedAllocationForApproval(null);
-                  setEditedAllocations({});
-                  setAllocationName('');
-                }}
-                disabled={createCustomAllocationMutation.isPending}
-                className="btn-secondary"
-              >
-                Cancel
+                Done
               </button>
             </div>
-
-            <p className="text-xs text-gray-400 mt-4">
-              ✅ Your edited allocations will be saved as a new CUSTOM allocation (PENDING_APPROVAL). You can review the simulation and approve it later.
-            </p>
           </div>
         </div>
       )}

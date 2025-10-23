@@ -2,17 +2,10 @@
 """
 Load Strategy Backtest Data from CSV Folder
 Usage: python load_strategies_from_folder.py <path_to_csv_folder>
-
-Synthetic Data Generation Logic (Excel-based):
-- Date: From CSV (required)
-- Daily_Return_Pct: From CSV (required)
-- Account_Equity: Row 1 = starting_capital, Row N = previous_equity * (1 + previous_return/100)
-- Daily_PnL: Row 1 = 0, Row N = current_equity - previous_equity
-- Max_Margin_Used: ABS(return) / MAX(all_returns) * equity * 0.8
-- Max_Notional_Value: margin * 3
 """
 import os
 import sys
+import random
 import pandas as pd
 from datetime import datetime
 from pymongo import MongoClient
@@ -30,8 +23,8 @@ db = client['mathematricks_trading']
 def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
     """
     Load all CSV files in folder as strategy backtest data.
-    Generates synthetic data for missing columns using Excel formula logic.
-
+    Generates synthetic data for missing columns using intelligent defaults.
+    
     Args:
         folder_path: Path to folder containing CSV files
         starting_capital: Starting capital for equity curve calculation (default: $1M)
@@ -54,6 +47,26 @@ def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
     print(f"Found {len(csv_files)} CSV files\n")
 
     loaded_count = 0
+
+    # Default parameters for synthetic data generation
+    DEFAULT_PARAMS = {
+        'base_notional': 1_000_000,
+        'base_margin': 100_000,
+        'typical_contracts': 10
+    }
+
+    # Strategy-specific parameters (can be customized)
+    STRATEGY_PARAMS = {
+        'SPY': {'base_notional': 500_000, 'base_margin': 250_000, 'typical_contracts': 5},
+        'TLT': {'base_notional': 300_000, 'base_margin': 150_000, 'typical_contracts': 3},
+        'SPX_0DTE_Opt': {'base_notional': 5_000_000, 'base_margin': 50_000, 'typical_contracts': 10},
+        'SPX_1-D_Opt': {'base_notional': 4_000_000, 'base_margin': 40_000, 'typical_contracts': 10},
+        'Forex': {'base_notional': 200_000, 'base_margin': 20_000, 'typical_contracts': 10},
+        'Com1-Met': {'base_notional': 800_000, 'base_margin': 80_000, 'typical_contracts': 10},
+        'Com2-Ag': {'base_notional': 600_000, 'base_margin': 60_000, 'typical_contracts': 10},
+        'Com3-Mkt': {'base_notional': 900_000, 'base_margin': 90_000, 'typical_contracts': 10},
+        'Com4-Misc': {'base_notional': 400_000, 'base_margin': 40_000, 'typical_contracts': 5}
+    }
 
     for csv_file in sorted(csv_files):
         strategy_id = csv_file.replace('.csv', '')
@@ -97,7 +110,7 @@ def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
             if df[returns_col].dtype == 'object':
                 df[returns_col] = df[returns_col].astype(str).str.rstrip('%,').str.strip()
             df[returns_col] = pd.to_numeric(df[returns_col], errors='coerce')
-
+            
             # Check if returns are in percentage format (like 0.5 meaning 0.5%)
             if df[returns_col].abs().max() > 1:
                 df[returns_col] = df[returns_col] / 100
@@ -109,18 +122,17 @@ def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
                 print(f"⚠️  Skipping - no valid data after cleaning")
                 continue
 
+            # Get strategy parameters for synthetic data generation
+            params = STRATEGY_PARAMS.get(strategy_id, DEFAULT_PARAMS)
+            notional_per_contract = params['base_notional'] / params['typical_contracts']
+            margin_per_contract = params['base_margin'] / params['typical_contracts']
+            
             # Check which columns exist vs need to be synthesized
             has_pnl = any('p&l' in col.lower() or 'pnl' in col.lower() for col in df.columns)
             has_notional = any('notional' in col.lower() for col in df.columns)
             has_margin = any('margin' in col.lower() for col in df.columns)
             has_account_equity = any('account' in col.lower() and 'equity' in col.lower() for col in df.columns)
-
-            # Extract existing columns if they exist
-            pnl_col = [col for col in df.columns if 'p&l' in col.lower() or 'pnl' in col.lower()][0] if has_pnl else None
-            notional_col = [col for col in df.columns if 'notional' in col.lower()][0] if has_notional else None
-            margin_col = [col for col in df.columns if 'margin' in col.lower()][0] if has_margin else None
-            equity_col = [col for col in df.columns if 'account' in col.lower() and 'equity' in col.lower()][0] if has_account_equity else None
-
+            
             synthetic_columns = []
             if not has_pnl:
                 synthetic_columns.append('pnl')
@@ -130,79 +142,62 @@ def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
                 synthetic_columns.append('margin_used')
             if not has_account_equity:
                 synthetic_columns.append('account_equity')
-
+            
             if synthetic_columns:
                 print(f"   🔧 Generating synthetic data for: {', '.join(synthetic_columns)}")
-            else:
-                print(f"   ✓ All columns provided by strategy developer")
 
-            # =====================================================================
-            # EXCEL-BASED SYNTHETIC DATA GENERATION
-            # =====================================================================
-
-            # Step 1: Get all returns for MAX calculation (needed for margin formula)
-            returns_array = df[returns_col].values
-            max_return = abs(returns_array).max() if len(returns_array) > 0 else 1.0
-
-            # Avoid division by zero
-            if max_return < 0.0001:
-                max_return = 1.0
-
-            # Step 2: Build the full data with Excel formulas
+            # Build raw_data_backtest_full with all required fields
             raw_data_backtest_full = []
-            equity = starting_capital  # Initial equity (Row 1: C2 = 1000000)
-
+            equity_curve = starting_capital
+            
             for idx, row in df.iterrows():
-                daily_return_pct = float(row[returns_col]) * 100  # Convert to percentage (e.g., 0.01 → 1%)
-
-                # --- Account_Equity (C column) ---
-                # Row 1: starting_capital
-                # Row N: previous_equity * (1 + previous_return/100)
-                if not has_account_equity:
-                    if idx == df.index[0]:  # First row
-                        account_equity = starting_capital
-                    else:
-                        # Already updated from previous iteration
-                        account_equity = equity
-                else:
-                    account_equity = float(str(row[equity_col]).replace('$', '').replace(',', '').strip())
-                    equity = account_equity  # Track for next iteration
-
-                # --- Daily_PnL (D column) ---
-                # Row 1: 0
-                # Row N: current_equity - previous_equity
-                if not has_pnl:
-                    if idx == df.index[0]:  # First row
-                        daily_pnl = 0.0
-                    else:
-                        daily_pnl = account_equity - equity_before_pnl
-                else:
+                daily_return = float(row[returns_col])
+                
+                # Calculate or extract Daily P&L
+                if has_pnl:
+                    pnl_col = [col for col in df.columns if 'p&l' in col.lower() or 'pnl' in col.lower()][0]
                     daily_pnl = float(str(row[pnl_col]).replace('$', '').replace(',', '').strip())
-
-                # Store equity before P&L for next iteration's calculation
-                equity_before_pnl = equity
-
-                # Update equity for next iteration (C3 = C2 * (1 + B2/100))
-                if not has_account_equity:
-                    equity = account_equity * (1 + daily_return_pct / 100)
-
-                # --- Max_Margin_Used (E column) ---
-                # Formula: ABS(return) / MAX(returns) * equity * 0.8
-                if not has_margin:
-                    margin_used = (abs(daily_return_pct / 100) / max_return) * account_equity * 0.8
                 else:
-                    margin_used = float(str(row[margin_col]).replace('$', '').replace(',', '').strip())
-
-                # --- Max_Notional_Value (F column) ---
-                # Formula: margin * 3
-                if not has_notional:
-                    notional_value = margin_used * 3
-                else:
+                    # Synthetic: calculate from returns and equity
+                    daily_pnl = equity_curve * daily_return
+                
+                # Update equity curve
+                equity_curve += daily_pnl
+                
+                # Calculate or extract Notional Value
+                if has_notional:
+                    notional_col = [col for col in df.columns if 'notional' in col.lower()][0]
                     notional_value = float(str(row[notional_col]).replace('$', '').replace(',', '').strip())
-
+                else:
+                    # Synthetic: only generate notional when strategy is trading (non-zero returns)
+                    if abs(daily_return) < 0.0001:  # No position
+                        notional_value = 0.0
+                    else:
+                        notional_value = params['typical_contracts'] * notional_per_contract
+                
+                # Calculate or extract Margin Used
+                if has_margin:
+                    margin_col = [col for col in df.columns if 'margin' in col.lower()][0]
+                    margin_used = float(str(row[margin_col]).replace('$', '').replace(',', '').strip())
+                else:
+                    # Synthetic: only generate margin when strategy is trading (non-zero returns)
+                    if abs(daily_return) < 0.0001:  # No position
+                        margin_used = 0.0
+                    else:
+                        # Use typical contracts * margin per contract (fixed position size)
+                        margin_used = params['typical_contracts'] * margin_per_contract
+                
+                # Calculate or extract Account Equity
+                if has_account_equity:
+                    equity_col = [col for col in df.columns if 'account' in col.lower() and 'equity' in col.lower()][0]
+                    account_equity = float(str(row[equity_col]).replace('$', '').replace(',', '').strip())
+                else:
+                    # Synthetic: use current equity curve value
+                    account_equity = equity_curve
+                
                 raw_data_backtest_full.append({
                     'date': row[date_col].strftime('%Y-%m-%d'),
-                    'return': float(row[returns_col]),  # Store as decimal (0.01 = 1%)
+                    'return': daily_return,
                     'pnl': daily_pnl,
                     'notional_value': notional_value,
                     'margin_used': margin_used,
@@ -234,22 +229,16 @@ def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
             print(f"   Volatility: {volatility_daily*100:.4f}% daily")
             print(f"   Sharpe (annual): {sharpe_ratio:.2f}")
             print(f"   Max Drawdown: {max_drawdown*100:.2f}%")
-            print(f"   Final Equity: ${equity:,.0f} (from ${starting_capital:,.0f})")
-
-            # Show margin statistics
-            margin_pcts = [(d['margin_used'] / d['account_equity'] * 100) for d in raw_data_backtest_full if d['account_equity'] > 0]
-            if margin_pcts:
-                print(f"   Margin Used: min={min(margin_pcts):.1f}%, max={max(margin_pcts):.1f}%, avg={sum(margin_pcts)/len(margin_pcts):.1f}%")
-
+            print(f"   Final Equity: ${equity_curve:,.0f} (from ${starting_capital:,.0f})")
             if synthetic_columns:
-                print(f"   📝 Synthetic columns: {', '.join(synthetic_columns)}")
+                print(f"   📝 Synthetic columns marked in metadata")
 
             # Create unified strategy document
             strategy_doc = {
                 # Core identification
                 "strategy_id": strategy_id,
                 "strategy_name": strategy_id.replace('_', ' ').replace('-', ' - '),
-
+                
                 # Configuration
                 "asset_class": "unknown",  # Can be updated via frontend
                 "instruments": [],  # Can be updated via frontend
@@ -257,12 +246,12 @@ def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
                 "trading_mode": "PAPER",
                 "account": "IBKR_Main",
                 "include_in_optimization": True,
-
+                
                 # Backtest data
                 "raw_data_backtest_full": raw_data_backtest_full,
                 "raw_data_developer_live": [],  # Empty initially
                 "raw_data_mathematricks_live": [],  # Empty initially
-
+                
                 # Metrics
                 "metrics": {
                     "mean_return_daily": float(mean_return_daily),
@@ -273,16 +262,14 @@ def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
                     "end_date": end_date,
                     "total_days": len(raw_data_backtest_full)
                 },
-
+                
                 # Metadata
                 "synthetic_data": {
                     "columns_generated": synthetic_columns,
                     "starting_capital": starting_capital,
-                    "max_return_used": float(max_return),
-                    "margin_formula": "ABS(return) / MAX(returns) * equity * 0.8",
-                    "notional_formula": "margin * 3"
+                    "params_used": params
                 },
-
+                
                 # Timestamps
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow()
