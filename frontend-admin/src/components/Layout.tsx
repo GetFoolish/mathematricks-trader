@@ -16,8 +16,8 @@ export const Layout: React.FC = () => {
 
   const navigation = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-    { name: 'Allocations', href: '/allocations', icon: PieChart },
     { name: 'Activity', href: '/activity', icon: Activity },
+    { name: 'Allocations', href: '/allocations', icon: PieChart },
     { name: 'Strategies', href: '/strategies', icon: Settings },
   ];
 

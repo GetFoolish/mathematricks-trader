@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import requests
 import threading
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import pandas as pd
 
@@ -30,6 +31,15 @@ load_dotenv('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/Math
 
 # Initialize FastAPI
 app = FastAPI(title="Cerebro Service", version="1.0.0-MVP")
+
+# Add CORS middleware to allow frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Configure logging
 logging.basicConfig(
@@ -834,6 +844,228 @@ def start_signal_subscriber():
         logger.error(f"Subscriber error: {str(e)}")
         streaming_pull_future.cancel()
 
+
+# ============================================================================
+# STRATEGY MANAGEMENT APIs
+# ============================================================================
+
+@app.get("/api/v1/strategies")
+async def get_all_strategies():
+    """
+    Get all strategy configurations from unified strategies collection
+    Returns list of all strategies with metadata and backtest data
+    """
+    try:
+        strategies = list(strategies_collection.find({}))
+
+        # Remove MongoDB _id
+        for strategy in strategies:
+            strategy.pop('_id', None)
+
+        return {
+            "status": "success",
+            "count": len(strategies),
+            "strategies": strategies
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching strategies: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/strategies/{strategy_id}")
+async def get_strategy(strategy_id: str):
+    """
+    Get single strategy configuration
+    Includes backtest data (stored in same document in unified collection)
+    """
+    try:
+        strategy = strategies_collection.find_one({"strategy_id": strategy_id})
+
+        if not strategy:
+            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+
+        # Remove MongoDB _id
+        strategy.pop('_id', None)
+
+        return {
+            "status": "success",
+            "strategy": strategy
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching strategy {strategy_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/strategies")
+async def create_strategy(strategy_data: Dict[str, Any]):
+    """
+    Create new strategy configuration in unified strategies collection
+    Validates required fields and saves to MongoDB
+    """
+    try:
+        # Validate required fields
+        required_fields = ['strategy_id', 'name', 'asset_class', 'instruments']
+        for field in required_fields:
+            if field not in strategy_data:
+                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+
+        strategy_id = strategy_data['strategy_id']
+
+        # Check if strategy already exists
+        existing = strategies_collection.find_one({"strategy_id": strategy_id})
+        if existing:
+            raise HTTPException(status_code=409, detail=f"Strategy {strategy_id} already exists")
+
+        # Add timestamps
+        strategy_data['created_at'] = datetime.utcnow()
+        strategy_data['updated_at'] = datetime.utcnow()
+        strategy_data['status'] = strategy_data.get('status', 'ACTIVE')
+
+        # Insert into MongoDB
+        strategies_collection.insert_one(strategy_data)
+
+        logger.info(f"✅ Created strategy: {strategy_id}")
+
+        return {
+            "status": "success",
+            "message": f"Strategy {strategy_id} created",
+            "strategy_id": strategy_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating strategy: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/v1/strategies/{strategy_id}")
+async def update_strategy(strategy_id: str, updates: Dict[str, Any]):
+    """
+    Update strategy configuration in unified strategies collection
+    Allows partial updates of strategy fields
+    """
+    try:
+        # Check if strategy exists
+        existing = strategies_collection.find_one({"strategy_id": strategy_id})
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+
+        # Add updated timestamp
+        updates['updated_at'] = datetime.utcnow()
+
+        # Update in MongoDB
+        result = strategies_collection.update_one(
+            {"strategy_id": strategy_id},
+            {"$set": updates}
+        )
+
+        if result.modified_count == 0:
+            logger.warning(f"No changes made to strategy {strategy_id}")
+
+        logger.info(f"✅ Updated strategy: {strategy_id}")
+
+        return {
+            "status": "success",
+            "message": f"Strategy {strategy_id} updated",
+            "strategy_id": strategy_id,
+            "modified_count": result.modified_count
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating strategy {strategy_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/v1/strategies/{strategy_id}")
+async def delete_strategy(strategy_id: str):
+    """
+    Delete strategy configuration (soft delete)
+    Marks as INACTIVE instead of hard delete
+    """
+    try:
+        # Check if strategy exists
+        existing = strategies_collection.find_one({"strategy_id": strategy_id})
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+
+        # Soft delete - mark as INACTIVE
+        result = strategies_collection.update_one(
+            {"strategy_id": strategy_id},
+            {
+                "$set": {
+                    "status": "INACTIVE",
+                    "deleted_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+
+        logger.info(f"✅ Deleted (soft) strategy: {strategy_id}")
+
+        return {
+            "status": "success",
+            "message": f"Strategy {strategy_id} deleted (marked INACTIVE)",
+            "strategy_id": strategy_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting strategy {strategy_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/strategies/{strategy_id}/sync-backtest")
+async def sync_strategy_backtest(strategy_id: str, backtest_data: Dict[str, Any]):
+    """
+    Sync/update strategy backtest data in unified strategies collection
+    Updates the backtest_data field within the same document
+    """
+    try:
+        # Check if strategy exists
+        strategy = strategies_collection.find_one({"strategy_id": strategy_id})
+        if not strategy:
+            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+
+        # Add updated timestamp to backtest data
+        backtest_data['last_updated'] = datetime.utcnow()
+
+        # Update backtest_data field in the unified document
+        result = strategies_collection.update_one(
+            {"strategy_id": strategy_id},
+            {
+                "$set": {
+                    "backtest_data": backtest_data,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+
+        logger.info(f"✅ Synced backtest data for strategy: {strategy_id}")
+
+        return {
+            "status": "success",
+            "message": f"Backtest data synced for strategy {strategy_id}",
+            "strategy_id": strategy_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error syncing backtest for {strategy_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# STARTUP
+# ============================================================================
 
 @app.on_event("startup")
 async def startup_event():

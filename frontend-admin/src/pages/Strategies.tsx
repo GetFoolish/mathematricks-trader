@@ -113,7 +113,6 @@ export const Strategies: React.FC = () => {
             <thead>
               <tr>
                 <th className="table-header">Strategy ID</th>
-                <th className="table-header">Name</th>
                 <th className="table-header">Asset Class</th>
                 <th className="table-header">Status</th>
                 <th className="table-header">Trading Mode</th>
@@ -126,7 +125,6 @@ export const Strategies: React.FC = () => {
               {filteredStrategies?.map((strategy) => (
                 <tr key={strategy.strategy_id} className="hover:bg-gray-700/50">
                   <td className="table-cell font-mono text-xs">{strategy.strategy_id}</td>
-                  <td className="table-cell font-medium">{strategy.name}</td>
                   <td className="table-cell">{strategy.asset_class}</td>
                   <td className="table-cell">
                     <button
