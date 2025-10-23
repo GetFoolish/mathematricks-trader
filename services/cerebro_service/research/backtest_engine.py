@@ -201,20 +201,127 @@ class WalkForwardBacktest:
             
             # Get allocations from constructor
             allocations = self.constructor.allocate_portfolio(train_context)
-            
+
+            print(f"    📊 ALLOCATION DECISION TRACKING:")
+            print(f"       [STEP 1] Optimizer output:")
+            original_allocations = allocations.copy()
+            original_total = sum(allocations.values())
+            print(f"         Total allocation from optimizer: {original_total:.2f}%")
+            print(f"         Strategies allocated: {len(allocations)}")
+            for sid, pct in sorted(allocations.items(), key=lambda x: x[1], reverse=True):
+                print(f"           - {sid}: {pct:.2f}%")
+
+            # POST-OPTIMIZATION MARGIN SCALING
+            # Scale allocations if margin usage exceeds limits
+            if allocations and test_margin is not None and len(allocations) > 0:
+                # Convert allocations (%) to weights (decimal)
+                total_alloc = sum(allocations.values())
+                if total_alloc > 0:
+                    weights = {sid: (pct / 100.0) for sid, pct in allocations.items()}
+
+                    # Margin limit parameters (needed for calculation)
+                    account_equity = current_equity
+                    max_leverage = 2.3  # Should match constructor's max_leverage
+                    margin_safety_factor = 0.8
+                    max_allowed_margin = account_equity * max_leverage * margin_safety_factor
+
+                    # Calculate portfolio margin for each day in test period
+                    # FIXED: Normalize margin to percentages using account_equity
+                    portfolio_margin_daily = []
+                    for idx in range(len(test_dates)):
+                        daily_margin_pct = 0.0  # Portfolio margin as % of portfolio equity
+
+                        # Use account_equity to normalize margin into percentages
+                        if test_account_equity is not None:
+                            for sid, weight in weights.items():
+                                if sid in test_margin.columns and sid in test_account_equity.columns:
+                                    # Get strategy's margin and account equity for this day
+                                    strategy_margin = test_margin[sid].iloc[idx]
+                                    strategy_account_equity = test_account_equity[sid].iloc[idx]
+
+                                    # Calculate strategy's margin as % of their account equity
+                                    if strategy_account_equity > 0:
+                                        strategy_margin_pct = strategy_margin / strategy_account_equity
+                                    else:
+                                        strategy_margin_pct = 0.0
+
+                                    # Add weighted contribution to portfolio margin %
+                                    daily_margin_pct += weight * strategy_margin_pct
+                        else:
+                            # FALLBACK: If no account_equity data, use old (broken) method
+                            # This will trigger the scaling but at least won't crash
+                            for sid, weight in weights.items():
+                                if sid in test_margin.columns:
+                                    daily_margin_pct += weight * test_margin[sid].iloc[idx] / account_equity
+
+                        # Convert portfolio margin % to absolute dollars for current equity
+                        daily_margin_dollars = daily_margin_pct * account_equity
+                        portfolio_margin_daily.append(daily_margin_dollars)
+
+                    max_margin_used = max(portfolio_margin_daily)
+                    avg_margin_used = sum(portfolio_margin_daily) / len(portfolio_margin_daily)
+
+                    print(f"\n       [STEP 2] Post-optimization margin check (OOS test period):")
+                    print(f"         Current account equity: ${account_equity:,.2f}")
+                    print(f"         Max leverage setting: {max_leverage}x")
+                    print(f"         Margin safety factor: {margin_safety_factor}")
+                    print(f"         Max allowed margin: ${max_allowed_margin:,.0f} ({max_allowed_margin/account_equity*100:.1f}% of equity)")
+                    print(f"         Portfolio margin with optimizer weights:")
+                    print(f"           - Max margin (worst day): ${max_margin_used:,.0f} ({max_margin_used/account_equity*100:.1f}% of equity)")
+                    print(f"           - Avg margin (daily): ${avg_margin_used:,.0f} ({avg_margin_used/account_equity*100:.1f}% of equity)")
+
+                    if max_margin_used > max_allowed_margin:
+                        # Scale down ALL allocations proportionally
+                        scale_factor = max_allowed_margin / max_margin_used
+                        allocations = {sid: pct * scale_factor for sid, pct in allocations.items()}
+                        new_total = sum(allocations.values())
+
+                        print(f"\n         ⚠️  MARGIN LIMIT EXCEEDED - SCALING DOWN ALLOCATIONS")
+                        print(f"           Reason: Max margin ${max_margin_used:,.0f} > Allowed ${max_allowed_margin:,.0f}")
+                        print(f"           Scale factor applied: {scale_factor:.4f}x")
+                        print(f"           Total allocation BEFORE scaling: {original_total:.2f}%")
+                        print(f"           Total allocation AFTER scaling: {new_total:.2f}%")
+                        print(f"           Reduction: {original_total - new_total:.2f}% ({(1-scale_factor)*100:.1f}% decrease)")
+                    else:
+                        print(f"\n         ✅ MARGIN CHECK PASSED - No scaling needed")
+                        print(f"           Max margin ${max_margin_used:,.0f} <= Allowed ${max_allowed_margin:,.0f}")
+                        print(f"           Buffer remaining: ${max_allowed_margin - max_margin_used:,.0f}")
+
             # Apply drawdown protection at window level
+            print(f"\n       [STEP 3] Drawdown protection check:")
             if self.apply_drawdown_protection and global_peak_equity > 0:
                 current_dd = (global_peak_equity - current_equity) / global_peak_equity
+                print(f"         Drawdown protection: ENABLED")
+                print(f"         Current equity: ${current_equity:,.2f}")
+                print(f"         Peak equity: ${global_peak_equity:,.2f}")
+                print(f"         Current drawdown: {current_dd*100:.2f}%")
+                print(f"         Drawdown threshold: {self.max_drawdown_threshold*100:.2f}%")
+
                 if current_dd > self.max_drawdown_threshold:
                     # Reduce allocations proportionally
                     excess_dd = current_dd - self.max_drawdown_threshold
                     reduction_factor = max(0.0, 1.0 - (excess_dd / self.max_drawdown_threshold))
-                    print(f"    ⚠️  Portfolio in {current_dd*100:.1f}% drawdown - reducing allocations by {(1-reduction_factor)*100:.0f}%")
+                    before_dd_total = sum(allocations.values())
                     allocations = {k: v * reduction_factor for k, v in allocations.items()}
-            
-            print(f"    Allocations: {len(allocations)} strategies")
-            total_alloc = sum(allocations.values())
-            print(f"    Total allocation: {total_alloc:.1f}%")
+                    after_dd_total = sum(allocations.values())
+
+                    print(f"\n         ⚠️  DRAWDOWN THRESHOLD EXCEEDED - REDUCING ALLOCATIONS")
+                    print(f"           Excess drawdown: {excess_dd*100:.2f}%")
+                    print(f"           Reduction factor: {reduction_factor:.4f}x")
+                    print(f"           Total allocation BEFORE DD scaling: {before_dd_total:.2f}%")
+                    print(f"           Total allocation AFTER DD scaling: {after_dd_total:.2f}%")
+                    print(f"           Reduction: {before_dd_total - after_dd_total:.2f}% ({(1-reduction_factor)*100:.1f}% decrease)")
+                else:
+                    print(f"         ✅ DRAWDOWN CHECK PASSED - No reduction needed")
+            else:
+                print(f"         Drawdown protection: DISABLED")
+
+            print(f"\n       [FINAL] Final allocations after all adjustments:")
+            final_total = sum(allocations.values())
+            print(f"         Total allocation: {final_total:.2f}%")
+            print(f"         Number of strategies: {len(allocations)}")
+            print(f"         Total reduction from optimizer: {original_total - final_total:.2f}% ({(1-final_total/original_total)*100:.1f}% decrease)")
+            print(f"    " + "="*80)
             
             # Apply allocations to test period
             window_result = self._apply_allocations(
@@ -228,12 +335,35 @@ class WalkForwardBacktest:
                 global_peak_equity=global_peak_equity if self.apply_drawdown_protection else None
             )
             
+            # Calculate IN-SAMPLE (training period) metrics using the allocations
+            weights = {sid: (pct / 100.0) for sid, pct in allocations.items()}
+            train_portfolio_returns = []
+            for idx in range(len(train_returns)):
+                daily_ret = 0.0
+                for sid, weight in weights.items():
+                    if sid in train_returns.columns:
+                        daily_ret += weight * train_returns[sid].iloc[idx]
+                train_portfolio_returns.append(daily_ret)
+
+            train_portfolio_returns_arr = np.array(train_portfolio_returns)
+            in_sample_cagr = self._calculate_cagr(train_portfolio_returns_arr)
+            in_sample_sharpe = (train_portfolio_returns_arr.mean() / train_portfolio_returns_arr.std() * np.sqrt(252)) if train_portfolio_returns_arr.std() > 0 else 0
+            in_sample_max_dd = self._calculate_max_drawdown(train_portfolio_returns_arr)
+            in_sample_volatility = train_portfolio_returns_arr.std() * np.sqrt(252)
+
+            # Calculate OUT-OF-SAMPLE (test period) metrics
+            test_portfolio_returns_arr = np.array(window_result['portfolio_returns'])
+            oos_cagr = self._calculate_cagr(test_portfolio_returns_arr)
+            oos_sharpe = (test_portfolio_returns_arr.mean() / test_portfolio_returns_arr.std() * np.sqrt(252)) if test_portfolio_returns_arr.std() > 0 else 0
+            oos_max_dd = self._calculate_max_drawdown(test_portfolio_returns_arr)
+            oos_volatility = test_portfolio_returns_arr.std() * np.sqrt(252)
+
             # Update equity tracking
             if len(window_result['portfolio_returns']) > 0:
                 for ret in window_result['portfolio_returns']:
                     current_equity *= (1 + ret)
                     global_peak_equity = max(global_peak_equity, current_equity)
-            
+
             window_results.append({
                 'window_num': window_count,
                 'train_start': train_dates[0],
@@ -244,7 +374,17 @@ class WalkForwardBacktest:
                 'portfolio_returns': window_result['portfolio_returns'],
                 'portfolio_margin': window_result.get('portfolio_margin', []),
                 'portfolio_notional': window_result.get('portfolio_notional', []),
-                'dates': test_dates
+                'dates': test_dates,
+                # IN-SAMPLE (optimization period) metrics
+                'in_sample_cagr': in_sample_cagr,
+                'in_sample_sharpe': in_sample_sharpe,
+                'in_sample_max_dd': in_sample_max_dd,
+                'in_sample_volatility': in_sample_volatility,
+                # OUT-OF-SAMPLE (test period) metrics
+                'oos_cagr': oos_cagr,
+                'oos_sharpe': oos_sharpe,
+                'oos_max_dd': oos_max_dd,
+                'oos_volatility': oos_volatility
             })
             
             # Step forward to next NON-OVERLAPPING test period
@@ -366,7 +506,7 @@ class WalkForwardBacktest:
         if dfs_account_equity:
             merged_account_equity = pd.concat(dfs_account_equity, axis=1, join='outer')
             # For account equity, forward fill is more appropriate than 0
-            merged_account_equity = merged_account_equity.fillna(method='ffill')
+            merged_account_equity = merged_account_equity.ffill()
             merged_account_equity = merged_account_equity.fillna(100000)  # Default if no data
             merged_account_equity = merged_account_equity.sort_index()
         
@@ -456,9 +596,13 @@ class WalkForwardBacktest:
         total_alloc = sum(allocations.values())
         
         if total_alloc == 0:
-            # No allocations, return zeros
+            # No allocations, return zeros with all required fields
+            n_days = len(test_dates)
             return {
-                'portfolio_returns': [0.0] * len(test_dates)
+                'portfolio_returns': [0.0] * n_days,
+                'portfolio_margin': [0.0] * n_days,
+                'portfolio_notional': [0.0] * n_days,
+                'leverage_adjustments': [1.0] * n_days if self.apply_drawdown_protection else None
             }
         
         # Normalize allocations to weights (handle leverage)
@@ -619,6 +763,20 @@ class WalkForwardBacktest:
             'allocations_history': allocations_history
         }
     
+    def _calculate_cagr(self, returns: np.ndarray) -> float:
+        """Calculate CAGR from returns"""
+        cumulative = (1 + returns).prod()
+        n_years = len(returns) / 252
+        cagr = (cumulative ** (1 / n_years)) - 1 if n_years > 0 else 0
+        return cagr
+
+    def _calculate_max_drawdown(self, returns: np.ndarray) -> float:
+        """Calculate max drawdown from returns"""
+        cumulative = (1 + returns).cumprod()
+        running_max = np.maximum.accumulate(cumulative)
+        drawdown = (cumulative - running_max) / running_max
+        return drawdown.min()
+
     def _calculate_metrics(self, results: Dict) -> Dict:
         """Calculate performance metrics"""
         returns = np.array(results['portfolio_returns'])
@@ -725,22 +883,46 @@ class WalkForwardBacktest:
         equity_df.to_csv(equity_path, index=False)
         print(f"  ✓ Saved equity curve: {equity_path}")
         
-        # 3. Save allocations history
+        # 3. Save allocations history with performance metrics
         allocations_records = []
         for window in results['window_allocations']:
             record = {
                 'window': window['window_num'],
-                'date': window['test_start'],
+                'test_start_date': window['test_start'],
+                'train_start_date': window['train_start'],
+                'train_end_date': window['train_end'],
+                'test_end_date': window['test_end'],
+                # In-sample (optimization period) metrics
+                'in_sample_cagr_pct': round(window.get('in_sample_cagr', 0) * 100, 2),
+                'in_sample_sharpe': round(window.get('in_sample_sharpe', 0), 2),
+                'in_sample_max_dd_pct': round(window.get('in_sample_max_dd', 0) * 100, 2),
+                'in_sample_volatility_pct': round(window.get('in_sample_volatility', 0) * 100, 2),
+                # Out-of-sample (test period) metrics
+                'oos_cagr_pct': round(window.get('oos_cagr', 0) * 100, 2),
+                'oos_sharpe': round(window.get('oos_sharpe', 0), 2),
+                'oos_max_dd_pct': round(window.get('oos_max_dd', 0) * 100, 2),
+                'oos_volatility_pct': round(window.get('oos_volatility', 0) * 100, 2),
             }
             # Add each strategy allocation
             for strat_id, alloc in window['allocations'].items():
-                record[strat_id] = alloc
+                record[strat_id] = round(alloc, 2)
             allocations_records.append(record)
-        
+
         allocations_df = pd.DataFrame(allocations_records)
+
+        # Reorder columns: metadata first, then performance metrics, then allocations
+        metadata_cols = ['window', 'test_start_date', 'train_start_date', 'train_end_date', 'test_end_date']
+        metric_cols = [
+            'in_sample_cagr_pct', 'in_sample_sharpe', 'in_sample_max_dd_pct', 'in_sample_volatility_pct',
+            'oos_cagr_pct', 'oos_sharpe', 'oos_max_dd_pct', 'oos_volatility_pct'
+        ]
+        allocation_cols = [col for col in allocations_df.columns if col not in metadata_cols + metric_cols]
+
+        allocations_df = allocations_df[metadata_cols + metric_cols + allocation_cols]
+
         allocations_path = os.path.join(self.output_dir, f"{base_filename}_allocations.csv")
         allocations_df.to_csv(allocations_path, index=False)
-        print(f"  ✓ Saved allocations: {allocations_path}")
+        print(f"  ✓ Saved allocations with performance metrics: {allocations_path}")
         
         # 4. Save correlation matrix
         # Build full returns matrix from strategies_data
