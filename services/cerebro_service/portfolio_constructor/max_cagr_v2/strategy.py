@@ -73,7 +73,21 @@ class MaxCAGRV2Constructor(PortfolioConstructor):
         self.risk_free_rate = risk_free_rate
         self.min_allocation = min_allocation
         self.max_single_strategy = max_single_strategy
-    
+
+    def _calculate_cagr(self, returns: np.ndarray) -> float:
+        """Calculate CAGR from returns"""
+        cumulative = (1 + returns).prod()
+        n_years = len(returns) / 252
+        cagr = (cumulative ** (1 / n_years)) - 1 if n_years > 0 else 0
+        return cagr
+
+    def _calculate_max_drawdown(self, returns: np.ndarray) -> float:
+        """Calculate max drawdown from returns"""
+        cumulative = (1 + returns).cumprod()
+        running_max = np.maximum.accumulate(cumulative)
+        drawdown = (cumulative - running_max) / running_max
+        return drawdown.min()
+
     def allocate_portfolio(self, context: PortfolioContext) -> Dict[str, float]:
         """
         Optimize portfolio allocation using MPT to maximize CAGR with drawdown constraint.
