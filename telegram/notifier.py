@@ -18,17 +18,27 @@ class TelegramNotifier:
     Send notifications to Telegram
     """
 
-    def __init__(self, bot_token: str = None, chat_id: str = None, enabled: bool = True):
+    def __init__(self, bot_token: str = None, chat_id: str = None, enabled: bool = True, environment: str = 'production'):
         """
         Initialize Telegram notifier
 
         Args:
             bot_token: Telegram bot token
-            chat_id: Telegram chat ID
+            chat_id: Telegram chat ID (overrides environment-based selection)
             enabled: Whether notifications are enabled
+            environment: 'production' or 'staging' - determines which channel to use
         """
         self.bot_token = bot_token or os.getenv('TELEGRAM_BOT_TOKEN')
-        self.chat_id = chat_id or os.getenv('TELEGRAM_CHAT_ID')
+        self.environment = environment.lower()
+
+        # If chat_id is explicitly provided, use it. Otherwise, select based on environment
+        if chat_id:
+            self.chat_id = chat_id
+        elif self.environment == 'staging':
+            self.chat_id = os.getenv('TELEGRAM_STAGING_CHAT_ID') or os.getenv('TELEGRAM_CHAT_ID')
+        else:
+            self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
         self.enabled = enabled and os.getenv('TELEGRAM_ENABLED', 'false').lower() == 'true'
 
         if self.enabled and (not self.bot_token or not self.chat_id):
@@ -36,8 +46,7 @@ class TelegramNotifier:
             self.enabled = False
 
         if self.enabled:
-            # logger.info("Telegram notifications enabled")c
-            pass
+            logger.info(f"Telegram notifications enabled for {self.environment.upper()} environment (chat_id: {self.chat_id})")
         else:
             logger.info("Telegram notifications disabled")
 

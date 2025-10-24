@@ -137,7 +137,8 @@ class WebhookSignalCollector:
                         'signalID': signal_doc.get('signalID'),
                         'signal_sent_EPOCH': signal_doc.get('signal_sent_EPOCH'),
                         'strategy_name': signal_doc.get('strategy_name', 'Unknown Strategy'),
-                        'signal': signal_doc.get('signal', {})
+                        'signal': signal_doc.get('signal', {}),
+                        'environment': signal_doc.get('environment', 'production')  # Include environment field
                     }
 
                     # Process as a caught-up signal
@@ -230,7 +231,8 @@ class WebhookSignalCollector:
                             'signalID': new_document.get('signalID'),
                             'signal_sent_EPOCH': new_document.get('signal_sent_EPOCH'),
                             'strategy_name': new_document.get('strategy_name', 'Unknown Strategy'),
-                            'signal': new_document.get('signal', {})
+                            'signal': new_document.get('signal', {}),
+                            'environment': new_document.get('environment', 'production')  # Include environment field
                         }
 
                         # Process as live signal
@@ -359,7 +361,9 @@ class WebhookSignalCollector:
         # Send Telegram notification
         try:
             from telegram.notifier import TelegramNotifier
-            notifier = TelegramNotifier()
+            # Get environment from signal data, default to production
+            signal_environment = signal_data.get('environment', 'production')
+            notifier = TelegramNotifier(environment=signal_environment)
             notifier.notify_signal_received(signal_data)
         except Exception as e:
             logger.info(f"⚠️  Error sending Telegram notification: {e}")
