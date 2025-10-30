@@ -662,12 +662,24 @@ class MaxHybridConstructor(PortfolioConstructor):
         if strategy_id in allocations and allocations[strategy_id] > 0:
             allocation_pct = allocations[strategy_id]
             
-            # Calculate allocated capital and margin
+            # Calculate allocated capital
             allocated_capital = context.account_equity * (allocation_pct / 100.0)
-            estimated_margin = allocated_capital * 0.5  # Assume 50% margin requirement
-            
+
+            # NOTE: Margin % and position sizing will be calculated in main.py
+            # using strategy-specific data from MongoDB. We just pass allocated_capital here.
+            estimated_margin = allocated_capital * 0.5  # Placeholder, will be recalculated in main.py
+
+            # Calculate shares from allocated capital and price
+            # This is the theoretical full allocation - main.py will adjust for:
+            # 1. Average number of positions this strategy holds
+            # 2. Capital already deployed in other positions
+            if signal.price > 0:
+                calculated_shares = allocated_capital / signal.price
+            else:
+                calculated_shares = 0
+
             logger.info(f"Signal ACCEPTED: {strategy_id} | Allocation: {allocation_pct:.1f}%")
-            
+
             # Build detailed metadata for transparency
             metadata = {
                 'allocation_pct': allocation_pct,
@@ -682,12 +694,13 @@ class MaxHybridConstructor(PortfolioConstructor):
                     'max_leverage': self.max_leverage,
                     'max_drawdown_limit': self.max_drawdown_limit
                 },
-                'position_size_calculation': f"{context.account_equity:,.0f} × {allocation_pct:.2f}% = ${allocated_capital:,.2f}"
+                'position_size_calculation': f"{context.account_equity:,.0f} × {allocation_pct:.2f}% = ${allocated_capital:,.2f}",
+                'calculated_shares_formula': f"${allocated_capital:,.2f} ÷ ${signal.price:,.2f} = {calculated_shares:.2f} shares"
             }
-            
+
             return SignalDecision(
                 action="APPROVE",
-                quantity=signal.quantity,  # Keep original quantity, will be adjusted by Cerebro
+                quantity=calculated_shares,  # FIX: Calculate from allocated capital, not signal.quantity
                 reason=f"MaxHybrid allocation: {allocation_pct:.1f}% (Total portfolio: {total_allocation:.1f}%)",
                 allocated_capital=allocated_capital,
                 margin_required=estimated_margin,

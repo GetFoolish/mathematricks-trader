@@ -70,76 +70,6 @@ class ApiClient {
   }
 
   // ============================================================================
-  // Portfolio Allocation APIs
-  // ============================================================================
-
-  async getCurrentAllocation(): Promise<PortfolioAllocation | null> {
-    const response = await this.client.get('/api/v1/portfolio/allocations/current');
-    return response.data.allocation;
-  }
-
-  async getLatestRecommendation(): Promise<PortfolioAllocation | null> {
-    const response = await this.client.get('/api/v1/portfolio/allocations/latest-recommendation');
-    return response.data.allocation;
-  }
-
-  async approveAllocation(allocationId: string, approvedBy: string) {
-    const response = await this.client.post('/api/v1/portfolio/allocations/approve', null, {
-      params: { allocation_id: allocationId, approved_by: approvedBy },
-    });
-    return response.data;
-  }
-
-  async createCustomAllocation(allocations: Record<string, number>, createdBy: string, notes?: string) {
-    const response = await this.client.put('/api/v1/portfolio/allocations/custom', {
-      allocations,
-      created_by: createdBy,
-      notes,
-    });
-    return response.data;
-  }
-
-  async createAndApproveCustomAllocation(allocations: Record<string, number>, approvedBy: string, notes?: string) {
-    // Step 1: Create custom allocation
-    const createResponse = await this.client.put('/api/v1/portfolio/allocations/custom', {
-      allocations,
-      created_by: approvedBy,
-      notes,
-    });
-
-    const allocationId = createResponse.data.allocation_id;
-
-    // Step 2: Approve it immediately
-    const approveResponse = await this.approveAllocation(allocationId, approvedBy);
-
-    return { ...createResponse.data, ...approveResponse };
-  }
-
-  async getAllocationHistory(limit = 10): Promise<PortfolioAllocation[]> {
-    const response = await this.client.get('/api/v1/portfolio/allocations/history', {
-      params: { limit },
-    });
-    return response.data.allocations;
-  }
-
-  async getLatestOptimizationRun(): Promise<OptimizationRun | null> {
-    const response = await this.client.get('/api/v1/portfolio/optimization/latest');
-    return response.data.run;
-  }
-
-  async simulateAllocation(allocationId: string) {
-    const response = await this.client.get(`/api/v1/portfolio/allocations/${allocationId}/simulate`);
-    return response.data.simulation;
-  }
-
-  async generateTearsheet(allocationId: string, startingCapital = 1000000) {
-    const response = await this.client.get(`/api/v1/portfolio/allocations/${allocationId}/tearsheet`, {
-      params: { starting_capital: startingCapital },
-    });
-    return response.data;
-  }
-
-  // ============================================================================
   // Strategy Management APIs
   // ============================================================================
 
@@ -227,6 +157,31 @@ class ApiClient {
 
   async reloadCerebroAllocations() {
     const response = await this.cerebroClient.post('/api/v1/reload-allocations');
+    return response.data;
+  }
+
+  // ============================================================================
+  // Activity Tab APIs
+  // ============================================================================
+
+  async getRecentSignals(limit: number = 50, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.cerebroClient.get('/api/v1/activity/signals', { params });
+    return response.data;
+  }
+
+  async getRecentOrders(limit: number = 50, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.cerebroClient.get('/api/v1/activity/orders', { params });
+    return response.data;
+  }
+
+  async getCerebroDecisions(limit: number = 50, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.cerebroClient.get('/api/v1/activity/decisions', { params });
     return response.data;
   }
 

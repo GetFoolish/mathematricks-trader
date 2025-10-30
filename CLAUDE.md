@@ -16,39 +16,14 @@
 - If you give me commands to run, always give them to me in a way that i can copy paste it. Right now, there are extra spaces when i copy it from your window.
 
 ---
-- Make a list of synthetic data or assumptions that have been made for leslie strategies and write out an email asking for that data. Maybe make a dummy excel sheet for him.
 
-Reading from Downloads:
-=== SPY Sheet Headers (Row 1) ===
-A1: Date
-B1: Daily_Return_Pct
-C1: Account_Equity
-D1: Daily_PnL
-E1: Max_Margin_Used
-F1: Max_Notional_Value
+A few things to check in the calculations:
+1) When an order comes in, it needs to do position sizing keeping in mind some sort of P95 of total allocation and size trying to maximize deployment. rigth now, i think it just takes the full allocation gives it all to one order. some sort of math to predict how many positions does the straetgy have open typically or average.
+2) when an order is sent, it needs to get confirmation that the order was placed and filled or is placed and awiting fill and then calculate the balance amount the strategy has available for allcoation.
+3) when an order comes in, it needs to check how much of it's own margin is already deployed. and how much is left. and then decide to approve or not.
 
-=== SPY Sheet Row 2 Formulas ===
-A2: 2025-07-25
-B2: =RANDBETWEEN(-50,150)/100
-C2: =1000000
-D2: =0
-E2: =ABS(B2/MAX(B2:B90))*C2*0.8
-F2: =E2*3
+---
 
-=== SPY Sheet Row 3 Formulas ===
-A3: 2025-07-26
-B3: =RANDBETWEEN(-50,150)/100
-C3: =C2*(1+(B2/100))
-D3: =C3-C2
-E3: =ABS(B3/MAX(B3:B91))*C3*0.8
-F3: =E3*3
-
-- staging signals to go to a different telegram channel. plus signal data being displayed to be updated.
-- Frontend: Portfolio Development, and testing
-- Frontend: Per Strategy (Dashboard)
-- Frontend: Per Strategy Developer. (Dashboard)
-- Frontend: Per Client (Dashboard)
-- Frontend: All (Dashboard)
 
 ## Current Status: Milestone 1.0 ✅ COMPLETE
 

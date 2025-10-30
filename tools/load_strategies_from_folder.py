@@ -14,9 +14,11 @@ Synthetic Data Generation Logic (Excel-based):
 import os
 import sys
 import pandas as pd
+import numpy as np
 from datetime import datetime
 from pymongo import MongoClient
 from dotenv import load_dotenv
+from scipy import stats
 
 # Load environment
 PROJECT_ROOT = "/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader"
@@ -26,6 +28,99 @@ load_dotenv(f'{PROJECT_ROOT}/.env')
 mongo_uri = os.getenv('MONGODB_URI')
 client = MongoClient(mongo_uri, tls=True, tlsAllowInvalidCertificates=True)
 db = client['mathematricks_trading']
+
+
+def detect_position_count_from_margin_steps(margin_data):
+    """
+    Detect estimated average position count by analyzing margin usage patterns.
+
+    The logic:
+    1. Get all non-zero margin values
+    2. Calculate differences between consecutive sorted values (step sizes)
+    3. Find the most common step size (this represents typical position margin)
+    4. Estimate avg positions = median(margin) / typical_position_margin
+
+    Args:
+        margin_data: List of margin_used values from backtest
+
+    Returns:
+        dict with:
+            - estimated_avg_positions: Estimated typical number of open positions
+            - estimated_position_margin: Estimated margin per position
+            - margin_pct_median: Median margin as % of equity
+            - confidence: "high", "medium", or "low" based on data quality
+    """
+    # Filter out zero margin days (no positions)
+    non_zero_margin = [m for m in margin_data if m > 0]
+
+    if len(non_zero_margin) < 10:
+        # Not enough data points
+        return {
+            "estimated_avg_positions": 3.0,  # Default assumption
+            "estimated_position_margin": np.median(non_zero_margin) / 3.0 if non_zero_margin else 1000.0,
+            "confidence": "low",
+            "reason": "Insufficient data (less than 10 non-zero margin days)"
+        }
+
+    # Sort margin values
+    sorted_margin = np.sort(non_zero_margin)
+
+    # Calculate differences (step sizes)
+    diffs = np.diff(sorted_margin)
+
+    # Remove very small differences (noise) - keep diffs > 1% of median margin
+    median_margin = np.median(sorted_margin)
+    noise_threshold = median_margin * 0.01
+    significant_diffs = diffs[diffs > noise_threshold]
+
+    if len(significant_diffs) == 0:
+        # All diffs are tiny - likely single position strategy
+        return {
+            "estimated_avg_positions": 1.0,
+            "estimated_position_margin": median_margin,
+            "confidence": "medium",
+            "reason": "No significant margin steps detected - likely single position"
+        }
+
+    # Find the most common step size using histogram
+    # Bin the diffs to find the mode
+    hist, bin_edges = np.histogram(significant_diffs, bins=20)
+    most_common_bin_idx = np.argmax(hist)
+    typical_step = (bin_edges[most_common_bin_idx] + bin_edges[most_common_bin_idx + 1]) / 2
+
+    # Alternative: use mode from scipy.stats
+    try:
+        mode_result = stats.mode(np.round(significant_diffs / 1000) * 1000, keepdims=False)  # Round to nearest 1000
+        typical_step_alt = float(mode_result.mode) if hasattr(mode_result, 'mode') else typical_step
+    except:
+        typical_step_alt = typical_step
+
+    # Use the histogram-based approach (more robust)
+    estimated_position_margin = typical_step
+
+    # Calculate estimated average positions
+    estimated_avg_positions = median_margin / estimated_position_margin if estimated_position_margin > 0 else 1.0
+
+    # Cap at reasonable bounds (1-20 positions)
+    estimated_avg_positions = max(1.0, min(20.0, estimated_avg_positions))
+
+    # Determine confidence based on data consistency
+    cv = np.std(significant_diffs) / np.mean(significant_diffs) if np.mean(significant_diffs) > 0 else 1.0  # Coefficient of variation
+
+    if cv < 0.3:
+        confidence = "high"
+    elif cv < 0.6:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    return {
+        "estimated_avg_positions": round(estimated_avg_positions, 1),
+        "estimated_position_margin": round(estimated_position_margin, 2),
+        "confidence": confidence,
+        "reason": f"Detected from {len(non_zero_margin)} margin data points, CV={cv:.2f}"
+    }
+
 
 def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
     """
@@ -238,8 +333,21 @@ def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
 
             # Show margin statistics
             margin_pcts = [(d['margin_used'] / d['account_equity'] * 100) for d in raw_data_backtest_full if d['account_equity'] > 0]
+            margin_dollars = [d['margin_used'] for d in raw_data_backtest_full]
+
             if margin_pcts:
                 print(f"   Margin Used: min={min(margin_pcts):.1f}%, max={max(margin_pcts):.1f}%, avg={sum(margin_pcts)/len(margin_pcts):.1f}%")
+
+            # Detect position count from margin steps
+            position_analysis = detect_position_count_from_margin_steps(margin_dollars)
+            print(f"   📊 Position Analysis:")
+            print(f"      Estimated Avg Positions: {position_analysis['estimated_avg_positions']}")
+            print(f"      Estimated Position Margin: ${position_analysis['estimated_position_margin']:,.2f}")
+            print(f"      Confidence: {position_analysis['confidence']}")
+            print(f"      Reason: {position_analysis['reason']}")
+
+            # Calculate median margin percentage
+            median_margin_pct = np.median(margin_pcts) if margin_pcts else 0.0
 
             if synthetic_columns:
                 print(f"   📝 Synthetic columns: {', '.join(synthetic_columns)}")
@@ -281,6 +389,16 @@ def load_strategies_from_folder(folder_path, starting_capital=1_000_000):
                     "max_return_used": float(max_return),
                     "margin_formula": "ABS(return) / MAX(returns) * equity * 0.8",
                     "notional_formula": "margin * 3"
+                },
+
+                # Position sizing metadata
+                "position_sizing": {
+                    "estimated_avg_positions": position_analysis['estimated_avg_positions'],
+                    "estimated_position_margin": position_analysis['estimated_position_margin'],
+                    "median_margin_pct": float(median_margin_pct),
+                    "confidence": position_analysis['confidence'],
+                    "detection_method": "margin_step_analysis",
+                    "reason": position_analysis['reason']
                 },
 
                 # Timestamps

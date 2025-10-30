@@ -39,9 +39,21 @@ console_handler.setLevel(logging.INFO)
 console_formatter = logging.Formatter('%(message)s')
 console_handler.setFormatter(console_formatter)
 
+# Signal processing handler - unified log for signal journey
+signal_processing_handler = logging.FileHandler('logs/signal_processing.log')
+signal_processing_handler.setLevel(logging.INFO)
+signal_processing_formatter = logging.Formatter(
+    '%(asctime)s | [COLLECTOR] | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+signal_processing_handler.setFormatter(signal_processing_formatter)
+# Only log signal-related events to this file (filtered later)
+signal_processing_handler.addFilter(lambda record: 'SIGNAL:' in record.getMessage())
+
 # Add handlers to logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+logger.addHandler(signal_processing_handler)
 
 class WebhookSignalCollector:
     def __init__(self, webhook_url: str, local_port: int = 8888, mongodb_url: str = None):
@@ -358,6 +370,10 @@ class WebhookSignalCollector:
             logger.info(f"🔄 Caught up from MongoDB storage")
         logger.info("─" * 60)
 
+        # Log to signal_processing.log (unified tracking)
+        signal_env = signal_data.get('environment', 'production').upper()
+        logger.info(f"SIGNAL: {signal_id_from_data} | RECEIVED | Strategy={strategy_name} | Instrument={signal.get('instrument') or signal.get('ticker')} | Action={signal.get('action')} | Environment={signal_env}")
+
         # Send Telegram notification
         try:
             from telegram.notifier import TelegramNotifier
@@ -394,34 +410,45 @@ class WebhookSignalCollector:
         if not self.pubsub_publisher or not self.pubsub_topic_path:
             return
 
-        # Generate better signal ID: {strategy}_{YYYYMMDD}_{HHMMSS}_{original_id}
+        # Generate clean signal ID: {strategy}_{YYYYMMDD_HHMMSS}_{seq}
         now = datetime.datetime.utcnow()
         strategy_name = signal_data.get('strategy_name', 'Unknown').replace(' ', '_').replace('-', '_')
         date_str = now.strftime('%Y%m%d')
         time_str = now.strftime('%H%M%S')
 
-        # Use original signalID if available, otherwise use milliseconds
+        # Extract just the sequence number from original signalID if available
         original_id = signal_data.get('signalID') or signal_data.get('signal_id')
         if original_id:
-            signal_id = f"{strategy_name}_{date_str}_{time_str}_{original_id}"
+            # Extract sequence number from end of original ID (e.g., "001" from "SPY_20251027_104528_001")
+            parts = str(original_id).split('_')
+            seq = parts[-1] if len(parts) > 0 else str(int(now.microsecond / 1000))
         else:
-            ms = int(now.microsecond / 1000)
-            signal_id = f"{strategy_name}_{date_str}_{time_str}{ms:03d}"
+            # Use milliseconds as sequence number
+            seq = str(int(now.microsecond / 1000)).zfill(3)
+
+        signal_id = f"{strategy_name}_{date_str}_{time_str}_{seq}"
 
         # Convert to standardized format for Cerebro
+        signal_payload = signal_data.get('signal', {})
+
         standardized_signal = {
             "signal_id": signal_id,
             "strategy_id": signal_data.get('strategy_name', 'Unknown'),
             "timestamp": signal_data.get('timestamp', datetime.datetime.utcnow().isoformat()),
-            "instrument": signal_data.get('signal', {}).get('instrument') or signal_data.get('signal', {}).get('ticker', ''),  # Support both 'instrument' and 'ticker' fields
-            "direction": signal_data.get('signal', {}).get('direction', 'LONG').upper(),  # Get direction from signal
-            "action": signal_data.get('signal', {}).get('action', 'ENTRY').upper(),
-            "order_type": signal_data.get('signal', {}).get('order_type', 'MARKET').upper(),
-            "price": float(signal_data.get('signal', {}).get('price', 0)),
-            "quantity": float(signal_data.get('signal', {}).get('quantity', 1)),
-            "stop_loss": float(signal_data.get('signal', {}).get('stop_loss', 0)),
-            "take_profit": float(signal_data.get('signal', {}).get('take_profit', 0)),
-            "expiry": None,
+            "instrument": signal_payload.get('instrument') or signal_payload.get('ticker', ''),  # Support both 'instrument' and 'ticker' fields
+            "direction": signal_payload.get('direction', 'LONG').upper(),  # Get direction from signal
+            "action": signal_payload.get('action', 'ENTRY').upper(),
+            "order_type": signal_payload.get('order_type', 'MARKET').upper(),
+            "price": float(signal_payload.get('price', 0)),
+            "quantity": float(signal_payload.get('quantity', 1)),
+            "stop_loss": float(signal_payload.get('stop_loss', 0)),
+            "take_profit": float(signal_payload.get('take_profit', 0)),
+            "expiry": signal_payload.get('expiry'),  # For futures
+            # Multi-asset support: preserve these fields from original signal
+            "instrument_type": signal_payload.get('instrument_type'),  # STOCK, OPTION, FOREX, FUTURE
+            "underlying": signal_payload.get('underlying'),  # For options
+            "legs": signal_payload.get('legs'),  # For multi-leg options
+            "exchange": signal_payload.get('exchange'),  # For futures
             "metadata": {
                 "expected_alpha": 0.02,  # Would come from backtest data
                 "original_signal": signal_data

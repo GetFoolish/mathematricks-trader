@@ -65,7 +65,7 @@ publisher = pubsub_v1.PublisherClient()
 subscriber = pubsub_v1.SubscriberClient()
 
 # Create topics
-topics = ['standardized-signals', 'trading-orders', 'execution-confirmations', 'account-updates']
+topics = ['standardized-signals', 'trading-orders', 'execution-confirmations', 'account-updates', 'order-commands']
 for topic_name in topics:
     topic_path = publisher.topic_path(project_id, topic_name)
     try:
@@ -84,7 +84,8 @@ subscriptions = [
     ('standardized-signals-sub', 'standardized-signals', 60),
     ('trading-orders-sub', 'trading-orders', 60),
     ('execution-confirmations-sub', 'execution-confirmations', 30),
-    ('account-updates-sub', 'account-updates', 30)
+    ('account-updates-sub', 'account-updates', 30),
+    ('order-commands-sub', 'order-commands', 30)
 ]
 
 for sub_name, topic_name, ack_deadline in subscriptions:
