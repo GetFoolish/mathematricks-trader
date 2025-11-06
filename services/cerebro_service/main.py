@@ -35,7 +35,11 @@ from portfolio_constructor.max_hybrid.strategy import MaxHybridConstructor
 from position_manager import PositionManager
 
 # Load environment variables
-load_dotenv('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/.env')
+# Determine project root dynamically
+SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(SERVICE_DIR))
+ENV_PATH = os.path.join(PROJECT_ROOT, '.env')
+load_dotenv(ENV_PATH)
 
 # Initialize FastAPI
 app = FastAPI(title="Cerebro Service", version="1.0.0-MVP")
@@ -50,18 +54,22 @@ app.add_middleware(
 )
 
 # Configure logging
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOG_DIR = os.path.join(PROJECT_ROOT, '..', 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/logs/cerebro_service.log'),
+        logging.FileHandler(os.path.join(LOG_DIR, 'cerebro_service.log')),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 # Signal processing handler - unified log for signal journey
-signal_processing_handler = logging.FileHandler('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/logs/signal_processing.log')
+signal_processing_handler = logging.FileHandler(os.path.join(LOG_DIR, 'signal_processing.log'))
 signal_processing_handler.setLevel(logging.INFO)
 signal_processing_formatter = logging.Formatter(
     '%(asctime)s | [CEREBRO] | %(message)s',

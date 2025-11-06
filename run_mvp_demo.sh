@@ -4,7 +4,7 @@
 
 set -e
 
-PROJECT_ROOT="/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader"
+PROJECT_ROOT="/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader"
 VENV_PYTHON="$PROJECT_ROOT/venv/bin/python"
 LOG_DIR="$PROJECT_ROOT/logs"
 
@@ -46,7 +46,7 @@ if curl -s $PUBSUB_EMULATOR_HOST > /dev/null 2>&1; then
     echo "✓ Pub/Sub emulator already running"
 else
     echo "Starting emulator in background..."
-    gcloud beta emulators pubsub start --host-port=$PUBSUB_EMULATOR_HOST > "$LOG_DIR/pubsub_emulator.log" 2>&1 &
+    gcloud --quiet beta emulators pubsub start --host-port=$PUBSUB_EMULATOR_HOST > "$LOG_DIR/pubsub_emulator.log" 2>&1 &
     PUBSUB_PID=$!
     echo $PUBSUB_PID > "$LOG_DIR/pubsub.pid"
     sleep 3

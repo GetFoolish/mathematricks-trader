@@ -39,8 +39,9 @@ class DataStore:
             # Test connection
             self.client.admin.command('ping')
 
-            # Get database
+            # Get databases
             self.db = self.client['mathematricks_trader']
+            self.db_trading = self.client['mathematricks_trading']
 
             # Initialize collections
             self.collections = {
@@ -48,7 +49,8 @@ class DataStore:
                 'orders': self.db['orders'],
                 'positions': self.db['positions'],
                 'pnl_history': self.db['pnl_history'],
-                'strategy_performance': self.db['strategy_performance']
+                'strategy_performance': self.db['strategy_performance'],
+                'strategies': self.db_trading['strategies']  # Strategy metadata from mathematricks_trading
             }
 
             print("✅ Connected to MongoDB")
@@ -302,11 +304,35 @@ class DataStore:
             return []
 
     def get_strategy_list(self) -> List[str]:
-        """Get list of all unique strategies"""
+        """Get list of all unique strategies from both signals and strategies collection"""
         try:
-            strategies = self.collections['signals'].distinct('strategy_name')
-            return strategies
+            # Get strategies from signals (strategies that have signals)
+            strategies_from_signals = self.collections['signals'].distinct('strategy_name')
+            
+            # Get strategies from strategies collection (all configured strategies)
+            strategies_from_collection = []
+            try:
+                strategy_docs = self.collections['strategies'].find({}, {'strategy_id': 1})
+                strategies_from_collection = [doc['strategy_id'] for doc in strategy_docs if 'strategy_id' in doc]
+            except Exception as e:
+                print(f"⚠️ Could not fetch from strategies collection: {e}")
+            
+            # Combine and deduplicate
+            all_strategies = list(set(strategies_from_signals + strategies_from_collection))
+            all_strategies.sort()
+            
+            return all_strategies
 
         except PyMongoError as e:
             print(f"❌ Error fetching strategy list: {e}")
+            return []
+    
+    def get_all_strategies(self) -> List[Dict]:
+        """Get all strategy documents from the strategies collection"""
+        try:
+            strategies = list(self.collections['strategies'].find({}))
+            return strategies
+
+        except PyMongoError as e:
+            print(f"❌ Error fetching strategies: {e}")
             return []
