@@ -174,9 +174,10 @@ def log_detailed_calculation_math(signal: Dict[str, Any], context, decision_obj,
         if ps.get('position_count', 0) > 0:
             log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- CURRENT OPEN POSITIONS ({ps['position_count']}) ---")
             for idx, pos_summary in enumerate(ps.get('open_positions_summary', []), 1):
+                cost_basis = pos_summary.get('cost_basis') or 0
                 log_lines.append(
-                    f"SIGNAL: {signal_id} | DETAILED_MATH | Position {idx}: {pos_summary['quantity']} shares "
-                    f"{pos_summary['instrument']} {pos_summary['direction']} (cost: ${pos_summary['cost_basis']:,.2f})"
+                    f"SIGNAL: {signal_id} | DETAILED_MATH | Position {idx}: {pos_summary.get('quantity', 0)} shares "
+                    f"{pos_summary.get('instrument', 'N/A')} {pos_summary.get('direction', 'N/A')} (cost: ${cost_basis:,.2f})"
                 )
         else:
             log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- CURRENT OPEN POSITIONS (0) ---")
@@ -958,14 +959,25 @@ def convert_signal_dict_to_object(signal_dict: Dict[str, Any]) -> Signal:
     """Convert signal dictionary to Signal object"""
     # Handle timestamp with 'Z' suffix
     timestamp_str = signal_dict.get('timestamp')
-    if isinstance(timestamp_str, str) and timestamp_str.endswith('Z'):
-        timestamp_str = timestamp_str[:-1] + '+00:00'
-    
+
+    # Validate timestamp exists
+    if timestamp_str is None:
+        raise ValueError(f"Signal {signal_dict.get('signal_id')} has no timestamp. Developer must provide a valid timestamp.")
+
+    # Determine timestamp value
+    if isinstance(timestamp_str, datetime):
+        timestamp_value = timestamp_str
+    elif isinstance(timestamp_str, str):
+        if timestamp_str.endswith('Z'):
+            timestamp_str = timestamp_str[:-1] + '+00:00'
+        timestamp_value = datetime.fromisoformat(timestamp_str)
+    else:
+        raise ValueError(f"Signal {signal_dict.get('signal_id')} has invalid timestamp type: {type(timestamp_str)}. Must be datetime or ISO format string.")
+
     return Signal(
         signal_id=signal_dict.get('signal_id'),
         strategy_id=signal_dict.get('strategy_id'),
-        timestamp=signal_dict.get('timestamp') if isinstance(signal_dict.get('timestamp'), datetime) 
-                  else datetime.fromisoformat(timestamp_str),
+        timestamp=timestamp_value,
         instrument=signal_dict.get('instrument'),
         direction=signal_dict.get('direction'),
         action=signal_dict.get('action'),
@@ -1505,16 +1517,24 @@ def signals_callback(message):
 
 def start_signal_subscriber():
     """
-    Start Pub/Sub subscriber for signals
+    Start Pub/Sub subscriber for signals with automatic reconnection on failure
     """
-    streaming_pull_future = subscriber.subscribe(signals_subscription, callback=signals_callback)
-    logger.info("CerebroService listening for signals...")
+    import time
 
-    try:
-        streaming_pull_future.result()
-    except Exception as e:
-        logger.error(f"Subscriber error: {str(e)}")
-        streaming_pull_future.cancel()
+    while True:
+        try:
+            streaming_pull_future = subscriber.subscribe(signals_subscription, callback=signals_callback)
+            logger.info("CerebroService listening for signals...")
+            streaming_pull_future.result()  # Blocks until error
+        except Exception as e:
+            logger.error(f"Subscriber error: {str(e)}")
+            logger.warning("Reconnecting to Pub/Sub in 5 seconds...")
+            try:
+                streaming_pull_future.cancel()
+            except:
+                pass
+            time.sleep(5)  # Wait before reconnecting
+            logger.info("Attempting to reconnect...")
 
 
 # ============================================================================

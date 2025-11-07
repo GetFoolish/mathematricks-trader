@@ -431,10 +431,23 @@ class WebhookSignalCollector:
         # Convert to standardized format for Cerebro
         signal_payload = signal_data.get('signal', {})
 
+        # Determine timestamp: use received_at, or signal_sent_EPOCH, or current time
+        timestamp_value = signal_data.get('timestamp')
+        if not timestamp_value:
+            # Try received_at first
+            if 'received_at' in signal_data and signal_data['received_at']:
+                timestamp_value = signal_data['received_at'].isoformat() if isinstance(signal_data['received_at'], datetime.datetime) else signal_data['received_at']
+            # Try signal_sent_EPOCH
+            elif 'signal_sent_EPOCH' in signal_data and signal_data['signal_sent_EPOCH']:
+                timestamp_value = datetime.datetime.fromtimestamp(signal_data['signal_sent_EPOCH']).isoformat()
+            # Fallback to current time
+            else:
+                timestamp_value = datetime.datetime.utcnow().isoformat()
+
         standardized_signal = {
             "signal_id": signal_id,
             "strategy_id": signal_data.get('strategy_name', 'Unknown'),
-            "timestamp": signal_data.get('timestamp', datetime.datetime.utcnow().isoformat()),
+            "timestamp": timestamp_value,
             "instrument": signal_payload.get('instrument') or signal_payload.get('ticker', ''),  # Support both 'instrument' and 'ticker' fields
             "direction": signal_payload.get('direction', 'LONG').upper(),  # Get direction from signal
             "action": signal_payload.get('action', 'ENTRY').upper(),

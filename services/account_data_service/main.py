@@ -19,14 +19,18 @@ import threading
 import requests
 
 # Load environment variables
-load_dotenv('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/.env')
+# Use relative path from project root
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+load_dotenv(os.path.join(PROJECT_ROOT, '.env'))
 
 # Configure logging
+LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/logs/account_data_service.log'),
+        logging.FileHandler(os.path.join(LOG_DIR, 'account_data_service.log')),
         logging.StreamHandler()
     ]
 )
@@ -1323,23 +1327,47 @@ def update_account_state_from_execution(execution_data: Dict[str, Any]):
 
 def start_pubsub_subscribers():
     """
-    Start Pub/Sub subscribers in background threads
+    Start Pub/Sub subscribers in background threads with automatic reconnection
     """
+    import time
+
     def start_execution_confirmations_sub():
-        streaming_pull_future = subscriber.subscribe(
-            execution_confirmations_subscription,
-            callback=execution_confirmations_callback
-        )
-        logger.info("Listening for execution confirmations...")
-        streaming_pull_future.result()
+        while True:
+            try:
+                streaming_pull_future = subscriber.subscribe(
+                    execution_confirmations_subscription,
+                    callback=execution_confirmations_callback
+                )
+                logger.info("Listening for execution confirmations...")
+                streaming_pull_future.result()
+            except Exception as e:
+                logger.error(f"Execution confirmations subscriber error: {str(e)}")
+                logger.warning("Reconnecting in 5 seconds...")
+                try:
+                    streaming_pull_future.cancel()
+                except:
+                    pass
+                time.sleep(5)
+                logger.info("Attempting to reconnect execution confirmations subscriber...")
 
     def start_account_updates_sub():
-        streaming_pull_future = subscriber.subscribe(
-            account_updates_subscription,
-            callback=account_updates_callback
-        )
-        logger.info("Listening for account updates...")
-        streaming_pull_future.result()
+        while True:
+            try:
+                streaming_pull_future = subscriber.subscribe(
+                    account_updates_subscription,
+                    callback=account_updates_callback
+                )
+                logger.info("Listening for account updates...")
+                streaming_pull_future.result()
+            except Exception as e:
+                logger.error(f"Account updates subscriber error: {str(e)}")
+                logger.warning("Reconnecting in 5 seconds...")
+                try:
+                    streaming_pull_future.cancel()
+                except:
+                    pass
+                time.sleep(5)
+                logger.info("Attempting to reconnect account updates subscriber...")
 
     # Start subscribers in background threads
     threading.Thread(target=start_execution_confirmations_sub, daemon=True).start()

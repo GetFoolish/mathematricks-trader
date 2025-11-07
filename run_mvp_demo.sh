@@ -46,10 +46,12 @@ if curl -s $PUBSUB_EMULATOR_HOST > /dev/null 2>&1; then
     echo "✓ Pub/Sub emulator already running"
 else
     echo "Starting emulator in background..."
-    gcloud --quiet beta emulators pubsub start --host-port=$PUBSUB_EMULATOR_HOST > "$LOG_DIR/pubsub_emulator.log" 2>&1 &
+    # Use full Java path to ensure emulator starts correctly
+    export PATH="/opt/homebrew/opt/openjdk@11/bin:$PATH"
+    /opt/homebrew/opt/openjdk@11/bin/java -jar "$PROJECT_ROOT/google-cloud-sdk/platform/pubsub-emulator/lib/cloud-pubsub-emulator-0.8.6.jar" --host=localhost --port=8085 > "$LOG_DIR/pubsub_emulator.log" 2>&1 &
     PUBSUB_PID=$!
     echo $PUBSUB_PID > "$LOG_DIR/pubsub.pid"
-    sleep 3
+    sleep 5
     echo "✓ Pub/Sub emulator started (PID: $PUBSUB_PID)"
 fi
 
@@ -81,11 +83,11 @@ time.sleep(1)
 
 # Create subscriptions
 subscriptions = [
-    ('standardized-signals-sub', 'standardized-signals', 60),
-    ('trading-orders-sub', 'trading-orders', 60),
-    ('execution-confirmations-sub', 'execution-confirmations', 30),
-    ('account-updates-sub', 'account-updates', 30),
-    ('order-commands-sub', 'order-commands', 30)
+    ('standardized-signals-sub', 'standardized-signals', 600),
+    ('trading-orders-sub', 'trading-orders', 600),
+    ('execution-confirmations-sub', 'execution-confirmations', 600),
+    ('account-updates-sub', 'account-updates', 600),
+    ('order-commands-sub', 'order-commands', 600)
 ]
 
 for sub_name, topic_name, ack_deadline in subscriptions:
