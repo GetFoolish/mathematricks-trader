@@ -1232,10 +1232,43 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ---
 
-### PHASE 3: Migrate SignalIngestionService
+### ~~PHASE 3: Migrate SignalIngestionService~~ ✅ COMPLETE
 **Duration:** 2 days
 **Risk Level:** Low
 **Dependencies:** Phase 2 complete
+**Completed:** 2025-11-09
+
+#### Completion Summary
+- ✅ Created `services/signal_ingestion/` service
+- ✅ Extracted `mongodb_watcher.py` - Change Stream monitoring with retry logic
+- ✅ Extracted `signal_standardizer.py` - Signal format conversion for Pub/Sub
+- ✅ Created `main.py` - Entry point with threading for background monitoring
+- ✅ Created `requirements.txt` (Docker work deferred to Phase 9)
+- ✅ Updated `run_mvp_demo.sh` to start SignalIngestionService
+- ✅ Updated `stop_mvp_demo.sh` with cleanup for new service
+- ✅ Kept `signal_collector.py` at root for backward compatibility with tests
+- ✅ Kept `telegram/notifier.py` separate (already modular)
+- ✅ Testing: Service running successfully, MongoDB connected, Pub/Sub publishing working
+
+**Files Changed:**
+- Created: `services/signal_ingestion/main.py` (269 lines)
+- Created: `services/signal_ingestion/mongodb_watcher.py` (200 lines)
+- Created: `services/signal_ingestion/signal_standardizer.py` (105 lines)
+- Created: `services/signal_ingestion/requirements.txt`
+- Modified: `run_mvp_demo.sh` (Step 7: SignalIngestionService startup)
+- Modified: `stop_mvp_demo.sh` (cleanup for signal_ingestion processes)
+- Kept: `signal_collector.py` (backward compatibility for tests - to be deprecated in Phase 4)
+
+**Test Results:**
+- 25 tests passed ✅
+- 23 tests failed (mostly IBKR/execution service - requires TWS running, unrelated to Phase 3)
+- Core signal ingestion pipeline verified working
+
+**Note:** `signal_collector.py` kept at root for backward compatibility with existing tests. Will be removed after tests are updated in Phase 4.
+
+---
+
+#### Original Plan (Completed Above)
 
 #### Current State
 ```

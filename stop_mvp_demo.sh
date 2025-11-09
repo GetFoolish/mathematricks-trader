@@ -12,9 +12,9 @@ if [ -f "$LOG_DIR/frontend.pid" ]; then
     rm "$LOG_DIR/frontend.pid"
 fi
 
-if [ -f "$LOG_DIR/signal_collector.pid" ]; then
-    kill $(cat "$LOG_DIR/signal_collector.pid") 2>/dev/null && echo "✓ signal_collector stopped"
-    rm "$LOG_DIR/signal_collector.pid"
+if [ -f "$LOG_DIR/signal_ingestion.pid" ]; then
+    kill $(cat "$LOG_DIR/signal_ingestion.pid") 2>/dev/null && echo "✓ SignalIngestionService stopped"
+    rm "$LOG_DIR/signal_ingestion.pid"
 fi
 
 if [ -f "$LOG_DIR/execution_service.pid" ]; then
@@ -46,10 +46,8 @@ fi
 echo ""
 echo "Checking for orphaned processes..."
 
-# Kill any remaining signal_collector processes
-pkill -f "signal_collector.py" 2>/dev/null && echo "✓ Killed orphaned signal_collector processes"
-
 # Kill any remaining service processes
+pkill -f "services/signal_ingestion/main.py" 2>/dev/null && echo "✓ Killed orphaned signal_ingestion processes"
 pkill -f "services/cerebro_service/main.py" 2>/dev/null && echo "✓ Killed orphaned cerebro_service processes"
 pkill -f "services/execution_service/main.py" 2>/dev/null && echo "✓ Killed orphaned execution_service processes"
 pkill -f "services/account_data_service/main.py" 2>/dev/null && echo "✓ Killed orphaned account_data_service processes"

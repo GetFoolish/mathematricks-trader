@@ -160,13 +160,15 @@ cd "$PROJECT_ROOT"
 
 sleep 2
 
-# Start signal_collector
+# Start SignalIngestionService
 echo ""
-echo -e "${YELLOW}Step 7: Starting signal_collector (staging mode)...${NC}"
-PUBSUB_EMULATOR_HOST=$PUBSUB_EMULATOR_HOST $VENV_PYTHON signal_collector.py --staging > "$LOG_DIR/signal_collector.log" 2>&1 &
-COLLECTOR_PID=$!
-echo $COLLECTOR_PID > "$LOG_DIR/signal_collector.pid"
-echo "✓ signal_collector started (PID: $COLLECTOR_PID)"
+echo -e "${YELLOW}Step 7: Starting SignalIngestionService (staging mode)...${NC}"
+cd "$PROJECT_ROOT/services/signal_ingestion"
+PUBSUB_EMULATOR_HOST=$PUBSUB_EMULATOR_HOST $VENV_PYTHON main.py --staging > "$LOG_DIR/signal_ingestion.log" 2>&1 &
+SIGNAL_INGESTION_PID=$!
+echo $SIGNAL_INGESTION_PID > "$LOG_DIR/signal_ingestion.pid"
+echo "✓ SignalIngestionService started (PID: $SIGNAL_INGESTION_PID)"
+cd "$PROJECT_ROOT"
 
 sleep 2
 
@@ -198,7 +200,7 @@ echo "  • AccountDataService: http://localhost:8002"
 echo "  • PortfolioBuilderService: http://localhost:8003"
 echo "  • CerebroService: Background (consumes from Pub/Sub)"
 echo "  • ExecutionService: Background (consumes from Pub/Sub)"
-echo "  • signal_collector: Monitoring staging.mathematricks.fund"
+echo "  • SignalIngestionService: Monitoring staging.mathematricks.fund"
 echo "  • Admin Frontend: http://localhost:5173"
 echo ""
 echo "Admin Dashboard:"
@@ -206,7 +208,7 @@ echo "  Open browser: http://localhost:5173"
 echo "  Login: username=admin, password=admin"
 echo ""
 echo "Logs:"
-echo "  tail -f logs/signal_collector.log     # Signal collection"
+echo "  tail -f logs/signal_ingestion.log     # Signal collection"
 echo "  tail -f logs/portfolio_builder.log    # Strategy management & portfolio optimization"
 echo "  tail -f logs/cerebro_service.log      # Position sizing decisions"
 echo "  tail -f logs/execution_service.log    # Order execution"
