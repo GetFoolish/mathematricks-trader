@@ -276,8 +276,34 @@ When adding new tests:
 - **Portfolio Optimization:** 80%+ coverage
 - **End-to-End Flows:** All critical paths tested
 
+## Other Test Scripts
+
+In addition to the integration test suite, this directory contains utility scripts for testing:
+
+### Signal Testers
+- `signal_sender.py` - Send individual test signals to staging/production
+- `live_signal_tester.py` - Live signal testing with real-time monitoring
+- `comprehensive_signal_tester.py` - Comprehensive test suite v1
+- `comprehensive_signal_tester_v2.py` - Comprehensive test suite v2
+
+### Execution Testers
+- `test_multiasset_execution.py` - Multi-asset execution tests
+
+### Stress Testing
+- `run_stress_test.sh` - Stress test runner
+
+### Usage Example
+
+```bash
+# Send test signal to staging
+python tests/signal_sender.py --ticker SPY --action BUY --price 450.25 --environment staging
+
+# Run stress test
+./tests/run_stress_test.sh
+```
+
 ## Contact
 
 For questions about tests, see:
 - `/documentation/MathematricksTraderSystemCleanup.md` - System architecture
-- `/CLAUDE.md` - Project instructions
+- `/documentation/CLAUDE.md` - Project instructions

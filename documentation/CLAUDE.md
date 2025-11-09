@@ -2,8 +2,8 @@
 
 ## General Rules
 - read all the files in [text](dev/portfolio_builder/llm_brief)
-- for python use the venv: /Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/venv/bin/python
-- for environment variables, use: /Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/.env
+- for python use the venv: /Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/venv/bin/python
+- for environment variables, use: /Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/.env
 - Use this file to keep track of your to-do list, and keep updating it here as work gets done.
 - Before you start working on something, make sure that you work with the user to come up with tests for what you are trying to achieve. Once the tests are approved by the USER, then start developing the project to achieve the tests. Make sure you get the user to also include 'Integration Tests' as needed. Also, the test files should only have 'imported code' and never any hard-coded code in it. The tests are meant to test the underlying 'codebase' ONLY and not achieve anything else.
 - Before you move to the next to-do or next set of problems, ask the user if they want to do a git commit and git push.
