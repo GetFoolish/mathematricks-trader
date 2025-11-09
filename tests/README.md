@@ -71,9 +71,15 @@ pip install -r tests/requirements.txt
 This will:
 1. Check if services are running
 2. Install test dependencies
-3. Run all integration tests
+3. Run all integration tests (stops after 5 failures by default)
 4. Generate HTML report in `tests/reports/test_report.html`
 5. Open report in browser (macOS only)
+
+**Note:** By default, tests stop after 5 failures to provide fast feedback. To run ALL tests regardless of failures:
+
+```bash
+./tests/run_tests.sh --maxfail=0
+```
 
 ### Run Specific Test File
 

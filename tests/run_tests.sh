@@ -74,12 +74,19 @@ echo "=========================================="
 echo ""
 
 # Run pytest with options
+# Default: Stop after 5 failures (use --maxfail=0 to run all tests)
+if [[ ! "$@" =~ "--maxfail" ]]; then
+    MAXFAIL_ARG="--maxfail=5"
+else
+    MAXFAIL_ARG=""
+fi
+
 $PYTHON_PATH -m pytest tests/integration/ \
     -v \
     --tb=short \
     --html=tests/reports/test_report.html \
     --self-contained-html \
-    --maxfail=5 \
+    $MAXFAIL_ARG \
     "$@"
 
 TEST_EXIT_CODE=$?

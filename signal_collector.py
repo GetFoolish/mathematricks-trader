@@ -391,20 +391,6 @@ class WebhookSignalCollector:
             except Exception as e:
                 logger.info(f"⚠️  Error publishing to microservices: {e}")
 
-        # Process signal through Mathematricks Trader (legacy)
-        try:
-            # Import here to avoid circular imports
-            from src.execution.signal_processor import get_signal_processor
-
-            processor = get_signal_processor()
-            if processor:
-                processor.process_new_signal(signal_data)
-        except ImportError:
-            # Signal processor not available (development mode)
-            pass
-        except Exception as e:
-            logger.info(f"⚠️  Error processing signal in Mathematricks Trader: {e}")
-
     def _publish_to_microservices(self, signal_data: dict):
         """Publish signal to MVP microservices via Pub/Sub"""
         if not self.pubsub_publisher or not self.pubsub_topic_path:

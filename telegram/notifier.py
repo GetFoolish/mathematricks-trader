@@ -8,9 +8,11 @@ import os
 import requests
 from typing import Dict, List, Optional
 from datetime import datetime
-from src.utils.logger import setup_logger
+import logging
 
-logger = setup_logger('telegram', 'telegram.log')
+# Setup logger
+logger = logging.getLogger('telegram')
+logger.setLevel(logging.INFO)
 
 
 class TelegramNotifier:
