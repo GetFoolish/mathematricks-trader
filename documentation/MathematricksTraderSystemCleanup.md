@@ -1410,11 +1410,12 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ---
 
-### PHASE 3.5: Complete CerebroService Refactoring
+### PHASE 3.5: Complete CerebroService Refactoring ✅ COMPLETE
 **Duration:** 1-2 days
 **Risk Level:** Medium (modifying core trading service)
 **Dependencies:** Phase 2, Phase 3 complete
-**Status:** IN PROGRESS
+**Status:** ✅ COMPLETE
+**Completed:** 2025-11-09
 
 #### Purpose
 Complete the CerebroService simplification that was started in Phase 2. Currently CerebroService still has all HTTP endpoints (2166 lines). This phase removes all HTTP routes and extracts business logic to testable modules.
@@ -1465,7 +1466,7 @@ services/cerebro_service/
 
 #### Tasks
 
-**2.5.1. Extract Business Logic to Modules**
+**3.5.1. Extract Business Logic to Modules**
 ```bash
 # Create position_sizing.py with pure functions
 touch services/cerebro_service/position_sizing.py
@@ -1488,7 +1489,7 @@ Extract these functions from `main.py` → `account_queries.py`:
 
 **Why?** These modules have NO module-level initialization, enabling clean unit testing.
 
-**2.5.2. Remove All HTTP Endpoints from CerebroService**
+**3.5.2. Remove All HTTP Endpoints from CerebroService**
 
 Delete from `services/cerebro_service/main.py`:
 - `@app.get("/health")` - Move to PortfolioBuilder or AccountData
@@ -1581,7 +1582,7 @@ if __name__ == "__main__":
 
 **Target:** ~600 lines (down from 2166)
 
-**2.5.4. Update Tests**
+**3.5.4. Update Tests**
 
 Update `tests/test_cerebro_position_sizing_calculation.py`:
 ```python
@@ -1599,7 +1600,7 @@ pytest tests/test_cerebro_position_sizing_calculation.py -v
 
 **Expected:** All tests pass without requiring GCP credentials
 
-**2.5.5. Update run_mvp_demo.sh**
+**3.5.5. Update run_mvp_demo.sh**
 
 Remove CerebroService HTTP port from documentation (no longer needs port 8001):
 ```bash
@@ -1611,7 +1612,7 @@ echo "  • CerebroService: Background (Pub/Sub only, no HTTP)"  # ← UPDATE TH
 echo "  • ExecutionService: Background (Pub/Sub only, no HTTP)"
 ```
 
-**2.5.6. Testing**
+**3.5.6. Testing**
 
 ```bash
 # Start all services
@@ -1641,11 +1642,11 @@ curl http://localhost:8001/health
 # Expected: Connection refused (no server on port 8001)
 ```
 
-**2.5.7. Git Commit**
+**3.5.7. Git Commit**
 
 ```bash
 git add -A
-git commit -m "Phase 2.5: Complete CerebroService refactoring - remove HTTP, extract business logic
+git commit -m "Phase 3.5: Complete CerebroService refactoring - remove HTTP, extract business logic
 
 - Removed all FastAPI HTTP endpoints from CerebroService
 - Extracted business logic to testable modules:
