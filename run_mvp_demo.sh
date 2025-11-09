@@ -135,9 +135,21 @@ cd "$PROJECT_ROOT"
 
 sleep 2
 
+# Start DashboardCreatorService
+echo ""
+echo -e "${YELLOW}Step 5: Starting DashboardCreatorService (port 8004)...${NC}"
+cd "$PROJECT_ROOT/services/dashboard_creator"
+$VENV_PYTHON main.py > "$LOG_DIR/dashboard_creator.log" 2>&1 &
+DASHBOARD_PID=$!
+echo $DASHBOARD_PID > "$LOG_DIR/dashboard_creator.pid"
+echo "✓ DashboardCreatorService started (PID: $DASHBOARD_PID)"
+cd "$PROJECT_ROOT"
+
+sleep 2
+
 # Start CerebroService
 echo ""
-echo -e "${YELLOW}Step 5: Starting CerebroService...${NC}"
+echo -e "${YELLOW}Step 6: Starting CerebroService...${NC}"
 cd "$PROJECT_ROOT/services/cerebro_service"
 PUBSUB_EMULATOR_HOST=$PUBSUB_EMULATOR_HOST ACCOUNT_DATA_SERVICE_URL="http://localhost:8002" $VENV_PYTHON main.py > "$LOG_DIR/cerebro_service.log" 2>&1 &
 CEREBRO_PID=$!
@@ -149,7 +161,7 @@ sleep 2
 
 # Start ExecutionService
 echo ""
-echo -e "${YELLOW}Step 6: Starting ExecutionService...${NC}"
+echo -e "${YELLOW}Step 7: Starting ExecutionService...${NC}"
 cd "$PROJECT_ROOT/services/execution_service"
 PUBSUB_EMULATOR_HOST=$PUBSUB_EMULATOR_HOST $VENV_PYTHON main.py > "$LOG_DIR/execution_service.log" 2>&1 &
 EXECUTION_PID=$!
@@ -162,7 +174,7 @@ sleep 2
 
 # Start SignalIngestionService
 echo ""
-echo -e "${YELLOW}Step 7: Starting SignalIngestionService (staging mode)...${NC}"
+echo -e "${YELLOW}Step 8: Starting SignalIngestionService (staging mode)...${NC}"
 cd "$PROJECT_ROOT/services/signal_ingestion"
 PUBSUB_EMULATOR_HOST=$PUBSUB_EMULATOR_HOST $VENV_PYTHON main.py --staging > "$LOG_DIR/signal_ingestion.log" 2>&1 &
 SIGNAL_INGESTION_PID=$!
@@ -174,7 +186,7 @@ sleep 2
 
 # Start Admin Frontend
 echo ""
-echo -e "${YELLOW}Step 8: Starting Admin Frontend (port 5173)...${NC}"
+echo -e "${YELLOW}Step 9: Starting Admin Frontend (port 5173)...${NC}"
 cd "$PROJECT_ROOT/frontend-admin"
 
 # Check if node_modules exists
@@ -198,6 +210,7 @@ echo "Services:"
 echo "  • Pub/Sub Emulator: localhost:8085"
 echo "  • AccountDataService: http://localhost:8002"
 echo "  • PortfolioBuilderService: http://localhost:8003"
+echo "  • DashboardCreatorService: http://localhost:8004"
 echo "  • CerebroService: Background (consumes from Pub/Sub)"
 echo "  • ExecutionService: Background (consumes from Pub/Sub)"
 echo "  • SignalIngestionService: Monitoring staging.mathematricks.fund"
@@ -210,6 +223,7 @@ echo ""
 echo "Logs:"
 echo "  tail -f logs/signal_ingestion.log     # Signal collection"
 echo "  tail -f logs/portfolio_builder.log    # Strategy management & portfolio optimization"
+echo "  tail -f logs/dashboard_creator.log    # Dashboard generation"
 echo "  tail -f logs/cerebro_service.log      # Position sizing decisions"
 echo "  tail -f logs/execution_service.log    # Order execution"
 echo "  tail -f logs/frontend.log             # Frontend dev server"
