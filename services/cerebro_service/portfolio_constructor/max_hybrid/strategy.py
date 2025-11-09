@@ -725,7 +725,7 @@ class MaxHybridConstructor(PortfolioConstructor):
             }
             
             return SignalDecision(
-                action="REJECT",
+                action='REJECTED',
                 quantity=0,
                 reason="No allocation in MaxHybrid portfolio",
                 allocated_capital=0.0,

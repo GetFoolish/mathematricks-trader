@@ -1076,7 +1076,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         if position_capital <= 0:
             # No capital left - reject signal
             decision_obj = SignalDecision(
-                action="REJECT",
+                action="REJECTED",
                 quantity=0,
                 reason=f"No capital remaining (deployed ${deployed_capital:,.2f} of ${decision_obj.allocated_capital:,.2f})",
                 allocated_capital=decision_obj.allocated_capital,

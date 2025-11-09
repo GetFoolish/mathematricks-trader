@@ -421,10 +421,13 @@ class WebhookSignalCollector:
         if original_id:
             # Extract sequence number from end of original ID (e.g., "001" from "SPY_20251027_104528_001")
             parts = str(original_id).split('_')
-            seq = parts[-1] if len(parts) > 0 else str(int(now.microsecond / 1000))
+            if len(parts) > 0 and parts[-1].isdigit():
+                seq = parts[-1].zfill(3)[:3]  # Ensure exactly 3 digits
+            else:
+                seq = str(int(now.microsecond / 1000)).zfill(3)[:3]
         else:
-            # Use milliseconds as sequence number
-            seq = str(int(now.microsecond / 1000)).zfill(3)
+            # Use milliseconds as sequence number (always 3 digits)
+            seq = str(int(now.microsecond / 1000)).zfill(3)[:3]
 
         signal_id = f"{strategy_name}_{date_str}_{time_str}_{seq}"
 

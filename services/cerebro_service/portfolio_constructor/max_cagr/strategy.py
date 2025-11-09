@@ -234,7 +234,7 @@ class MaxCAGRConstructor(PortfolioConstructor):
         
         if allocated_pct <= 0:
             return SignalDecision(
-                action='REJECT',
+                action='REJECTED',
                 quantity=0.0,
                 reason=f'Strategy {strategy_id} not in current allocation',
                 allocated_capital=0.0,
@@ -247,7 +247,7 @@ class MaxCAGRConstructor(PortfolioConstructor):
         # Calculate position size
         if signal.price <= 0:
             return SignalDecision(
-                action='REJECT',
+                action='REJECTED',
                 quantity=0.0,
                 reason='Invalid price (<=0)',
                 allocated_capital=0.0,
@@ -272,7 +272,7 @@ class MaxCAGRConstructor(PortfolioConstructor):
             
             if max_additional_margin <= 0:
                 return SignalDecision(
-                    action='REJECT',
+                    action='REJECTED',
                     quantity=0.0,
                     reason=f'Insufficient margin (would exceed {max_margin_pct:.1f}% limit)',
                     allocated_capital=0.0,
