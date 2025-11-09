@@ -95,14 +95,13 @@ position_manager = PositionManager(mongo_client)
 # GOOGLE CLOUD PUB/SUB
 # ============================================================================
 
-# Initialize Google Cloud Pub/Sub
-project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
-subscriber = pubsub_v1.SubscriberClient()
-publisher = pubsub_v1.PublisherClient()
-
-signals_subscription = subscriber.subscription_path(project_id, 'standardized-signals-sub')
-trading_orders_topic = publisher.topic_path(project_id, 'trading-orders')
-order_commands_topic = publisher.topic_path(project_id, 'order-commands')
+# Pub/Sub clients (initialized in main block to avoid triggering during imports)
+project_id = None
+subscriber = None
+publisher = None
+signals_subscription = None
+trading_orders_topic = None
+order_commands_topic = None
 
 # AccountDataService URL
 ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:8002')
@@ -1295,6 +1294,14 @@ def start_signal_subscriber():
 
 if __name__ == "__main__":
     logger.info("Starting Cerebro Service (Pub/Sub Only)")
+
+    # Initialize Pub/Sub clients
+    project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
+    subscriber = pubsub_v1.SubscriberClient()
+    publisher = pubsub_v1.PublisherClient()
+    signals_subscription = subscriber.subscription_path(project_id, 'standardized-signals-sub')
+    trading_orders_topic = publisher.topic_path(project_id, 'trading-orders')
+    order_commands_topic = publisher.topic_path(project_id, 'order-commands')
 
     # Warmup caches
     warmup_strategy_caches()
