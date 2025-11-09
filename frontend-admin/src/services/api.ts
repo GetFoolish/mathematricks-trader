@@ -12,10 +12,12 @@ import type {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
 const CEREBRO_BASE_URL = import.meta.env.VITE_CEREBRO_BASE_URL || 'http://localhost:8001';
+const PORTFOLIO_BUILDER_BASE_URL = import.meta.env.VITE_PORTFOLIO_BUILDER_BASE_URL || 'http://localhost:8003';
 
 class ApiClient {
   private client: AxiosInstance;
   private cerebroClient: AxiosInstance;
+  private portfolioBuilderClient: AxiosInstance;
 
   constructor() {
     this.client = axios.create({
@@ -32,6 +34,13 @@ class ApiClient {
       },
     });
 
+    this.portfolioBuilderClient = axios.create({
+      baseURL: PORTFOLIO_BUILDER_BASE_URL,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
     // Add request interceptor to include JWT token
     this.client.interceptors.request.use((config) => {
       const token = localStorage.getItem('auth_token');
@@ -42,6 +51,14 @@ class ApiClient {
     });
 
     this.cerebroClient.interceptors.request.use((config) => {
+      const token = localStorage.getItem('auth_token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+      return config;
+    });
+
+    this.portfolioBuilderClient.interceptors.request.use((config) => {
       const token = localStorage.getItem('auth_token');
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
@@ -70,52 +87,52 @@ class ApiClient {
   }
 
   // ============================================================================
-  // Strategy Management APIs
+  // Strategy Management APIs (PortfolioBuilder Service)
   // ============================================================================
 
   async getAllStrategies(): Promise<Strategy[]> {
-    const response = await this.cerebroClient.get('/api/v1/strategies');
+    const response = await this.portfolioBuilderClient.get('/api/v1/strategies');
     return response.data.strategies;
   }
 
   async getStrategy(strategyId: string): Promise<Strategy> {
-    const response = await this.cerebroClient.get(`/api/v1/strategies/${strategyId}`);
+    const response = await this.portfolioBuilderClient.get(`/api/v1/strategies/${strategyId}`);
     return response.data.strategy;
   }
 
   async createStrategy(strategyData: Partial<Strategy>): Promise<{status: string; strategy_id: string}> {
-    const response = await this.cerebroClient.post('/api/v1/strategies', strategyData);
+    const response = await this.portfolioBuilderClient.post('/api/v1/strategies', strategyData);
     return response.data;
   }
 
   async updateStrategy(strategyId: string, updates: Partial<Strategy>) {
-    const response = await this.cerebroClient.put(`/api/v1/strategies/${strategyId}`, updates);
+    const response = await this.portfolioBuilderClient.put(`/api/v1/strategies/${strategyId}`, updates);
     return response.data;
   }
 
   async deleteStrategy(strategyId: string) {
-    const response = await this.cerebroClient.delete(`/api/v1/strategies/${strategyId}`);
+    const response = await this.portfolioBuilderClient.delete(`/api/v1/strategies/${strategyId}`);
     return response.data;
   }
 
   async syncStrategyBacktest(strategyId: string, backtestData: Partial<BacktestData>) {
-    const response = await this.cerebroClient.post(`/api/v1/strategies/${strategyId}/sync-backtest`, backtestData);
+    const response = await this.portfolioBuilderClient.post(`/api/v1/strategies/${strategyId}/sync-backtest`, backtestData);
     return response.data;
   }
 
   // ============================================================================
-  // NEW: Portfolio Research & Testing APIs (Cerebro)
+  // Portfolio Research & Testing APIs (PortfolioBuilder Service)
   // ============================================================================
 
   // Part 1: Current Allocation
   async getCurrentAllocation() {
-    const response = await this.cerebroClient.get('/api/v1/allocations/current');
+    const response = await this.portfolioBuilderClient.get('/api/v1/allocations/current');
     return response.data;
   }
 
   // Part 2: Approve Allocation (makes it current)
   async approveAllocation(allocations: Record<string, number>) {
-    const response = await this.cerebroClient.post('/api/v1/allocations/approve', {
+    const response = await this.portfolioBuilderClient.post('/api/v1/allocations/approve', {
       allocations
     });
     return response.data;
@@ -123,18 +140,18 @@ class ApiClient {
 
   // Part 3: Portfolio Tests
   async getPortfolioTests() {
-    const response = await this.cerebroClient.get('/api/v1/portfolio-tests');
+    const response = await this.portfolioBuilderClient.get('/api/v1/portfolio-tests');
     return response.data;
   }
 
   async deletePortfolioTest(testId: string) {
-    const response = await this.cerebroClient.delete(`/api/v1/portfolio-tests/${testId}`);
+    const response = await this.portfolioBuilderClient.delete(`/api/v1/portfolio-tests/${testId}`);
     return response.data;
   }
 
   // Part 4: Run Portfolio Test (Research Lab)
   async runPortfolioTest(strategies: string[], constructor: string) {
-    const response = await this.cerebroClient.post('/api/v1/portfolio-tests/run', {
+    const response = await this.portfolioBuilderClient.post('/api/v1/portfolio-tests/run', {
       strategies,
       constructor
     });
@@ -161,27 +178,27 @@ class ApiClient {
   }
 
   // ============================================================================
-  // Activity Tab APIs
+  // Activity Tab APIs (PortfolioBuilder Service)
   // ============================================================================
 
   async getRecentSignals(limit: number = 50, environment?: string) {
     const params: any = { limit };
     if (environment) params.environment = environment;
-    const response = await this.cerebroClient.get('/api/v1/activity/signals', { params });
+    const response = await this.portfolioBuilderClient.get('/api/v1/activity/signals', { params });
     return response.data;
   }
 
   async getRecentOrders(limit: number = 50, environment?: string) {
     const params: any = { limit };
     if (environment) params.environment = environment;
-    const response = await this.cerebroClient.get('/api/v1/activity/orders', { params });
+    const response = await this.portfolioBuilderClient.get('/api/v1/activity/orders', { params });
     return response.data;
   }
 
   async getCerebroDecisions(limit: number = 50, environment?: string) {
     const params: any = { limit };
     if (environment) params.environment = environment;
-    const response = await this.cerebroClient.get('/api/v1/activity/decisions', { params });
+    const response = await this.portfolioBuilderClient.get('/api/v1/activity/decisions', { params });
     return response.data;
   }
 

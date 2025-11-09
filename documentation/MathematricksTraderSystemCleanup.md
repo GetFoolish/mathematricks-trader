@@ -992,10 +992,36 @@ run_mathematricks_trader.py # Legacy (DELETE in Phase 1)
 
 ---
 
-### PHASE 2: Extract PortfolioBuilderService from Cerebro
+### ~~PHASE 2: Extract PortfolioBuilderService from Cerebro~~ ✅ COMPLETE
 **Duration:** 3-4 days
 **Risk Level:** Medium
 **Dependencies:** Phase 1 complete
+**Completed:** 2025-11-09
+
+#### Completion Summary
+- ✅ Created `services/portfolio_builder/` service (port 8003)
+- ✅ Moved `portfolio_constructor/` → `portfolio_builder/algorithms/`
+- ✅ Moved `research/` tools → `portfolio_builder/research/`
+- ✅ Implemented comprehensive FastAPI service with all HTTP endpoints
+- ✅ Updated `frontend-admin/src/services/api.ts` to use PortfolioBuilder (port 8003)
+- ✅ Updated `run_mvp_demo.sh` and `stop_mvp_demo.sh` for new service
+- ✅ All paths now dynamic (works on any computer)
+- ✅ Standardized on `MONGODB_URI` environment variable
+- ✅ Testing complete: Health check, Strategies API, Allocations API all operational
+
+**Files Changed:**
+- Created: `services/portfolio_builder/main.py` (557 lines)
+- Created: `services/portfolio_builder/requirements.txt`
+- Created: `services/portfolio_builder/Dockerfile`
+- Modified: `frontend-admin/src/services/api.ts` (added portfolioBuilderClient)
+- Modified: `run_mvp_demo.sh` (added Step 4: PortfolioBuilderService)
+- Modified: `stop_mvp_demo.sh` (added cleanup for port 8003)
+
+**Note:** CerebroService refactoring (removing HTTP endpoints, extracting business logic) will be completed in next phase.
+
+---
+
+#### Original Plan (Completed Above)
 
 #### Current CerebroService Structure
 ```
@@ -1111,6 +1137,17 @@ Simplify `services/cerebro_service/main.py`:
       response = requests.get('http://localhost:8003/api/v1/allocations/current')
       return response.json()
   ```
+
+**IMPORTANT - Test Architecture Fix:**
+- **Problem:** Currently `test_cerebro_position_sizing_calculation` fails because importing from `main.py` triggers module-level Pub/Sub initialization (line 536), requiring GCP credentials
+- **Solution:** Extract business logic functions into separate modules without side effects:
+  - Create `services/cerebro_service/position_sizing.py` - Pure functions for position size calculations
+  - Create `services/cerebro_service/account_queries.py` - Pure functions for account data queries
+  - Move functions like `calculate_position_size()`, `get_account_state()` to these modules
+  - These modules should contain ONLY pure functions, NO module-level initialization
+  - Update `main.py` to import from these modules
+  - Update tests to import from `position_sizing.py` instead of `main.py`
+- **Benefit:** Enables proper unit testing without triggering service initialization (Pub/Sub, FastAPI, etc.)
 
 **2.5. Update frontend-admin**
 

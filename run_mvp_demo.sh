@@ -123,9 +123,21 @@ cd "$PROJECT_ROOT"
 
 sleep 2
 
+# Start PortfolioBuilderService
+echo ""
+echo -e "${YELLOW}Step 4: Starting PortfolioBuilderService (port 8003)...${NC}"
+cd "$PROJECT_ROOT/services/portfolio_builder"
+$VENV_PYTHON main.py > "$LOG_DIR/portfolio_builder.log" 2>&1 &
+PORTFOLIO_PID=$!
+echo $PORTFOLIO_PID > "$LOG_DIR/portfolio_builder.pid"
+echo "✓ PortfolioBuilderService started (PID: $PORTFOLIO_PID)"
+cd "$PROJECT_ROOT"
+
+sleep 2
+
 # Start CerebroService
 echo ""
-echo -e "${YELLOW}Step 4: Starting CerebroService...${NC}"
+echo -e "${YELLOW}Step 5: Starting CerebroService...${NC}"
 cd "$PROJECT_ROOT/services/cerebro_service"
 PUBSUB_EMULATOR_HOST=$PUBSUB_EMULATOR_HOST ACCOUNT_DATA_SERVICE_URL="http://localhost:8002" $VENV_PYTHON main.py > "$LOG_DIR/cerebro_service.log" 2>&1 &
 CEREBRO_PID=$!
@@ -137,7 +149,7 @@ sleep 2
 
 # Start ExecutionService
 echo ""
-echo -e "${YELLOW}Step 5: Starting ExecutionService...${NC}"
+echo -e "${YELLOW}Step 6: Starting ExecutionService...${NC}"
 cd "$PROJECT_ROOT/services/execution_service"
 PUBSUB_EMULATOR_HOST=$PUBSUB_EMULATOR_HOST $VENV_PYTHON main.py > "$LOG_DIR/execution_service.log" 2>&1 &
 EXECUTION_PID=$!
@@ -150,7 +162,7 @@ sleep 2
 
 # Start signal_collector
 echo ""
-echo -e "${YELLOW}Step 6: Starting signal_collector (staging mode)...${NC}"
+echo -e "${YELLOW}Step 7: Starting signal_collector (staging mode)...${NC}"
 PUBSUB_EMULATOR_HOST=$PUBSUB_EMULATOR_HOST $VENV_PYTHON signal_collector.py --staging > "$LOG_DIR/signal_collector.log" 2>&1 &
 COLLECTOR_PID=$!
 echo $COLLECTOR_PID > "$LOG_DIR/signal_collector.pid"
@@ -160,7 +172,7 @@ sleep 2
 
 # Start Admin Frontend
 echo ""
-echo -e "${YELLOW}Step 7: Starting Admin Frontend (port 5173)...${NC}"
+echo -e "${YELLOW}Step 8: Starting Admin Frontend (port 5173)...${NC}"
 cd "$PROJECT_ROOT/frontend-admin"
 
 # Check if node_modules exists
@@ -183,7 +195,8 @@ echo ""
 echo "Services:"
 echo "  • Pub/Sub Emulator: localhost:8085"
 echo "  • AccountDataService: http://localhost:8002"
-echo "  • CerebroService: http://localhost:8001"
+echo "  • PortfolioBuilderService: http://localhost:8003"
+echo "  • CerebroService: Background (consumes from Pub/Sub)"
 echo "  • ExecutionService: Background (consumes from Pub/Sub)"
 echo "  • signal_collector: Monitoring staging.mathematricks.fund"
 echo "  • Admin Frontend: http://localhost:5173"
@@ -194,6 +207,7 @@ echo "  Login: username=admin, password=admin"
 echo ""
 echo "Logs:"
 echo "  tail -f logs/signal_collector.log     # Signal collection"
+echo "  tail -f logs/portfolio_builder.log    # Strategy management & portfolio optimization"
 echo "  tail -f logs/cerebro_service.log      # Position sizing decisions"
 echo "  tail -f logs/execution_service.log    # Order execution"
 echo "  tail -f logs/frontend.log             # Frontend dev server"

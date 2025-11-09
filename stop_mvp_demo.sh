@@ -27,6 +27,11 @@ if [ -f "$LOG_DIR/cerebro_service.pid" ]; then
     rm "$LOG_DIR/cerebro_service.pid"
 fi
 
+if [ -f "$LOG_DIR/portfolio_builder.pid" ]; then
+    kill $(cat "$LOG_DIR/portfolio_builder.pid") 2>/dev/null && echo "✓ PortfolioBuilderService stopped"
+    rm "$LOG_DIR/portfolio_builder.pid"
+fi
+
 if [ -f "$LOG_DIR/account_data_service.pid" ]; then
     kill $(cat "$LOG_DIR/account_data_service.pid") 2>/dev/null && echo "✓ AccountDataService stopped"
     rm "$LOG_DIR/account_data_service.pid"
@@ -48,6 +53,7 @@ pkill -f "signal_collector.py" 2>/dev/null && echo "✓ Killed orphaned signal_c
 pkill -f "services/cerebro_service/main.py" 2>/dev/null && echo "✓ Killed orphaned cerebro_service processes"
 pkill -f "services/execution_service/main.py" 2>/dev/null && echo "✓ Killed orphaned execution_service processes"
 pkill -f "services/account_data_service/main.py" 2>/dev/null && echo "✓ Killed orphaned account_data_service processes"
+pkill -f "services/portfolio_builder/main.py" 2>/dev/null && echo "✓ Killed orphaned portfolio_builder processes"
 
 # Kill processes on known ports (only report if PIDs found)
 PIDS=$(lsof -ti:8001 2>/dev/null)
@@ -57,7 +63,7 @@ PIDS=$(lsof -ti:8002 2>/dev/null)
 [ -n "$PIDS" ] && kill $PIDS 2>/dev/null && echo "✓ Killed process on port 8002 (account_data)"
 
 PIDS=$(lsof -ti:8003 2>/dev/null)
-[ -n "$PIDS" ] && kill $PIDS 2>/dev/null && echo "✓ Killed process on port 8003 (execution)"
+[ -n "$PIDS" ] && kill $PIDS 2>/dev/null && echo "✓ Killed process on port 8003 (portfolio_builder)"
 
 PIDS=$(lsof -ti:8085 2>/dev/null)
 [ -n "$PIDS" ] && kill $PIDS 2>/dev/null && echo "✓ Killed process on port 8085 (pubsub)"
