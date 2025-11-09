@@ -1017,7 +1017,20 @@ run_mathematricks_trader.py # Legacy (DELETE in Phase 1)
 - Modified: `run_mvp_demo.sh` (added Step 4: PortfolioBuilderService)
 - Modified: `stop_mvp_demo.sh` (added cleanup for port 8003)
 
-**Note:** CerebroService refactoring (removing HTTP endpoints, extracting business logic) will be completed in next phase.
+**Note:** CerebroService refactoring (removing HTTP endpoints, extracting business logic) will be completed in Phase 3.5.
+
+**What Was Completed in Phase 2:**
+- ✅ Created PortfolioBuilderService (port 8003) with all HTTP APIs
+- ✅ Moved portfolio_constructor algorithms to portfolio_builder
+- ✅ Moved research tools to portfolio_builder
+- ✅ Updated frontend-admin to use PortfolioBuilder (port 8003)
+- ✅ Updated run_mvp_demo.sh to start PortfolioBuilder
+
+**What Remains for Phase 3.5:**
+- ❌ Remove HTTP endpoints from CerebroService (still has all FastAPI routes)
+- ❌ Extract business logic to testable modules (position_sizing.py, account_queries.py)
+- ❌ Simplify main.py from 2166 lines → ~600 lines (Pub/Sub only)
+- ❌ Fix test architecture (tests import from main.py, triggering Pub/Sub initialization)
 
 ---
 
@@ -1397,10 +1410,279 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ---
 
+### PHASE 3.5: Complete CerebroService Refactoring
+**Duration:** 1-2 days
+**Risk Level:** Medium (modifying core trading service)
+**Dependencies:** Phase 2, Phase 3 complete
+**Status:** IN PROGRESS
+
+#### Purpose
+Complete the CerebroService simplification that was started in Phase 2. Currently CerebroService still has all HTTP endpoints (2166 lines). This phase removes all HTTP routes and extracts business logic to testable modules.
+
+#### Architecture Decision (2025-11-09)
+**MongoDB-Centric State Management:**
+- All services write state to MongoDB collections (signals, decisions, orders, confirmations)
+- PortfolioBuilder API reads from MongoDB to provide signal status and activity
+- CerebroService: Pub/Sub only, NO HTTP endpoints
+- Strategy developers query signal status via PortfolioBuilder API → MongoDB
+
+This approach provides:
+- Single source of truth (MongoDB)
+- Clean separation of concerns
+- Proper event sourcing
+- Real-time status updates via MongoDB change streams (future)
+
+#### Current State
+```
+services/cerebro_service/main.py - 2166 lines
+  ├── FastAPI app with HTTP endpoints (lines 1-500)
+  ├── Pub/Sub subscriber for signals (lines 500-800)
+  ├── Position sizing logic (lines 800-1200)
+  ├── Account data queries (lines 1200-1600)
+  └── Business logic mixed with HTTP routes (lines 1600-2166)
+```
+
+**Problem:** Tests import from `main.py` which triggers module-level Pub/Sub initialization (line 536), requiring GCP credentials even for unit tests.
+
+#### Target State
+```
+services/cerebro_service/
+├── main.py (~600 lines, Pub/Sub ONLY)
+│   - Pub/Sub subscriber for signals
+│   - Orchestrates position sizing workflow
+│   - Writes decisions to MongoDB
+│   - Publishes orders to Pub/Sub
+├── position_sizing.py (NEW - pure functions)
+│   - calculate_position_size()
+│   - check_margin_limits()
+│   - validate_order_size()
+├── account_queries.py (NEW - pure functions)
+│   - get_account_state()
+│   - get_strategy_allocation()
+│   - calculate_available_margin()
+└── position_manager.py (existing)
+```
+
+#### Tasks
+
+**2.5.1. Extract Business Logic to Modules**
+```bash
+# Create position_sizing.py with pure functions
+touch services/cerebro_service/position_sizing.py
+```
+
+Extract these functions from `main.py` → `position_sizing.py`:
+- `calculate_position_size(signal, allocation, account_state, max_margin_pct)` → Pure function, no side effects
+- `check_margin_limits(current_margin, new_position_margin, max_margin_pct)` → Pure function
+- `validate_order_size(quantity, min_size, max_size)` → Pure function
+
+```bash
+# Create account_queries.py with pure functions
+touch services/cerebro_service/account_queries.py
+```
+
+Extract these functions from `main.py` → `account_queries.py`:
+- `get_account_state(account_data_service_url)` → HTTP client function
+- `get_strategy_allocation(portfolio_builder_url, strategy_id)` → HTTP client function
+- `calculate_available_margin(account_state, max_margin_pct)` → Pure calculation
+
+**Why?** These modules have NO module-level initialization, enabling clean unit testing.
+
+**2.5.2. Remove All HTTP Endpoints from CerebroService**
+
+Delete from `services/cerebro_service/main.py`:
+- `@app.get("/health")` - Move to PortfolioBuilder or AccountData
+- `@app.post("/api/v1/reload-allocations")` - Already in PortfolioBuilder
+- `@app.get("/api/v1/allocations")` - Already in PortfolioBuilder
+- `@app.get("/api/v1/strategies")` - Already in PortfolioBuilder
+- `@app.post("/api/v1/strategies")` - Already in PortfolioBuilder
+- `@app.put("/api/v1/strategies/{strategy_id}")` - Already in PortfolioBuilder
+- `@app.delete("/api/v1/strategies/{strategy_id}")` - Already in PortfolioBuilder
+- `@app.post("/api/v1/strategies/{strategy_id}/sync-backtest")` - Already in PortfolioBuilder
+- All other HTTP routes
+
+Remove these imports:
+```python
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+```
+
+**2.5.3. Simplify main.py to Pub/Sub Only**
+
+Update `main.py` structure:
+```python
+#!/usr/bin/env python3
+"""
+CerebroService - Position Sizing & Risk Management
+Consumes signals from Pub/Sub, calculates position sizes, publishes orders
+"""
+
+import os
+import logging
+from google.cloud import pubsub_v1
+from position_sizing import calculate_position_size, check_margin_limits
+from account_queries import get_account_state, get_strategy_allocation
+
+# MongoDB imports
+from pymongo import MongoClient
+
+# Setup logging
+logger = logging.getLogger('cerebro_service')
+
+class CerebroService:
+    def __init__(self):
+        self.pubsub_subscriber = pubsub_v1.SubscriberClient()
+        self.pubsub_publisher = pubsub_v1.PublisherClient()
+        self.mongo_client = MongoClient(os.getenv('MONGODB_URI'))
+        self.db = self.mongo_client['mathematricks_trading']
+
+    def process_signal(self, message):
+        """Process incoming signal and generate order"""
+        signal_data = json.loads(message.data)
+
+        # 1. Get account state
+        account_state = get_account_state(os.getenv('ACCOUNT_DATA_SERVICE_URL'))
+
+        # 2. Get strategy allocation
+        allocation = get_strategy_allocation(
+            os.getenv('PORTFOLIO_BUILDER_URL'),
+            signal_data['strategy_id']
+        )
+
+        # 3. Calculate position size
+        position_size, margin_required, decision = calculate_position_size(
+            signal_data, allocation, account_state, max_margin_pct=0.40
+        )
+
+        # 4. Write decision to MongoDB
+        self.db.cerebro_decisions.insert_one(decision)
+
+        # 5. If approved, publish order to Pub/Sub
+        if decision['approved']:
+            self.publish_order(decision['order'])
+
+        message.ack()
+
+    def start(self):
+        """Start Pub/Sub subscriber"""
+        subscription_path = self.pubsub_subscriber.subscription_path(
+            os.getenv('GCP_PROJECT_ID'), 'standardized-signals-sub'
+        )
+        streaming_pull_future = self.pubsub_subscriber.subscribe(
+            subscription_path, callback=self.process_signal
+        )
+        streaming_pull_future.result()
+
+if __name__ == "__main__":
+    service = CerebroService()
+    service.start()
+```
+
+**Target:** ~600 lines (down from 2166)
+
+**2.5.4. Update Tests**
+
+Update `tests/test_cerebro_position_sizing_calculation.py`:
+```python
+# OLD - triggers Pub/Sub initialization
+from services.cerebro_service.main import calculate_position_size
+
+# NEW - imports pure function, no side effects
+from services.cerebro_service.position_sizing import calculate_position_size
+```
+
+Run tests:
+```bash
+pytest tests/test_cerebro_position_sizing_calculation.py -v
+```
+
+**Expected:** All tests pass without requiring GCP credentials
+
+**2.5.5. Update run_mvp_demo.sh**
+
+Remove CerebroService HTTP port from documentation (no longer needs port 8001):
+```bash
+echo "Services:"
+echo "  • Pub/Sub Emulator: localhost:8085"
+echo "  • AccountDataService: http://localhost:8002"
+echo "  • PortfolioBuilderService: http://localhost:8003"
+echo "  • CerebroService: Background (Pub/Sub only, no HTTP)"  # ← UPDATE THIS
+echo "  • ExecutionService: Background (Pub/Sub only, no HTTP)"
+```
+
+**2.5.6. Testing**
+
+```bash
+# Start all services
+./run_mvp_demo.sh
+
+# Send test signal
+python signal_sender.py --ticker AAPL --action BUY --price 150.25
+
+# Check Cerebro processed signal (via logs)
+tail -f logs/cerebro_service.log
+# Should see:
+# "Processing signal: AAPL_20251109_143022_001"
+# "Querying allocation from PortfolioBuilder..."
+# "Position size: 100 shares, Margin: $15,000"
+# "Decision written to MongoDB: cerebro_decisions"
+# "Order published to Pub/Sub: trading-orders"
+
+# Check MongoDB for decision
+mongosh "mongodb+srv://..." --eval 'db.cerebro_decisions.find().limit(1)'
+
+# Check PortfolioBuilder still works (HTTP)
+curl http://localhost:8003/api/v1/strategies
+curl http://localhost:8003/api/v1/allocations/current
+
+# Verify CerebroService has no HTTP server
+curl http://localhost:8001/health
+# Expected: Connection refused (no server on port 8001)
+```
+
+**2.5.7. Git Commit**
+
+```bash
+git add -A
+git commit -m "Phase 2.5: Complete CerebroService refactoring - remove HTTP, extract business logic
+
+- Removed all FastAPI HTTP endpoints from CerebroService
+- Extracted business logic to testable modules:
+  - position_sizing.py (pure functions for calculations)
+  - account_queries.py (pure functions for data fetching)
+- Simplified main.py: 2166 lines → ~600 lines (Pub/Sub only)
+- Fixed test architecture: tests import from modules, not main.py
+- Updated run_mvp_demo.sh: Cerebro no longer has HTTP port
+- All state management via MongoDB (single source of truth)
+- PortfolioBuilder handles all HTTP APIs, reads from MongoDB
+
+CerebroService now: Pure event-driven signal processor
+Tests now: Can run without GCP credentials (no side effects)
+
+🤖 Generated with Claude Code
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+#### Expected Outcome
+- CerebroService: ~600 lines, Pub/Sub only, NO HTTP server
+- Business logic: Extracted to `position_sizing.py`, `account_queries.py` (testable)
+- Tests: Can run without GCP credentials
+- MongoDB: Single source of truth for all state
+- PortfolioBuilder: Handles all HTTP/API requests
+
+#### Risks & Mitigation
+- **Risk:** Breaking existing signal processing flow
+- **Mitigation:** Test thoroughly with signal_sender.py, verify logs show MongoDB writes
+- **Risk:** Tests may need significant updates
+- **Mitigation:** Update one test file at a time, verify each works
+
+---
+
 ### PHASE 4: Create DashboardCreatorService
 **Duration:** 4-5 days
 **Risk Level:** Low (new service, doesn't affect existing)
-**Dependencies:** Phase 3 complete
+**Dependencies:** Phase 3.5 complete
 
 #### Purpose
 Generate pre-computed dashboard JSONs for:
