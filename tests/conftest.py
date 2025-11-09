@@ -380,11 +380,14 @@ def ensure_services_running():
     """
     Session-level fixture that checks if required services are running.
     Fails fast if services are not available.
+
+    Note: After Phase 3.5, CerebroService no longer has HTTP endpoints.
+    It runs as a background Pub/Sub consumer, so we only check services with health endpoints.
     """
     import requests
 
     services = {
-        'CerebroService': 'http://localhost:8001/health',
+        # Phase 3.5: CerebroService no longer has HTTP/health endpoint (Pub/Sub consumer only)
         'AccountDataService': 'http://localhost:8002/health',
         'Pub/Sub Emulator': 'http://localhost:8085',
     }

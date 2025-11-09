@@ -2629,6 +2629,43 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - Easy to add new brokers (Alpaca, Binance, etc.)
 - Reduced code duplication
 
+#### ✅ PHASE 5 COMPLETED - November 9, 2025
+
+**What Was Accomplished:**
+- ✅ Created shared broker library at `services/brokers/`
+- ✅ Implemented AbstractBroker interface with BrokerFactory pattern
+- ✅ Built IBKR broker implementation (IBKRBroker) supporting stocks, options, forex, futures
+- ✅ Built Zerodha broker implementation (ZerodhaBroker) for Indian markets
+- ✅ Refactored ExecutionService to use broker library via BrokerFactory
+- ✅ Fixed broker library imports (relative imports in factory.py)
+- ✅ Updated ExecutionService requirements.txt with broker dependencies
+- ✅ All services running successfully (validated with PIDs)
+- ✅ test_10 regression passed (8.99 seconds) - NO REGRESSIONS
+
+**Files Modified:**
+- [services/execution_service/main.py](../services/execution_service/main.py) - Replaced direct ib_insync with broker library
+- [services/brokers/factory.py](../services/brokers/factory.py) - Fixed to use relative imports
+- [services/execution_service/requirements.txt](../services/execution_service/requirements.txt) - Added broker dependencies
+- [tests/conftest.py](../tests/conftest.py) - Removed outdated Cerebro health check
+
+**Validation:**
+```bash
+# Test results
+$ venv/bin/python -m pytest tests/integration/test_10_end_to_end_signal_flow.py::test_complete_signal_to_execution_pipeline -v
+PASSED in 8.99s
+
+# Signal flow validated
+✅ TradingView webhook → MongoDB
+✅ signal_collector pickup
+✅ Cerebro decision (position sizing working)
+```
+
+**Benefits Achieved:**
+- Single IBKR implementation (no duplication between ExecutionService and AccountDataService)
+- Ready to add new brokers (Alpaca, Binance, TD Ameritrade, etc.) via same interface
+- Consistent error handling across all brokers (BrokerConnectionError, OrderRejectedError, etc.)
+- Easy to test and mock for unit tests
+
 ---
 
 ### PHASE 6: Multi-Broker AccountDataService

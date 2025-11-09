@@ -3,6 +3,7 @@ Execution Service - MVP
 Connects to IBKR broker, executes orders, and reports back execution confirmations and account state.
 """
 import os
+import sys
 import logging
 import json
 from datetime import datetime
@@ -13,7 +14,20 @@ from dotenv import load_dotenv
 import threading
 import time
 import queue
-from ib_insync import IB, Stock, Option, Forex, Future, Order, MarketOrder, LimitOrder, ComboLeg, util
+
+# Add services directory to path so we can import brokers package
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+SERVICES_PATH = os.path.join(PROJECT_ROOT, 'services')
+sys.path.insert(0, SERVICES_PATH)
+
+# Import broker library
+from brokers import BrokerFactory, OrderSide, OrderType, OrderStatus
+from brokers.exceptions import (
+    BrokerConnectionError,
+    OrderRejectedError,
+    BrokerAPIError,
+    InvalidSymbolError
+)
 
 # Load environment variables
 load_dotenv('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/.env')
@@ -67,21 +81,30 @@ order_commands_subscription = subscriber.subscription_path(project_id, 'order-co
 execution_confirmations_topic = publisher.topic_path(project_id, 'execution-confirmations')
 account_updates_topic = publisher.topic_path(project_id, 'account-updates')
 
-# Initialize IBKR connection
-ib = IB()
-
 # IBKR Configuration
 IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
 IBKR_PORT = int(os.getenv('IBKR_PORT', '7497'))  # 7497 for TWS, 4002 for IB Gateway
 IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', '1'))
 
+# Initialize broker using BrokerFactory
+broker_config = {
+    "broker": "IBKR",
+    "host": IBKR_HOST,
+    "port": IBKR_PORT,
+    "client_id": IBKR_CLIENT_ID,
+    "account_id": os.getenv('IBKR_ACCOUNT_ID', 'IBKR_Main')
+}
+
+broker = BrokerFactory.create_broker(broker_config)
+logger.info(f"Broker created: {broker.broker_name}")
+
 # Order queue for threading safety
-# Pub/Sub callbacks run in thread pool, but ib_insync needs main thread's event loop
+# Pub/Sub callbacks run in thread pool, orders are processed in main thread
 order_queue = queue.Queue()
 command_queue = queue.Queue()  # For cancel commands and other order management
 
 # Track active IBKR orders by order_id for cancellation
-active_ibkr_orders = {}  # {order_id: ib_insync.Trade}
+active_ibkr_orders = {}  # {order_id: broker_order_id}
 
 # 🚨 CRITICAL FAILSAFE: Track processed signal IDs to prevent duplicate execution
 processed_signal_ids = set()  # In-memory deduplication
@@ -90,332 +113,74 @@ SIGNAL_ID_EXPIRY_HOURS = 24  # Keep signal IDs for 24 hours
 
 def connect_to_ibkr():
     """
-    Connect to Interactive Brokers
+    Connect to Interactive Brokers using broker library
     """
     try:
-        if not ib.isConnected():
+        if not broker.is_connected():
             logger.info(f"Connecting to IBKR at {IBKR_HOST}:{IBKR_PORT}")
-            ib.connect(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
-            logger.info("Connected to IBKR successfully")
-            return True
+            success = broker.connect()
+            if success:
+                logger.info("Connected to IBKR successfully")
+                return True
+            else:
+                logger.error("Failed to connect to IBKR")
+                return False
         return True
-    except Exception as e:
-        logger.error(f"Failed to connect to IBKR: {str(e)}")
+    except BrokerConnectionError as e:
+        logger.error(f"Broker connection error: {str(e)}")
         return False
-
-
-def create_contracts_from_order(order_data: Dict[str, Any]) -> list:
-    """
-    Create IBKR contracts from order data - supports multi-asset and multi-leg
-
-    Returns:
-        List of dicts: [{'contract': Contract, 'action': 'BUY'/'SELL', 'quantity': int, 'ratio': int}, ...]
-
-    Raises:
-        ValueError: If required fields missing or invalid
-    """
-    instrument = order_data.get('instrument', '').strip() if order_data.get('instrument') else ''
-    instrument_type = (order_data.get('instrument_type') or '').upper()
-
-    # Validation: instrument_type is REQUIRED
-    if not instrument_type:
-        raise ValueError("REJECTED: Missing required field 'instrument_type'. Must be STOCK, OPTION, FOREX, or FUTURE")
-
-    if instrument_type not in ['STOCK', 'OPTION', 'FOREX', 'FUTURE']:
-        raise ValueError(f"REJECTED: Invalid instrument_type '{instrument_type}'. Must be STOCK, OPTION, FOREX, or FUTURE")
-
-    logger.info(f"🔍 create_contracts_from_order called | Type: {instrument_type} | Instrument: {instrument}")
-
-    contracts_list = []
-
-    if instrument_type == 'STOCK':
-        # Stock contract
-        if not instrument:
-            raise ValueError("REJECTED: Missing 'instrument' field for STOCK type")
-
-        contract = Stock(symbol=instrument, exchange='SMART', currency='USD')
-        contracts_list.append({
-            'contract': contract,
-            'action': order_data.get('action', 'ENTRY').upper(),
-            'quantity': order_data.get('quantity', 0),
-            'ratio': 1
-        })
-        logger.info(f"✅ Created STOCK contract: {contract}")
-
-    elif instrument_type == 'OPTION':
-        # Option contract(s) - supports multi-leg
-        legs = order_data.get('legs')
-        if not legs or not isinstance(legs, list):
-            raise ValueError("REJECTED: OPTION type requires 'legs' field as list")
-
-        underlying = order_data.get('underlying', '').strip()
-        if not underlying:
-            raise ValueError("REJECTED: OPTION type requires 'underlying' field")
-
-        for i, leg in enumerate(legs, 1):
-            # Validate required fields per leg
-            required_fields = ['strike', 'expiry', 'right', 'action', 'quantity']
-            missing = [f for f in required_fields if f not in leg]
-            if missing:
-                raise ValueError(f"REJECTED: Option leg {i} missing required fields: {missing}")
-
-            # Validate right field
-            if leg['right'].upper() not in ['C', 'P', 'CALL', 'PUT']:
-                raise ValueError(f"REJECTED: Option leg {i} invalid 'right' field: {leg['right']}. Must be C/P or CALL/PUT")
-
-            right = leg['right'].upper()
-            if right == 'CALL':
-                right = 'C'
-            elif right == 'PUT':
-                right = 'P'
-
-            contract = Option(
-                symbol=underlying,
-                lastTradeDateOrContractMonth=str(leg['expiry']),
-                strike=float(leg['strike']),
-                right=right,
-                exchange='SMART'
-            )
-
-            contracts_list.append({
-                'contract': contract,
-                'action': leg['action'].upper(),
-                'quantity': int(leg['quantity']),
-                'ratio': leg.get('ratio', 1)
-            })
-            logger.info(f"✅ Created OPTION contract leg {i}: {underlying} {leg['strike']}{right} exp {leg['expiry']}")
-
-    elif instrument_type == 'FOREX':
-        # Forex contract
-        if not instrument:
-            raise ValueError("REJECTED: Missing 'instrument' field for FOREX type")
-
-        # Instrument should be currency pair like EURUSD
-        if len(instrument) != 6:
-            raise ValueError(f"REJECTED: FOREX instrument must be 6-character currency pair (e.g. EURUSD), got: {instrument}")
-
-        contract = Forex(pair=instrument, exchange='IDEALPRO')
-        contracts_list.append({
-            'contract': contract,
-            'action': order_data.get('action', 'ENTRY').upper(),
-            'quantity': order_data.get('quantity', 0),
-            'ratio': 1
-        })
-        logger.info(f"✅ Created FOREX contract: {contract}")
-
-    elif instrument_type == 'FUTURE':
-        # Future contract
-        if not instrument:
-            raise ValueError("REJECTED: Missing 'instrument' field for FUTURE type")
-
-        expiry = order_data.get('expiry', '').strip()
-        if not expiry:
-            raise ValueError("REJECTED: FUTURE type requires 'expiry' field (YYYYMMDD format)")
-
-        exchange = order_data.get('exchange', 'NYMEX').upper()
-
-        contract = Future(
-            symbol=instrument,
-            lastTradeDateOrContractMonth=expiry,
-            exchange=exchange
-        )
-        contracts_list.append({
-            'contract': contract,
-            'action': order_data.get('action', 'ENTRY').upper(),
-            'quantity': order_data.get('quantity', 0),
-            'ratio': 1
-        })
-        logger.info(f"✅ Created FUTURE contract: {instrument} exp {expiry} on {exchange}")
-
-    logger.info(f"🔍 Created {len(contracts_list)} contract(s)")
-    return contracts_list
-
-
-def create_order(order_data: Dict[str, Any]) -> Order:
-    """
-    Create IBKR order from order data
-    """
-    order_type = order_data.get('order_type', 'MARKET').upper()
-    direction = order_data.get('direction', 'LONG').upper()
-    action = order_data.get('action', 'ENTRY').upper()
-    quantity = order_data.get('quantity', 0)
-    price = order_data.get('price', 0)
-
-    # Round quantity to whole number (IBKR API doesn't support fractional shares for most instruments)
-    # Full implementation would check if instrument supports fractional trading
-    quantity = int(round(quantity))
-
-    if quantity == 0:
-        logger.warning(f"Quantity rounded to 0 from {order_data.get('quantity')}, setting to 1")
-        quantity = 1
-
-    # Determine BUY/SELL action
-    if action == 'ENTRY':
-        ib_action = 'BUY' if direction == 'LONG' else 'SELL'
-    else:  # EXIT
-        ib_action = 'SELL' if direction == 'LONG' else 'BUY'
-
-    # Create order based on type
-    if order_type == 'MARKET':
-        order = MarketOrder(ib_action, quantity)
-    elif order_type == 'LIMIT':
-        order = LimitOrder(ib_action, quantity, price)
-    else:
-        # Default to market order
-        order = MarketOrder(ib_action, quantity)
-
-    # Add stop loss and take profit if provided
-    # This would be more sophisticated in full implementation
-    return order
+    except Exception as e:
+        logger.error(f"Unexpected error connecting to IBKR: {str(e)}")
+        return False
 
 
 def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Submit order(s) to IBKR - handles single and multi-leg orders
+    Submit order to broker using broker library
 
-    For multi-leg orders (e.g., iron condor), submits each leg separately and aggregates results.
+    Uses the AbstractBroker interface for placing orders.
     """
     try:
-        if not ib.isConnected():
+        if not broker.is_connected():
             if not connect_to_ibkr():
                 return None
 
-        # Create contracts from order data (may return multiple for options)
-        try:
-            contracts_list = create_contracts_from_order(order_data)
-        except ValueError as ve:
-            # Validation error - reject immediately with clear message
-            logger.error(f"❌ Order {order_data.get('order_id')} validation failed: {str(ve)}")
+        logger.info(f"📋 Submitting order {order_data.get('order_id')} via broker library")
+
+        # Use broker library's place_order method
+        # The broker library handles all contract creation, qualification, and submission
+        result = broker.place_order(order_data)
+
+        if not result:
+            logger.error(f"❌ Broker rejected order {order_data.get('order_id')}")
             return None
-
-        if not contracts_list:
-            logger.error(f"❌ No contracts created for order {order_data.get('order_id')}")
-            return None
-
-        logger.info(f"📋 Processing {len(contracts_list)} leg(s) for order {order_data.get('order_id')}")
-
-        # For multi-leg, we'll submit each leg separately
-        # In production, complex spreads should use ComboOrder, but for MVP we keep it simple
-        trades = []
-        all_qualified = True
-
-        for i, contract_item in enumerate(contracts_list, 1):
-            contract = contract_item['contract']
-            leg_action = contract_item['action']
-            leg_quantity = contract_item['quantity']
-
-            logger.info(f"🔍 Qualifying leg {i}/{len(contracts_list)} with IBKR...")
-            qualified_contracts = ib.qualifyContracts(contract)
-
-            if not qualified_contracts:
-                logger.error(f"❌ Failed to qualify contract leg {i}: {contract}")
-                all_qualified = False
-                continue
-
-            qualified_contract = qualified_contracts[0]
-            logger.info(f"✅ Contract leg {i} qualified: {qualified_contract}")
-
-            # Determine BUY/SELL based on leg action and original direction
-            # For options, leg action is explicit (from legs array)
-            # For stock/forex/futures, use original order direction
-            instrument_type = order_data.get('instrument_type', 'STOCK').upper()
-
-            if instrument_type == 'OPTION':
-                # Use explicit leg action
-                ib_action = leg_action
-            else:
-                # Single-leg: derive from action field
-                # Action can be: BUY, SELL, ENTRY, or EXIT
-                action = order_data.get('action', '').upper()
-                direction = order_data.get('direction', 'LONG').upper()
-
-                # If action is explicitly BUY or SELL, use it directly
-                if action in ['BUY', 'SELL']:
-                    ib_action = action
-                # Otherwise, derive from ENTRY/EXIT and direction
-                elif action == 'ENTRY':
-                    ib_action = 'BUY' if direction == 'LONG' else 'SELL'
-                elif action == 'EXIT':
-                    ib_action = 'SELL' if direction == 'LONG' else 'BUY'
-                else:
-                    # Fallback: assume ENTRY behavior
-                    logger.warning(f"Unknown action '{action}', defaulting to ENTRY behavior")
-                    ib_action = 'BUY' if direction == 'LONG' else 'SELL'
-
-            # Create order for this leg
-            order_type = order_data.get('order_type', 'MARKET').upper()
-            price = order_data.get('price', 0)
-
-            # Round quantity to whole number
-            leg_quantity = int(round(leg_quantity))
-            if leg_quantity == 0:
-                leg_quantity = 1
-
-            if order_type == 'MARKET':
-                order = MarketOrder(ib_action, leg_quantity)
-            elif order_type == 'LIMIT':
-                order = LimitOrder(ib_action, leg_quantity, price)
-            else:
-                order = MarketOrder(ib_action, leg_quantity)
-
-            # Place order for this leg
-            logger.info(f"📤 Placing leg {i}: {ib_action} {leg_quantity} {qualified_contract.symbol}")
-            trade = ib.placeOrder(qualified_contract, order)
-            trades.append(trade)
-
-        if not all_qualified:
-            logger.error(f"❌ Some contracts failed qualification for order {order_data.get('order_id')}")
-            return None
-
-        # Wait for all legs to be processed
-        ib.sleep(2)
-
-        # Aggregate results from all legs
-        all_statuses = []
-        total_filled = 0
-        rejected_count = 0
-
-        for i, trade in enumerate(trades, 1):
-            status = trade.orderStatus.status
-            filled = trade.orderStatus.filled
-            all_statuses.append(status)
-            total_filled += filled
-
-            if status in ['Cancelled', 'ApiCancelled', 'PendingCancel', 'Inactive']:
-                logger.error(f"❌ Leg {i} was REJECTED by IBKR: {status}")
-                logger.error(f"   Trade log: {trade.log}")
-                rejected_count += 1
-            else:
-                logger.info(f"✅ Leg {i} submitted - Status: {status}, Filled: {filled}")
-
-        if rejected_count > 0:
-            logger.error(f"❌ Order {order_data.get('order_id')} - {rejected_count}/{len(trades)} legs rejected")
-            return None
-
-        # Determine overall status
-        # If all legs same status, use that; otherwise use "Mixed"
-        unique_statuses = set(all_statuses)
-        if len(unique_statuses) == 1:
-            overall_status = all_statuses[0]
-        else:
-            overall_status = "Mixed"
-
-        logger.info(f"✅ Order {order_data.get('order_id')} submitted - {len(trades)} leg(s), Overall Status: {overall_status}")
 
         # Track active orders for cancellation
         order_id = order_data['order_id']
-        active_ibkr_orders[order_id] = trades  # Store all trade objects for this order
+        broker_order_id = result.get('broker_order_id')
+        active_ibkr_orders[order_id] = broker_order_id
+
+        logger.info(f"✅ Order {order_data.get('order_id')} submitted - Broker Order ID: {broker_order_id}, Status: {result.get('status')}")
 
         return {
             "order_id": order_data['order_id'],
-            "ib_order_id": trades[0].order.orderId if trades else None,  # Return first leg's order ID
-            "status": overall_status,
-            "filled": total_filled,
-            "remaining": sum(t.orderStatus.remaining for t in trades),
-            "avg_fill_price": trades[0].orderStatus.avgFillPrice if trades else 0,
-            "num_legs": len(trades)
+            "ib_order_id": broker_order_id,
+            "status": result.get('status'),
+            "filled": 0,  # Will be updated when order fills
+            "remaining": order_data.get('quantity', 0),
+            "avg_fill_price": 0,
+            "num_legs": 1
         }
 
+    except OrderRejectedError as e:
+        logger.error(f"❌ Order {order_data.get('order_id')} rejected: {e.rejection_reason}")
+        return None
+    except InvalidSymbolError as e:
+        logger.error(f"❌ Invalid symbol in order {order_data.get('order_id')}: {str(e)}")
+        return None
+    except BrokerAPIError as e:
+        logger.error(f"❌ Broker API error for order {order_data.get('order_id')}: {e.error_code} - {str(e)}")
+        return None
     except Exception as e:
         logger.error(f"Error submitting order {order_data.get('order_id')}: {str(e)}", exc_info=True)
         return None
@@ -545,71 +310,36 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
 
 def get_account_state() -> Dict[str, Any]:
     """
-    Get current account state from IBKR
+    Get current account state using broker library
     """
     try:
-        if not ib.isConnected():
+        if not broker.is_connected():
             if not connect_to_ibkr():
                 return {}
 
-        # Get account summary
-        account_values = ib.accountSummary()
+        # Get account balance using broker library
+        balance = broker.get_account_balance()
 
-        # Extract key metrics
-        equity = 0
-        cash_balance = 0
-        margin_used = 0
-        margin_available = 0
+        # Get open positions
+        positions = broker.get_open_positions()
 
-        for value in account_values:
-            if value.tag == 'NetLiquidation':
-                equity = float(value.value)
-            elif value.tag == 'TotalCashValue':
-                cash_balance = float(value.value)
-            elif value.tag == 'MaintMarginReq':
-                margin_used = float(value.value)
-            elif value.tag == 'AvailableFunds':
-                margin_available = float(value.value)
+        # Get margin info
+        margin_info = broker.get_margin_info()
 
-        # Get positions
-        positions = ib.positions()
-        open_positions = []
-
-        for pos in positions:
-            open_positions.append({
-                "instrument": pos.contract.symbol,
-                "quantity": pos.position,
-                "entry_price": pos.avgCost,
-                "current_price": 0,  # Would need market data subscription
-                "unrealized_pnl": 0,
-                "margin_required": 0
-            })
-
-        # Get open orders (use openTrades() for Trade objects, not openOrders())
-        open_trades = ib.openTrades()
-        orders_list = []
-
-        for trade in open_trades:
-            orders_list.append({
-                "order_id": str(trade.order.orderId),
-                "instrument": trade.contract.symbol,
-                "side": trade.order.action,
-                "quantity": trade.order.totalQuantity,
-                "order_type": trade.order.orderType,
-                "price": getattr(trade.order, 'lmtPrice', 0)
-            })
+        # Get open orders
+        open_orders = broker.get_open_orders()
 
         return {
             "account": "IBKR_Main",
             "timestamp": datetime.utcnow(),
-            "equity": equity,
-            "cash_balance": cash_balance,
-            "margin_used": margin_used,
-            "margin_available": margin_available,
-            "unrealized_pnl": 0,  # Calculate from positions
+            "equity": balance.get('equity', 0),
+            "cash_balance": balance.get('cash', 0),
+            "margin_used": margin_info.get('margin_used', 0),
+            "margin_available": margin_info.get('margin_available', 0),
+            "unrealized_pnl": balance.get('unrealized_pnl', 0),
             "realized_pnl": 0,  # Track from executions
-            "open_positions": open_positions,
-            "open_orders": orders_list
+            "open_positions": positions,
+            "open_orders": open_orders
         }
 
     except Exception as e:
@@ -619,7 +349,7 @@ def get_account_state() -> Dict[str, Any]:
 
 def cancel_order(order_id: str) -> bool:
     """
-    Cancel an active order by order_id
+    Cancel an active order by order_id using broker library
     Returns True if successfully cancelled, False otherwise
     """
     try:
@@ -627,35 +357,20 @@ def cancel_order(order_id: str) -> bool:
             logger.warning(f"⚠️ Cannot cancel order {order_id} - not found in active orders")
             return False
 
-        trades = active_ibkr_orders[order_id]
-        logger.info(f"🚫 Cancelling order {order_id} ({len(trades)} leg(s))...")
+        broker_order_id = active_ibkr_orders[order_id]
+        logger.info(f"🚫 Cancelling order {order_id} (broker order ID: {broker_order_id})...")
 
-        # Cancel all legs of the order
-        cancelled_count = 0
-        for i, trade in enumerate(trades, 1):
-            try:
-                # Check if order is still cancellable
-                status = trade.orderStatus.status
-                if status in ['Filled', 'Cancelled', 'ApiCancelled', 'Inactive']:
-                    logger.info(f"   Leg {i} already {status} - skipping")
-                    continue
+        # Use broker library to cancel order
+        success = broker.cancel_order(broker_order_id)
 
-                # Cancel the order
-                ib.cancelOrder(trade.order)
-                cancelled_count += 1
-                logger.info(f"   ✓ Cancelled leg {i}")
-
-            except Exception as e:
-                logger.error(f"   ✗ Error cancelling leg {i}: {e}")
-
-        # Wait briefly for cancellation to process
-        ib.sleep(0.5)
-
-        # Remove from tracking
-        del active_ibkr_orders[order_id]
-        logger.info(f"✅ Order {order_id} cancelled ({cancelled_count}/{len(trades)} legs)")
-
-        return cancelled_count > 0
+        if success:
+            # Remove from tracking
+            del active_ibkr_orders[order_id]
+            logger.info(f"✅ Order {order_id} cancelled successfully")
+            return True
+        else:
+            logger.warning(f"⚠️ Failed to cancel order {order_id}")
+            return False
 
     except Exception as e:
         logger.error(f"Error cancelling order {order_id}: {e}", exc_info=True)
@@ -927,7 +642,7 @@ if __name__ == "__main__":
     commands_subscriber_thread.start()
     logger.info("Order commands subscriber started in background thread")
 
-    # Main loop: process orders AND commands from queues in main thread where IBKR event loop is available
+    # Main loop: process orders AND commands from queues in main thread
     logger.info("Main thread ready to process orders and commands from queues")
     try:
         while True:
@@ -945,8 +660,8 @@ if __name__ == "__main__":
             except queue.Empty:
                 pass
 
-            # Let IBKR process events
-            ib.sleep(0.1)
+            # Small sleep to prevent CPU spinning
+            time.sleep(0.1)
     except KeyboardInterrupt:
         logger.info("Shutting down Execution Service")
-        ib.disconnect()
+        broker.disconnect()
