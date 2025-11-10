@@ -95,8 +95,8 @@ class WebhookSignalCollector:
             # Test connection
             self.mongodb_client.admin.command('ping')
 
-            # Get collection
-            db = self.mongodb_client['mathematricks_signals']
+            # Get collection (Phase 7: Consolidated into mathematricks_trading)
+            db = self.mongodb_client['mathematricks_trading']
             self.mongodb_collection = db['trading_signals']
 
             logger.info("✅ Connected to MongoDB Atlas")
