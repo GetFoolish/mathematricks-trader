@@ -1,9 +1,11 @@
 """
-Account Data Service - MVP
+Account Data Service - Multi-Broker Support
 Centralizes and reconciles real-time account state from brokers.
 Provides REST API for CerebroService to query account/margin status.
+Supports multiple brokers and accounts with fund-level aggregation.
 """
 import os
+import sys
 import logging
 import json
 from datetime import datetime
@@ -17,11 +19,20 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 import threading
 import requests
+import time
 
 # Load environment variables
 # Use relative path from project root
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 load_dotenv(os.path.join(PROJECT_ROOT, '.env'))
+
+# Add services directory to path so we can import brokers package
+SERVICES_PATH = os.path.join(PROJECT_ROOT, 'services')
+sys.path.insert(0, SERVICES_PATH)
+
+# Import broker library
+from brokers import BrokerFactory
+from brokers.exceptions import BrokerConnectionError, BrokerAPIError
 
 # Configure logging
 LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
@@ -70,8 +81,15 @@ portfolio_optimization_runs_collection = db['portfolio_optimization_runs']
 strategy_configurations_collection = db['strategy_configurations']
 strategy_backtest_data_collection = db['strategy_backtest_data']
 
+# Phase 6: Multi-broker support collections
+account_hierarchy_collection = db['account_hierarchy']
+fund_state_collection = db['fund_state']
+
 # In-memory cache of current account state
 account_state_cache: Dict[str, Dict[str, Any]] = {}
+
+# Broker registry: {broker_id: broker_instance}
+broker_registry: Dict[str, Any] = {}
 
 # Initialize Google Cloud Pub/Sub Subscriber
 project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
@@ -162,6 +180,146 @@ async def sync_account_with_broker(account_name: str):
 
     except Exception as e:
         logger.error(f"Error syncing account {account_name}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# PHASE 6: MULTI-BROKER FUND-LEVEL APIs
+# ============================================================================
+
+@app.get("/api/v1/fund/state")
+async def get_fund_state():
+    """
+    Get latest fund-level state (aggregated across all accounts and brokers)
+    Used by frontend dashboard and CerebroService for fund-level decisions
+    """
+    try:
+        # Get latest fund state from database
+        latest_fund_state = fund_state_collection.find_one(
+            {},
+            sort=[("timestamp", -1)]
+        )
+
+        if not latest_fund_state:
+            # If no fund state exists yet, try to calculate it from account states
+            logger.info("No fund state found, attempting to calculate from account states")
+
+            # Get all latest account states
+            account_states = []
+            for account_id in account_state_cache.keys():
+                account_states.append(account_state_cache[account_id])
+
+            if account_states:
+                calculate_fund_state(account_states)
+                # Retry fetching
+                latest_fund_state = fund_state_collection.find_one(
+                    {},
+                    sort=[("timestamp", -1)]
+                )
+
+        if not latest_fund_state:
+            raise HTTPException(status_code=404, detail="No fund state available")
+
+        # Remove MongoDB _id
+        latest_fund_state.pop('_id', None)
+
+        return {
+            "status": "success",
+            "fund_state": latest_fund_state
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching fund state: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/brokers")
+async def list_brokers():
+    """
+    List all brokers from account_hierarchy
+    Used by frontend to display broker information
+    """
+    try:
+        hierarchy = account_hierarchy_collection.find_one({"_id": "mathematricks_fund"})
+
+        if not hierarchy:
+            return {"brokers": []}
+
+        # Return brokers list
+        brokers = []
+        for broker_config in hierarchy['brokers']:
+            brokers.append({
+                "broker_id": broker_config['broker_id'],
+                "broker_name": broker_config['broker_name'],
+                "num_accounts": len(broker_config['accounts']),
+                "status": "CONNECTED" if broker_config['broker_id'] in broker_registry else "DISCONNECTED"
+            })
+
+        return {
+            "status": "success",
+            "brokers": brokers,
+            "fund_name": hierarchy.get('fund_name', 'Mathematricks Capital')
+        }
+
+    except Exception as e:
+        logger.error(f"Error listing brokers: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/brokers/{broker_id}/accounts")
+async def list_broker_accounts(broker_id: str):
+    """
+    List all accounts for a specific broker
+    Used by frontend to drill down into broker details
+    """
+    try:
+        hierarchy = account_hierarchy_collection.find_one({"_id": "mathematricks_fund"})
+
+        if not hierarchy:
+            raise HTTPException(status_code=404, detail="Account hierarchy not found")
+
+        # Find the broker
+        broker = next((b for b in hierarchy["brokers"] if b["broker_id"] == broker_id), None)
+
+        if not broker:
+            raise HTTPException(status_code=404, detail=f"Broker {broker_id} not found")
+
+        # Get latest state for each account
+        accounts_with_state = []
+        for account_config in broker["accounts"]:
+            account_id = account_config["account_id"]
+
+            # Get latest account state
+            latest_state = account_state_collection.find_one(
+                {"account_id": account_id, "broker_id": broker_id},
+                sort=[("timestamp", -1)]
+            )
+
+            account_data = {
+                "account_id": account_id,
+                "account_type": account_config.get("account_type"),
+                "status": account_config.get("status"),
+                "description": account_config.get("description"),
+                "equity": latest_state.get('equity', 0) if latest_state else 0,
+                "margin_used": latest_state.get('margin_used', 0) if latest_state else 0,
+                "last_updated": latest_state.get('timestamp') if latest_state else None
+            }
+
+            accounts_with_state.append(account_data)
+
+        return {
+            "status": "success",
+            "broker_id": broker_id,
+            "broker_name": broker["broker_name"],
+            "accounts": accounts_with_state
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing accounts for broker {broker_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1281,16 +1439,19 @@ def account_updates_callback(message):
     """
     Callback for account updates from Pub/Sub
     Updates account state from broker data
+    Phase 6: Now includes broker_id for multi-broker support
     """
     try:
         data = json.loads(message.data.decode('utf-8'))
-        logger.info(f"Received account update for {data.get('account')}")
-
         account_name = data.get('account')
+        broker_id = data.get('broker_id', 'IBKR')  # Default to IBKR for backward compatibility
 
-        # Store in database
+        logger.info(f"Received account update for {broker_id}/{account_name}")
+
+        # Store in database with broker_id
         account_state_collection.insert_one({
             **data,
+            "broker_id": broker_id,  # Ensure broker_id is stored
             "timestamp": datetime.utcnow(),
             "created_at": datetime.utcnow()
         })
@@ -1323,6 +1484,219 @@ def update_account_state_from_execution(execution_data: Dict[str, Any]):
         # 4. Update cash_balance
 
         # For MVP, we rely on periodic account updates from broker
+
+
+# ============================================================================
+# PHASE 6: MULTI-BROKER ACCOUNT POLLING
+# ============================================================================
+
+def initialize_broker_connections():
+    """
+    Initialize broker connections from account_hierarchy
+    Creates broker instances and stores in broker_registry
+    """
+    try:
+        hierarchy = account_hierarchy_collection.find_one({"_id": "mathematricks_fund"})
+        if not hierarchy:
+            logger.warning("No account hierarchy found - skipping broker initialization")
+            return
+
+        logger.info(f"Initializing {len(hierarchy['brokers'])} broker connection(s)...")
+
+        for broker_config in hierarchy['brokers']:
+            broker_id = broker_config['broker_id']
+
+            try:
+                # Create broker configuration for BrokerFactory
+                connection = broker_config['connection']
+
+                if broker_id == "IBKR":
+                    config = {
+                        "broker": "IBKR",
+                        "host": connection.get('host', '127.0.0.1'),
+                        "port": connection.get('port', 7497),
+                        "client_id": connection.get('client_id', 100),  # Different from ExecutionService
+                        "account_id": broker_config['accounts'][0]['account_id'] if broker_config['accounts'] else None
+                    }
+                else:
+                    logger.warning(f"Broker {broker_id} not yet supported in AccountDataService")
+                    continue
+
+                # Create broker instance
+                broker = BrokerFactory.create_broker(config)
+
+                # Connect to broker
+                if broker.connect():
+                    broker_registry[broker_id] = broker
+                    logger.info(f"✅ Connected to {broker_id} broker")
+                else:
+                    logger.error(f"❌ Failed to connect to {broker_id} broker")
+
+            except Exception as e:
+                logger.error(f"Error initializing {broker_id} broker: {e}", exc_info=True)
+
+        logger.info(f"Broker initialization complete: {len(broker_registry)} broker(s) connected")
+
+    except Exception as e:
+        logger.error(f"Error in initialize_broker_connections: {e}", exc_info=True)
+
+
+def poll_all_accounts():
+    """
+    Poll all accounts from account_hierarchy
+    Updates account_state collection with latest data from brokers
+    """
+    try:
+        hierarchy = account_hierarchy_collection.find_one({"_id": "mathematricks_fund"})
+        if not hierarchy:
+            logger.warning("No account hierarchy found")
+            return
+
+        all_accounts = []
+
+        for broker_config in hierarchy['brokers']:
+            broker_id = broker_config['broker_id']
+            broker = broker_registry.get(broker_id)
+
+            if not broker:
+                logger.warning(f"No broker instance for {broker_id} - skipping")
+                continue
+
+            # Ensure broker is connected
+            if not broker.is_connected():
+                logger.info(f"Reconnecting to {broker_id}...")
+                if not broker.connect():
+                    logger.error(f"Failed to reconnect to {broker_id}")
+                    continue
+
+            for account_config in broker_config['accounts']:
+                account_id = account_config['account_id']
+
+                try:
+                    # Get account data from broker
+                    balance = broker.get_account_balance()
+                    positions = broker.get_open_positions()
+                    margin = broker.get_margin_info()
+
+                    # Create account state document
+                    account_state = {
+                        "account_id": account_id,
+                        "account": account_id,  # For backward compatibility
+                        "broker_id": broker_id,
+                        "timestamp": datetime.utcnow(),
+                        "equity": balance.get('equity', 0),
+                        "cash_balance": balance.get('cash', 0),
+                        "margin_used": margin.get('margin_used', 0),
+                        "margin_available": margin.get('margin_available', 0),
+                        "unrealized_pnl": balance.get('unrealized_pnl', 0),
+                        "realized_pnl": balance.get('realized_pnl', 0),
+                        "open_positions": positions,
+                        "open_orders": [],  # TODO: Add broker.get_open_orders()
+                        "created_at": datetime.utcnow()
+                    }
+
+                    # Store in MongoDB
+                    account_state_collection.insert_one(account_state.copy())
+
+                    # Update cache
+                    account_state_cache[account_id] = account_state
+
+                    all_accounts.append(account_state)
+
+                    logger.info(f"✅ Polled {broker_id}/{account_id}: ${balance.get('equity', 0):,.2f}")
+
+                except BrokerConnectionError as e:
+                    logger.error(f"Connection error polling {broker_id}/{account_id}: {e}")
+                except BrokerAPIError as e:
+                    logger.error(f"API error polling {broker_id}/{account_id}: {e}")
+                except Exception as e:
+                    logger.error(f"Error polling {broker_id}/{account_id}: {e}", exc_info=True)
+
+        # Calculate fund-level aggregation
+        if all_accounts:
+            calculate_fund_state(all_accounts)
+
+    except Exception as e:
+        logger.error(f"Error in poll_all_accounts: {e}", exc_info=True)
+
+
+def calculate_fund_state(accounts: List[Dict[str, Any]]):
+    """
+    Calculate and store fund-level aggregation
+    Aggregates all accounts into a single fund_state document
+    """
+    try:
+        # Aggregate metrics
+        total_equity = sum(a['equity'] for a in accounts)
+        total_cash = sum(a['cash_balance'] for a in accounts)
+        total_margin_used = sum(a['margin_used'] for a in accounts)
+        total_margin_available = sum(a['margin_available'] for a in accounts)
+        total_unrealized_pnl = sum(a['unrealized_pnl'] for a in accounts)
+        total_realized_pnl = sum(a['realized_pnl'] for a in accounts)
+
+        # Calculate margin utilization percentage
+        margin_utilization_pct = (total_margin_used / total_equity * 100) if total_equity > 0 else 0
+
+        # Broker breakdown
+        broker_breakdown = {}
+        for account in accounts:
+            broker_id = account['broker_id']
+            if broker_id not in broker_breakdown:
+                broker_breakdown[broker_id] = {
+                    "broker_id": broker_id,
+                    "equity": 0,
+                    "cash": 0,
+                    "num_accounts": 0,
+                    "accounts": []
+                }
+            broker_breakdown[broker_id]["equity"] += account['equity']
+            broker_breakdown[broker_id]["cash"] += account['cash_balance']
+            broker_breakdown[broker_id]["num_accounts"] += 1
+            broker_breakdown[broker_id]["accounts"].append(account['account_id'])
+
+        # Create fund state document
+        fund_state = {
+            "timestamp": datetime.utcnow(),
+            "total_equity": total_equity,
+            "total_cash": total_cash,
+            "total_margin_used": total_margin_used,
+            "total_margin_available": total_margin_available,
+            "total_unrealized_pnl": total_unrealized_pnl,
+            "total_realized_pnl": total_realized_pnl,
+            "margin_utilization_pct": margin_utilization_pct,
+            "broker_breakdown": list(broker_breakdown.values()),
+            "created_at": datetime.utcnow()
+        }
+
+        # Store in MongoDB
+        fund_state_collection.insert_one(fund_state)
+
+        logger.info(f"💰 Fund State: ${total_equity:,.2f} equity, {margin_utilization_pct:.2f}% margin used")
+
+    except Exception as e:
+        logger.error(f"Error calculating fund state: {e}", exc_info=True)
+
+
+def start_account_polling():
+    """
+    Start periodic account polling in background thread
+    Polls all accounts every 5 minutes
+    """
+    def polling_loop():
+        POLL_INTERVAL_SECONDS = 300  # 5 minutes
+
+        logger.info(f"Starting account polling (every {POLL_INTERVAL_SECONDS}s)...")
+
+        while True:
+            try:
+                poll_all_accounts()
+            except Exception as e:
+                logger.error(f"Error in polling loop: {e}", exc_info=True)
+
+            time.sleep(POLL_INTERVAL_SECONDS)
+
+    # Start polling thread
+    threading.Thread(target=polling_loop, daemon=True).start()
 
 
 def start_pubsub_subscribers():
@@ -1378,24 +1752,34 @@ def start_pubsub_subscribers():
 async def startup_event():
     """
     On startup, sync with broker state and start Pub/Sub listeners
+    Phase 6: Now initializes multi-broker connections and polling
     """
     logger.info("Account Data Service starting up...")
 
-    # Start Pub/Sub subscribers
+    # Phase 6: Initialize broker connections from account_hierarchy
+    logger.info("Phase 6: Initializing multi-broker connections...")
+    initialize_broker_connections()
+
+    # Phase 6: Start periodic account polling
+    logger.info("Phase 6: Starting account polling thread...")
+    start_account_polling()
+
+    # Start Pub/Sub subscribers (for backward compatibility with ExecutionService updates)
     start_pubsub_subscribers()
 
-    # Initialize default test account if it doesn't exist
+    # Initialize default test account if it doesn't exist (backward compatibility)
     test_accounts = ["DU1234567", "IBKR_Main"]
     for account_name in test_accounts:
         existing = account_state_collection.find_one(
             {"account": account_name},
             sort=[("timestamp", -1)]
         )
-        
+
         if not existing:
             logger.info(f"Creating default account state for {account_name}")
             default_state = {
                 "account": account_name,
+                "broker_id": "IBKR",  # Phase 6: Add broker_id
                 "equity": 100000.0,  # $100K starting capital
                 "cash_balance": 100000.0,
                 "margin_used": 0.0,
@@ -1409,9 +1793,7 @@ async def startup_event():
             account_state_cache[account_name] = default_state
             logger.info(f"✅ Default account {account_name} created")
 
-    # TODO: Sync all configured accounts with brokers
-    # This is critical for ensuring state consistency
-    logger.info("Account Data Service ready")
+    logger.info("✅ Account Data Service ready (Phase 6: Multi-broker support enabled)")
 
 
 if __name__ == "__main__":
