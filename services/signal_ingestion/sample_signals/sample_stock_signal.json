@@ -1,0 +1,19 @@
+{
+    "strategy_name": "StockMomentum",
+    "passphrase": "test_password_123",
+    "signal": [
+        {
+            "instrument": "AAPL",
+            "instrument_type": "STOCK",
+            "action": "BUY",
+            "direction": "LONG",
+            "quantity": 100,
+            "order_type": "LIMIT",
+            "price": 178.50,
+            "limit_price": 179.00,
+            "stop_loss": 175.00,
+            "take_profit": 185.00,
+            "environment": "staging"
+        }
+    ]
+}

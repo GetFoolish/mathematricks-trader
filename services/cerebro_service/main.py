@@ -26,6 +26,10 @@ from portfolio_constructor.max_hybrid.strategy import MaxHybridConstructor
 # Position manager import
 from position_manager import PositionManager
 
+# Margin calculation imports
+from margin_calculation import MarginCalculatorFactory
+from broker_adapter import CerebroBrokerAdapter
+
 # Load environment variables
 # Determine project root dynamically
 SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -48,16 +52,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Signal processing handler - unified log for signal journey
-signal_processing_handler = logging.FileHandler(os.path.join(LOG_DIR, 'signal_processing.log'))
-signal_processing_handler.setLevel(logging.INFO)
-signal_processing_formatter = logging.Formatter(
-    '%(asctime)s | [CEREBRO] | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-signal_processing_handler.setFormatter(signal_processing_formatter)
-signal_processing_handler.addFilter(lambda record: 'SIGNAL:' in record.getMessage())
-logger.addHandler(signal_processing_handler)
+# Signal processing handler - unified log for signal journey (lazy initialization)
+signal_processing_handler = None
+
+def get_signal_processing_logger():
+    """Lazy initialization of signal_processing.log handler"""
+    global signal_processing_handler
+    if signal_processing_handler is None:
+        signal_processing_handler = logging.FileHandler(os.path.join(LOG_DIR, 'signal_processing.log'))
+        signal_processing_handler.setLevel(logging.INFO)
+        signal_processing_formatter = logging.Formatter(
+            '%(asctime)s | [CEREBRO] | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        signal_processing_handler.setFormatter(signal_processing_formatter)
+        signal_processing_handler.addFilter(lambda record: 'SIGNAL:' in record.getMessage())
+        logger.addHandler(signal_processing_handler)
+        logger.info("Signal processing log initialized")
+    return logger
 
 
 # ============================================================================
@@ -66,22 +78,22 @@ logger.addHandler(signal_processing_handler)
 
 # Initialize MongoDB
 mongo_uri = os.getenv('MONGODB_URI')
-mongo_client = MongoClient(
-    mongo_uri,
-    tls=True,
-    tlsAllowInvalidCertificates=True  # For development only
-)
+# Only use TLS for remote MongoDB Atlas connections
+use_tls = 'mongodb+srv' in mongo_uri or 'mongodb.net' in mongo_uri
+if use_tls:
+    mongo_client = MongoClient(
+        mongo_uri,
+        tls=True,
+        tlsAllowInvalidCertificates=True  # For development only
+    )
+else:
+    mongo_client = MongoClient(mongo_uri)
 db = mongo_client['mathematricks_trading']
 trading_orders_collection = db['trading_orders']
-cerebro_decisions_collection = db['cerebro_decisions']
-standardized_signals_collection = db['standardized_signals']
+signal_store_collection = db['signal_store']  # Unified signal storage with embedded cerebro decisions
 portfolio_allocations_collection = db['portfolio_allocations']
+current_allocation_collection = db['current_allocation']  # Current approved allocation
 strategies_collection = db['strategies']
-strategy_metadata_cache = db['strategy_metadata_cache']  # Cache for strategy metadata
-
-# Create indexes for cache collection
-strategy_metadata_cache.create_index("strategy_id", unique=True)
-strategy_metadata_cache.create_index("last_updated")
 
 # Collections from signal_collector database (for Activity tab)
 signals_db = mongo_client['mathematricks_signals']
@@ -89,6 +101,38 @@ incoming_signals_collection = signals_db['trading_signals']  # Raw signals from 
 
 # Initialize Position Manager
 position_manager = PositionManager(mongo_client)
+
+# Initialize Broker Adapter for margin calculations
+broker_adapter = CerebroBrokerAdapter(broker_name="IBKR")
+
+# Helper function to update signal_store with cerebro decision
+def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict):
+    """
+    Update signal_store document with embedded cerebro_decision
+    This is the single source of truth for cerebro decisions
+    """
+    if not signal_store_id:
+        logger.warning("⚠️ No signal_store_id provided, skipping signal_store update")
+        return
+
+    try:
+        from bson import ObjectId
+
+        # Update signal_store with embedded decision
+        signal_store_collection.update_one(
+            {"_id": ObjectId(signal_store_id)},
+            {
+                "$set": {
+                    "cerebro_decision": decision_doc,
+                    "processing_complete": decision_doc.get("decision") in ["APPROVED", "RESIZE"],
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        logger.info(f"✅ Updated signal_store {signal_store_id} with cerebro decision")
+
+    except Exception as e:
+        logger.error(f"⚠️ Failed to update signal_store: {e}")
 
 
 # ============================================================================
@@ -116,7 +160,6 @@ MVP_CONFIG = {
     "max_margin_utilization_pct": 40,  # Hard limit - never exceed 40% margin utilization
     "default_position_size_pct": 5,  # Fallback if no allocation found
     "slippage_alpha_threshold": 0.30,  # Drop signal if >30% alpha lost to slippage
-    "default_account": "IBKR_Main"  # MVP uses single account
 }
 
 # Global: Active portfolio allocations {strategy_id: allocation_pct}
@@ -170,6 +213,14 @@ def initialize_portfolio_constructor():
     with CONSTRUCTOR_LOCK:
         if PORTFOLIO_CONSTRUCTOR is None:
             logger.info("Initializing Portfolio Constructor (MaxHybrid)")
+
+            # Use cached approved allocations for speed (signals are time-critical)
+            # This file is updated by PortfolioBuilder when allocations are approved via frontend
+            allocations_cache_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                'current_portfolio_allocation_approved.json'
+            )
+
             PORTFOLIO_CONSTRUCTOR = MaxHybridConstructor(
                 alpha=0.85,  # 85% Sharpe, 15% CAGR weighting
                 max_drawdown_limit=-0.06,  # -6% max drawdown
@@ -177,8 +228,8 @@ def initialize_portfolio_constructor():
                 max_single_strategy=1.0,  # 100% max per strategy
                 min_allocation=0.01,  # 1% minimum
                 cagr_target=2.0,  # 200% CAGR target for normalization
-                use_fixed_allocations=True,  # 🔒 Use pre-calculated allocations from backtest
-                allocations_config_path=None,  # Uses default: portfolio_allocations.json
+                use_cached_allocations=True,  # ⚡ Use cached allocations (not recalculated - signals are time-critical)
+                allocations_config_path=allocations_cache_path,  # current_portfolio_allocation_approved.json
                 risk_free_rate=0.0
             )
             logger.info("✅ Portfolio Constructor initialized (MaxHybrid)")
@@ -216,6 +267,55 @@ def load_active_allocations() -> Dict[str, float]:
     except Exception as e:
         logger.error(f"Failed to load active allocations: {str(e)}")
         return {}
+
+
+def download_allocations_from_mongo_to_cache(update_action: str = "cerebro_restart"):
+    """
+    Download current allocation from MongoDB and save to local JSON cache.
+    This is called on Cerebro startup and when allocations change.
+
+    Args:
+        update_action: Either 'cerebro_restart' or 'allocation_changed_by_user'
+    """
+    try:
+        # Get current allocation from MongoDB
+        allocation_doc = current_allocation_collection.find_one({}, {'_id': 0})
+
+        if not allocation_doc:
+            logger.warning("⚠️  No current allocation found in MongoDB")
+            return
+
+        allocations = allocation_doc.get('allocations', {})
+
+        # Save to local JSON cache
+        cache_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            'current_portfolio_allocation_approved.json'
+        )
+
+        cache_data = {
+            "_comment": "Current approved portfolio allocation (downloaded from MongoDB)",
+            "_source": "MongoDB current_allocation collection",
+            "_metadata": {
+                "approved_at": allocation_doc.get('approved_at', datetime.utcnow()).isoformat() if isinstance(allocation_doc.get('approved_at'), datetime) else str(allocation_doc.get('approved_at')),
+                "num_strategies": len([v for v in allocations.values() if v > 0])
+            },
+            "allocations": allocations,
+            "total_allocation_pct": sum(allocations.values()),
+            "mode": "approved_downloaded_from_mongo",
+            "last_updated": datetime.utcnow().isoformat(),
+            "update_action": update_action
+        }
+
+        with open(cache_path, 'w') as f:
+            json.dump(cache_data, f, indent=2)
+
+        logger.info(f"✅ Downloaded allocations from MongoDB to cache: {cache_path}")
+        logger.info(f"   Update action: {update_action}")
+        logger.info(f"   Strategies: {len(allocations)}, Total: {sum(allocations.values()):.1f}%")
+
+    except Exception as e:
+        logger.error(f"❌ Failed to download allocations from MongoDB: {e}", exc_info=True)
 
 
 def reload_allocations():
@@ -298,117 +398,6 @@ def load_strategy_histories_from_mongodb() -> Dict[str, Any]:
 # STRATEGY METADATA & CACHING
 # ============================================================================
 
-def compute_strategy_metadata_from_doc(strategy_doc: Dict) -> Dict:
-    """
-    Extract metadata from strategy document.
-
-    Args:
-        strategy_doc: Strategy document from MongoDB
-
-    Returns:
-        Dict with estimated_avg_positions, median_margin_pct, estimated_position_margin
-    """
-    position_sizing = strategy_doc.get('position_sizing', {})
-    return {
-        'estimated_avg_positions': position_sizing.get('estimated_avg_positions', 3.0),
-        'median_margin_pct': position_sizing.get('median_margin_pct', 50.0) / 100.0,  # Convert % to decimal
-        'estimated_position_margin': position_sizing.get('estimated_position_margin', 10000.0)
-    }
-
-
-def get_strategy_metadata_cached(strategy_id: str) -> Dict[str, Any]:
-    """
-    Get strategy metadata with intelligent caching.
-    Only recomputes if raw data row count has changed.
-
-    This dramatically speeds up signal processing by avoiding
-    repeated loading of backtest data from MongoDB.
-
-    Args:
-        strategy_id: Strategy identifier
-
-    Returns:
-        Dict with:
-            - estimated_avg_positions
-            - median_margin_pct
-            - estimated_position_margin
-    """
-    # Default metadata in case of errors
-    DEFAULT_METADATA = {
-        'estimated_avg_positions': 3.0,
-        'median_margin_pct': 0.5,
-        'estimated_position_margin': 10000.0
-    }
-
-    try:
-        # Check cache first
-        cache_doc = strategy_metadata_cache.find_one({"strategy_id": strategy_id})
-
-        # Get current strategy document
-        strategy_doc = strategies_collection.find_one({"strategy_id": strategy_id})
-        if not strategy_doc:
-            logger.warning(f"Strategy {strategy_id} not found in MongoDB")
-            return DEFAULT_METADATA
-
-        current_row_count = len(strategy_doc.get('raw_data_backtest_full', []))
-
-        # Cache validation
-        if cache_doc:
-            cached_row_count = cache_doc.get('data_row_count', 0)
-            cache_age_seconds = (datetime.utcnow() - cache_doc.get('last_updated')).total_seconds()
-
-            # Use cache if: (1) row count matches AND (2) less than 24 hours old
-            if cached_row_count == current_row_count and cache_age_seconds < 86400:
-                logger.debug(f"✅ Cache HIT for {strategy_id} ({current_row_count} rows)")
-                return {
-                    'estimated_avg_positions': cache_doc['estimated_avg_positions'],
-                    'median_margin_pct': cache_doc['median_margin_pct'],
-                    'estimated_position_margin': cache_doc['estimated_position_margin']
-                }
-            else:
-                logger.info(f"🔄 Cache STALE for {strategy_id}: rows {cached_row_count}→{current_row_count}, age {cache_age_seconds/3600:.1f}h")
-
-        # Cache miss or stale - compute metadata
-        logger.info(f"🔄 Computing metadata for {strategy_id} ({current_row_count} rows)")
-        metadata = compute_strategy_metadata_from_doc(strategy_doc)
-
-        # Save to cache
-        cache_entry = {
-            'strategy_id': strategy_id,
-            'data_row_count': current_row_count,
-            'last_updated': datetime.utcnow(),
-            **metadata
-        }
-        strategy_metadata_cache.update_one(
-            {'strategy_id': strategy_id},
-            {'$set': cache_entry},
-            upsert=True
-        )
-
-        return metadata
-
-    except Exception as e:
-        logger.error(f"Error getting cached metadata for {strategy_id}: {e}")
-        return DEFAULT_METADATA
-
-
-def warmup_strategy_caches():
-    """
-    Pre-compute and cache all strategy metadata at startup.
-    This ensures fast signal processing from the first signal.
-    """
-    try:
-        logger.info("🔥 Warming up strategy metadata caches...")
-        active_strategies = list(strategies_collection.find({"status": "ACTIVE"}))
-
-        for strat in active_strategies:
-            strategy_id = strat.get('strategy_id')
-            if strategy_id:
-                get_strategy_metadata_cached(strategy_id)  # Forces cache creation
-
-        logger.info(f"✅ Cached metadata for {len(active_strategies)} strategies")
-    except Exception as e:
-        logger.error(f"Error warming up caches: {e}")
 
 
 def get_strategy_metadata(strategy_id: str) -> Dict[str, Any]:
@@ -444,6 +433,27 @@ def get_strategy_metadata(strategy_id: str) -> Dict[str, Any]:
             "median_margin_pct": 0.5,
             "estimated_position_margin": 10000.0
         }
+
+
+def get_strategy_document(strategy_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get full strategy document from MongoDB including accounts field.
+
+    Args:
+        strategy_id: Strategy identifier
+
+    Returns:
+        Strategy document dict or None if not found
+    """
+    try:
+        strategy = strategies_collection.find_one({"strategy_id": strategy_id})
+        if not strategy:
+            logger.warning(f"Strategy {strategy_id} not found in MongoDB")
+            return None
+        return strategy
+    except Exception as e:
+        logger.error(f"Error getting strategy document for {strategy_id}: {e}")
+        return None
 
 
 # ============================================================================
@@ -575,19 +585,8 @@ def get_account_state(account_name: str) -> Optional[Dict[str, Any]]:
         return response.json().get('state')
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            # Account state not found - use MVP defaults for testing
-            logger.warning(f"No account state found for {account_name}, using MVP defaults")
-            return {
-                "account": account_name,
-                "equity": 100000.0,  # $100k default
-                "cash_balance": 100000.0,
-                "margin_used": 0.0,
-                "margin_available": 50000.0,
-                "unrealized_pnl": 0.0,
-                "realized_pnl": 0.0,
-                "open_positions": [],
-                "open_orders": []
-            }
+            logger.error(f"No account state found for {account_name} - signals will be rejected")
+            return None
         logger.error(f"Failed to get account state for {account_name}: {str(e)}")
         return None
     except Exception as e:
@@ -677,6 +676,48 @@ def check_and_cancel_pending_entry(signal: Dict[str, Any], signal_type_info: Dic
     except Exception as e:
         logger.error(f"❌ Error checking/cancelling pending orders: {e}", exc_info=True)
         return False
+
+
+def opposite_direction(direction: str) -> str:
+    """Get opposite direction for entry/exit matching"""
+    return "LONG" if direction == "SHORT" else "SHORT"
+
+
+def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) -> Optional[Dict[str, Any]]:
+    """
+    Query signal_store for open entry signal
+
+    Args:
+        strategy_id: Strategy identifier
+        instrument: Instrument name
+        direction: Direction of the EXIT signal (we need opposite for ENTRY)
+
+    Returns:
+        Entry signal document from signal_store, or None if not found
+    """
+    try:
+        # For an EXIT signal with direction SHORT, we need to find ENTRY with direction LONG (and vice versa)
+        entry_direction = opposite_direction(direction)
+
+        entry_signal = signal_store_collection.find_one({
+            "strategy_id": strategy_id,
+            "instrument": instrument,
+            "direction": entry_direction,
+            "position_status": "OPEN",
+            "cerebro_decision.action": "APPROVE",
+            "execution.status": "FILLED"
+        })
+
+        if entry_signal:
+            logger.info(f"✅ Found open entry signal: {entry_signal.get('signal_id')} for {instrument} {entry_direction}")
+            return entry_signal
+        else:
+            logger.warning(f"⚠️ No open entry signal found for {strategy_id}/{instrument}/{entry_direction}")
+            return None
+
+    except Exception as e:
+        logger.error(f"❌ Error querying signal_store for entry signal: {e}")
+        return None
 
 
 # ============================================================================
@@ -993,10 +1034,17 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     Process signal using Portfolio Constructor (NEW APPROACH)
     """
     signal_id = signal.get('signal_id')
-    logger.info(f"Processing signal {signal_id} with Portfolio Constructor")
+    signal_store_id = signal.get('mathematricks_signal_id')  # Extract from Pub/Sub message (mongodb_watcher created this)
+
+    # Initialize signal processing logger on first signal
+    signal_logger = get_signal_processing_logger()
+
+    signal_logger.info(f"Processing signal {signal_id} with Portfolio Constructor")
+    if signal_store_id:
+        logger.info(f"📍 Mathematricks Signal ID: {signal_store_id}")
 
     # Unified signal processing log
-    logger.info(f"SIGNAL: {signal_id} | PROCESSING | Strategy={signal.get('strategy_id')} | Instrument={signal.get('instrument')} | Action={signal.get('action')}")
+    signal_logger.info(f"SIGNAL: {signal_id} | PROCESSING | Strategy={signal.get('strategy_id')} | Instrument={signal.get('instrument')} | Action={signal.get('action')}")
 
     # Step 1: Check slippage rule (keep existing logic)
     if signal.get('action') == 'ENTRY' and not check_slippage_rule(signal):
@@ -1010,12 +1058,53 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             "risk_assessment": {},
             "created_at": datetime.utcnow()
         }
-        cerebro_decisions_collection.insert_one(decision)
+        # Write decision to signal_store (embedded)
+        update_signal_store_with_decision(signal_store_id, decision)
         logger.info(f"Signal {signal_id} rejected due to slippage")
         return
 
-    # Step 2: Get account state
-    account_name = MVP_CONFIG['default_account']
+    # Step 2: Get strategy document and determine account routing
+    strategy_id = signal.get('strategy_id')
+    strategy_doc = get_strategy_document(strategy_id)
+
+    if not strategy_doc:
+        logger.error(f"Strategy {strategy_id} not found - rejecting signal")
+        decision = {
+            "signal_id": signal_id,
+            "decision": "REJECTED",
+            "timestamp": datetime.utcnow(),
+            "reason": "STRATEGY_NOT_FOUND",
+            "original_quantity": signal.get('quantity', 0),
+            "final_quantity": 0,
+            "risk_assessment": {},
+            "created_at": datetime.utcnow()
+        }
+        update_signal_store_with_decision(signal_store_id, decision)
+        return
+
+    # Get account(s) from strategy document
+    accounts = strategy_doc.get('accounts', [])
+
+    if not accounts or len(accounts) == 0:
+        logger.error(f"Strategy {strategy_id} has no accounts configured - rejecting signal")
+        decision = {
+            "signal_id": signal_id,
+            "decision": "REJECTED",
+            "timestamp": datetime.utcnow(),
+            "reason": "NO_ACCOUNTS_CONFIGURED",
+            "original_quantity": signal.get('quantity', 0),
+            "final_quantity": 0,
+            "risk_assessment": {},
+            "created_at": datetime.utcnow()
+        }
+        update_signal_store_with_decision(signal_store_id, decision)
+        return
+
+    # For single-account strategies: use accounts[0]
+    # For multi-account strategies (future): implement distribution logic
+    account_name = accounts[0]
+    logger.info(f"Routing signal for strategy {strategy_id} to account: {account_name}")
+
     account_state = get_account_state(account_name)
 
     if not account_state:
@@ -1030,7 +1119,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             "risk_assessment": {},
             "created_at": datetime.utcnow()
         }
-        cerebro_decisions_collection.insert_one(decision)
+        # Write decision to signal_store (embedded)
+        update_signal_store_with_decision(signal_store_id, decision)
         return
 
     # Step 3: Build context and convert signal
@@ -1047,12 +1137,67 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     # Step 4a.1: Check for pending ENTRY orders if this is an EXIT signal
     check_and_cancel_pending_entry(signal, signal_type_info)
 
-    # Step 4b: Smart Position Sizing - Adjust for capital distribution
-    if decision_obj.action in ['APPROVE', 'RESIZE']:
+    # Step 4a.2: EXIT SIGNAL HANDLING - Query signal_store for exact entry quantity
+    signal_type = signal_type_info.get('signal_type')
+    if signal_type in ['EXIT', 'SCALE_OUT'] and decision_obj.action in ['APPROVE', 'RESIZE']:
+        logger.info(f"🔴 EXIT signal detected - querying signal_store for entry quantity")
+
+        # Query signal_store for open entry signal
+        entry_signal = find_open_entry_signal(
+            strategy_id=signal.get('strategy_id'),
+            instrument=signal.get('instrument'),
+            direction=signal.get('direction')  # EXIT direction (we'll find opposite)
+        )
+
+        if entry_signal and entry_signal.get('execution') and entry_signal['execution'].get('quantity_filled'):
+            # Found entry signal with execution data - use exact quantity
+            exact_quantity = entry_signal['execution']['quantity_filled']
+
+            logger.info(f"✅ Found entry signal: {entry_signal['signal_id']}")
+            logger.info(f"✅ Using exact entry quantity: {exact_quantity}")
+
+            # Create new decision with exact quantity (no margin calculator)
+            decision_obj = SignalDecision(
+                action="APPROVE",
+                quantity=exact_quantity,
+                reason=f"EXIT: Closing position from entry signal {entry_signal['signal_id']}",
+                allocated_capital=0,
+                margin_required=0,
+                metadata={
+                    **decision_obj.metadata,
+                    'signal_type_info': signal_type_info,
+                    'entry_signal_id': str(entry_signal['_id']),
+                    'entry_signal_ref': entry_signal['signal_id'],
+                    'entry_quantity': exact_quantity,
+                    'exit_type': 'FULL_EXIT' if signal_type == 'EXIT' else 'PARTIAL_EXIT'
+                }
+            )
+
+            # Skip margin calculator - jump to decision logging
+            logger.info(f"⏭️ Skipping margin calculator for EXIT signal")
+
+        else:
+            # No entry signal found or no execution data - reject
+            logger.error(f"❌ No open entry signal found in signal_store for {signal.get('instrument')}")
+            decision_obj = SignalDecision(
+                action="REJECTED",
+                quantity=0,
+                reason=f"No open position found in signal_store for {signal.get('strategy_id')}/{signal.get('instrument')}",
+                allocated_capital=0,
+                margin_required=0,
+                metadata={
+                    **decision_obj.metadata,
+                    'signal_type_info': signal_type_info,
+                    'rejection_reason': 'no_open_position_found'
+                }
+            )
+
+    # Step 4b: Smart Position Sizing - Adjust for capital distribution (ENTRY signals only)
+    elif decision_obj.action in ['APPROVE', 'RESIZE']:
         strategy_id = signal.get('strategy_id')
 
-        # Get strategy metadata (avg positions, margin %) - CACHED
-        strategy_meta = get_strategy_metadata_cached(strategy_id)
+        # Get strategy metadata (avg positions, margin %)
+        strategy_meta = get_strategy_metadata(strategy_id)
         estimated_avg_positions = strategy_meta['estimated_avg_positions']
         median_margin_pct = strategy_meta['median_margin_pct']
 
@@ -1088,15 +1233,94 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 }
             )
         else:
-            # Calculate shares from adjusted position capital
-            if signal.get('price', 0) > 0:
-                adjusted_shares = position_capital / signal.get('price', 0)
-            else:
-                adjusted_shares = 0
+            # NEW MARGIN CALCULATION SYSTEM
+            # Use MarginCalculatorFactory to get real-time pricing and margin requirements
 
-            # Calculate BOTH backtest margin AND estimated IBKR margin
-            backtest_margin = position_capital * median_margin_pct
-            ibkr_margin_info = estimate_ibkr_margin(signal, adjusted_shares, signal.get('price', 0))
+            try:
+                # Step 1: Validate instrument_type exists
+                if 'instrument_type' not in signal:
+                    raise ValueError(
+                        "Signal missing required field 'instrument_type'. "
+                        "Valid values: STOCK, ETF, FOREX, OPTION, FUTURE, CRYPTO"
+                    )
+
+                # Step 2: Create appropriate margin calculator
+                calculator = MarginCalculatorFactory.create_calculator(signal, broker_adapter)
+
+                # Step 3: Prepare signal with price fallback for broker adapter
+                signal_with_price = {
+                    **signal,
+                    'signal_price': signal.get('price', 0)  # Pass price to adapter
+                }
+
+                # Step 4: Calculate position size and margin
+                # This fetches price from broker (or uses signal price) and calculates margin
+                position_result = calculator.calculate_position_size(
+                    signal=signal_with_price,
+                    account_equity=account_state.get('total_equity', 0),
+                    position_capital=position_capital
+                )
+
+                # Extract results
+                adjusted_shares = position_result['quantity']
+                price_used = position_result['price_used']
+                ibkr_margin_info = {
+                    'estimated_margin': position_result['initial_margin'],
+                    'margin_pct': position_result['margin_pct'],
+                    'calculation_method': position_result['calculation_method'],
+                    'notional_value': position_result['notional_value']
+                }
+
+                # Calculate backtest margin for comparison
+                backtest_margin = position_capital * median_margin_pct
+
+                logger.info(f"✅ Margin calculation successful for {signal.get('instrument')}")
+                logger.info(f"   Price used: ${price_used:.2f}")
+                logger.info(f"   Quantity: {adjusted_shares:.2f}")
+                logger.info(f"   Margin required: ${ibkr_margin_info['estimated_margin']:,.2f}")
+
+            except Exception as e:
+                # Margin calculation failed - REJECT signal
+                logger.error(f"❌ Margin calculation failed: {e}")
+                decision_obj = SignalDecision(
+                    action="REJECTED",
+                    quantity=0,
+                    reason=f"Margin calculation failed: {str(e)}",
+                    allocated_capital=decision_obj.allocated_capital,
+                    margin_required=0.0,
+                    metadata={
+                        **decision_obj.metadata,
+                        'signal_type_info': signal_type_info,
+                        'rejection_reason': 'margin_calculation_failed',
+                        'error': str(e)
+                    }
+                )
+                # Skip to decision logging
+                log_detailed_calculation_math(signal, context, decision_obj, account_state)
+                logger.info(f"\n{'='*70}")
+                logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {signal.get('instrument')}")
+                logger.info(f"{'='*70}")
+                logger.info(f"Strategy: {signal.get('strategy_id')}")
+                logger.info(f"Action: {decision_obj.action}")
+                logger.info(f"Reason: {decision_obj.reason}")
+                logger.info(f"{'='*70}\n")
+                update_signal_store_with_decision(signal_store_id, {
+                    "signal_id": signal_id,
+                    "strategy_id": signal.get('strategy_id'),
+                    "decision": decision_obj.action,
+                    "timestamp": datetime.utcnow(),
+                    "reason": decision_obj.reason,
+                    "original_quantity": signal.get('quantity', 0),
+                    "final_quantity": 0,
+                    "environment": signal.get('environment', 'staging'),
+                    "risk_assessment": {
+                        "allocated_capital": decision_obj.allocated_capital,
+                        "margin_required": 0,
+                        "metadata": decision_obj.metadata
+                    },
+                    "created_at": datetime.utcnow()
+                })
+                return  # Exit early
 
             # Update decision with adjusted values
             decision_obj = SignalDecision(
@@ -1133,7 +1357,9 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         'ibkr_margin_pct': ibkr_margin_info['margin_pct'],
                         'ibkr_margin_method': ibkr_margin_info['calculation_method'],
                         'notional_value': ibkr_margin_info['notional_value'],
-                        'shares_calculation': f"${position_capital:,.2f} ÷ ${signal.get('price', 0):,.2f} = {adjusted_shares:.2f} shares"
+                        'shares_calculation': f"${position_capital:,.2f} ÷ ${price_used:,.2f} = {adjusted_shares:.2f} shares",
+                        'price_source': 'broker_adapter',  # Track where price came from
+                        'price_used': price_used  # Store actual price used
                     }
                 }
             )
@@ -1158,11 +1384,13 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     # Step 5: Save decision to MongoDB
     decision_doc = {
         "signal_id": signal_id,
+        "strategy_id": signal.get('strategy_id'),
         "decision": decision_obj.action,  # "APPROVE", "REJECT", "RESIZE"
         "timestamp": datetime.utcnow(),
         "reason": decision_obj.reason,
         "original_quantity": signal.get('quantity', 0),
         "final_quantity": decision_obj.quantity,
+        "environment": signal.get('environment', 'staging'),
         "risk_assessment": {
             "allocated_capital": decision_obj.allocated_capital,
             "margin_required": decision_obj.margin_required,
@@ -1170,7 +1398,14 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         },
         "created_at": datetime.utcnow()
     }
-    cerebro_decisions_collection.insert_one(decision_doc)
+
+    # For EXIT signals, add entry reference at top level for easier querying
+    if decision_obj.metadata.get('entry_signal_id'):
+        decision_doc['entry_signal_id'] = decision_obj.metadata['entry_signal_id']
+        decision_doc['entry_signal_ref'] = decision_obj.metadata.get('entry_signal_ref')
+
+    # Write decision to signal_store (embedded)
+    update_signal_store_with_decision(signal_store_id, decision_doc)
 
     # Unified signal processing log for decision
     logger.info(f"SIGNAL: {signal_id} | DECISION | Action={decision_obj.action} | OrigQty={signal.get('quantity', 0)} | FinalQty={decision_obj.quantity:.0f} | Reason={decision_obj.reason}")
@@ -1188,6 +1423,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         trading_order = {
             "order_id": order_id,
             "signal_id": signal_id,
+            "mathematricks_signal_id": signal_store_id,  # For execution_service to update signal_store
             "strategy_id": signal.get('strategy_id'),
             "account": account_name,
             "timestamp": datetime.utcnow(),
@@ -1211,9 +1447,15 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 "position_size_logic": "PortfolioConstructor:MaxCAGR",
                 "risk_metrics": decision_obj.metadata
             },
+            "environment": signal.get('environment', 'staging'),
             "status": "PENDING",
             "created_at": datetime.utcnow()
         }
+
+        # For EXIT signals, add entry_signal_id reference
+        if decision_obj.metadata.get('entry_signal_id'):
+            trading_order['entry_signal_id'] = decision_obj.metadata['entry_signal_id']
+            trading_order['entry_signal_ref'] = decision_obj.metadata.get('entry_signal_ref')
 
         # Save to MongoDB
         trading_orders_collection.insert_one(trading_order)
@@ -1230,12 +1472,6 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             logger.info(f"SIGNAL: {signal_id} | ORDER_CREATED | OrderID={order_id} | Quantity={final_quantity_rounded} | Instrument={signal.get('instrument')} | Direction={signal.get('direction')}")
         except Exception as e:
             logger.error(f"Failed to publish order to Pub/Sub: {str(e)}")
-
-    # Update signal as processed
-    standardized_signals_collection.update_one(
-        {"signal_id": signal_id},
-        {"$set": {"processed_by_cerebro": True}}
-    )
 
 
 # ============================================================================
@@ -1303,10 +1539,10 @@ if __name__ == "__main__":
     trading_orders_topic = publisher.topic_path(project_id, 'trading-orders')
     order_commands_topic = publisher.topic_path(project_id, 'order-commands')
 
-    # Warmup caches
-    warmup_strategy_caches()
+    # Download current allocation from MongoDB to local cache (for fast signal processing)
+    download_allocations_from_mongo_to_cache(update_action="cerebro_restart")
 
-    # Initialize portfolio constructor
+    # Initialize portfolio constructor (uses the cached allocations)
     initialize_portfolio_constructor()
 
     # Load allocations

@@ -70,6 +70,7 @@ db = mongo_client['mathematricks_trading']
 execution_confirmations_collection = db['execution_confirmations']
 trading_orders_collection = db['trading_orders']
 open_positions_collection = db['open_positions']
+signal_store_collection = db['signal_store']  # For updating execution data
 
 # Initialize Google Cloud Pub/Sub
 project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
@@ -210,6 +211,127 @@ def publish_account_update(account_data: Dict[str, Any]):
         logger.info(f"Published account update: {message_id}")
     except Exception as e:
         logger.error(f"Error publishing account update: {str(e)}")
+
+
+def update_signal_store_with_execution(order_data: Dict[str, Any], execution_data: Dict[str, Any]):
+    """
+    Update signal_store with execution results and calculate PnL for EXIT signals
+
+    Args:
+        order_data: Original order data from trading order
+        execution_data: Execution results (quantity_filled, avg_fill_price, fills, etc.)
+    """
+    try:
+        from bson import ObjectId
+
+        mathematricks_signal_id = order_data.get('mathematricks_signal_id')
+        if not mathematricks_signal_id:
+            logger.warning("⚠️ No mathematricks_signal_id in order_data - cannot update signal_store")
+            return
+
+        action = order_data.get('action', 'ENTRY').upper()
+        is_exit = action in ['EXIT', 'SELL']
+
+        # Prepare execution update
+        execution_update = {
+            "execution": {
+                "order_id": order_data.get('order_id'),
+                "broker_order_id": execution_data.get('broker_order_id'),
+                "status": "FILLED",
+                "avg_fill_price": execution_data['avg_fill_price'],
+                "quantity_filled": execution_data['quantity_filled'],
+                "fills": execution_data.get('fills', []),
+                "filled_at": datetime.utcnow()
+            },
+            "updated_at": datetime.utcnow()
+        }
+
+        if not is_exit:
+            # ENTRY signal: Set position_status to OPEN
+            execution_update["position_status"] = "OPEN"
+            execution_update["execution"]["total_cost_basis"] = (
+                execution_data['avg_fill_price'] * execution_data['quantity_filled']
+            )
+
+            # Update signal_store
+            signal_store_collection.update_one(
+                {"_id": ObjectId(mathematricks_signal_id)},
+                {"$set": execution_update}
+            )
+            logger.info(f"✅ Updated signal_store {mathematricks_signal_id} with ENTRY execution (position OPEN)")
+
+        else:
+            # EXIT signal: Calculate PnL and update entry signal
+            entry_signal_id = order_data.get('entry_signal_id')
+            if not entry_signal_id:
+                logger.warning("⚠️ EXIT signal missing entry_signal_id - cannot calculate PnL")
+                # Still update this exit signal
+                signal_store_collection.update_one(
+                    {"_id": ObjectId(mathematricks_signal_id)},
+                    {"$set": execution_update}
+                )
+                return
+
+            # Get entry signal
+            entry_signal = signal_store_collection.find_one({"_id": ObjectId(entry_signal_id)})
+            if not entry_signal or not entry_signal.get('execution'):
+                logger.error(f"❌ Entry signal {entry_signal_id} not found or has no execution data")
+                return
+
+            # Calculate PnL
+            entry_price = entry_signal['execution']['avg_fill_price']
+            exit_price = execution_data['avg_fill_price']
+            quantity = execution_data['quantity_filled']
+
+            gross_pnl = (exit_price - entry_price) * quantity
+            commission = execution_data.get('commission', 0)  # TODO: Get actual commissions
+            net_pnl = gross_pnl - commission
+
+            entry_cost_basis = entry_signal['execution'].get('total_cost_basis', entry_price * quantity)
+            pnl_percent = (net_pnl / entry_cost_basis) * 100 if entry_cost_basis > 0 else 0
+
+            holding_period_seconds = (
+                datetime.utcnow() - entry_signal['execution']['filled_at']
+            ).total_seconds()
+
+            # Prepare PnL data
+            pnl_data = {
+                "gross_pnl": gross_pnl,
+                "commission": commission,
+                "net_pnl": net_pnl,
+                "pnl_percent": pnl_percent,
+                "holding_period_seconds": holding_period_seconds
+            }
+
+            execution_update["pnl"] = pnl_data
+
+            # Update EXIT signal
+            signal_store_collection.update_one(
+                {"_id": ObjectId(mathematricks_signal_id)},
+                {"$set": execution_update}
+            )
+
+            # Update ENTRY signal: add to exit_signals array and set CLOSED
+            signal_store_collection.update_one(
+                {"_id": ObjectId(entry_signal_id)},
+                {
+                    "$push": {"exit_signals": ObjectId(mathematricks_signal_id)},
+                    "$set": {
+                        "position_status": "CLOSED",
+                        "pnl_realized": net_pnl,
+                        "closed_at": datetime.utcnow(),
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+
+            logger.info(f"✅ Updated signal_store with EXIT execution and PnL")
+            logger.info(f"   Entry signal: {entry_signal['signal_id']} → position CLOSED")
+            logger.info(f"   Exit signal: {order_data.get('signal_id')}")
+            logger.info(f"   Gross P&L: ${gross_pnl:.2f} | Net P&L: ${net_pnl:.2f} ({pnl_percent:.2f}%)")
+
+    except Exception as e:
+        logger.error(f"❌ Error updating signal_store with execution: {e}", exc_info=True)
 
 
 def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg_fill_price: float):
@@ -531,6 +653,16 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                 # Create or update position in open_positions collection
                 create_or_update_position(order_data, filled_qty, avg_fill_price)
 
+                # Update signal_store with execution data and calculate PnL
+                execution_data = {
+                    "broker_order_id": result.get('ib_order_id'),
+                    "quantity_filled": filled_qty,
+                    "avg_fill_price": avg_fill_price,
+                    "fills": result.get('fills', []),
+                    "commission": 0  # TODO: Get actual commission from IBKR
+                }
+                update_signal_store_with_execution(order_data, execution_data)
+
                 # Update order status in database
                 trading_orders_collection.update_one(
                     {"order_id": order_id},
@@ -624,10 +756,11 @@ def periodic_account_updates():
 if __name__ == "__main__":
     logger.info("Starting Execution Service MVP (IBKR)")
 
-    # Connect to IBKR
+    # Connect to IBKR (continue even if connection fails - orders will queue)
     if not connect_to_ibkr():
-        logger.error("Failed to connect to IBKR - exiting")
-        exit(1)
+        logger.warning("⚠️  Failed to connect to IBKR - service will continue (orders will queue until IBKR connects)")
+    else:
+        logger.info("✅ IBKR broker connected successfully")
 
     # MVP: Disabled periodic account updates to avoid asyncio event loop issues in threads
     # Account state is published after each execution
