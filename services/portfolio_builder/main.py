@@ -70,14 +70,15 @@ if not MONGODB_URI:
 
 mongo_client = MongoClient(MONGODB_URI)
 db = mongo_client['mathematricks_trading']
+signals_db = mongo_client['mathematricks_signals']  # Raw signals database
 
 # Collections
 strategies_collection = db['strategies']
 current_allocation_collection = db['current_allocation']
 portfolio_tests_collection = db['portfolio_tests']
-incoming_signals_collection = db['incoming_signals']
+incoming_signals_collection = signals_db['trading_signals']  # Raw signals from MongoDB Atlas
+signal_store_collection = db['signal_store']  # Unified signal storage with embedded cerebro decisions
 trading_orders_collection = db['trading_orders']
-cerebro_decisions_collection = db['cerebro_decisions']
 
 logger.info("=" * 80)
 logger.info("PortfolioBuilder Service Starting")
@@ -240,8 +241,8 @@ async def update_strategy(strategy_id: str, updates: Dict[str, Any]):
 @app.delete("/api/v1/strategies/{strategy_id}")
 async def delete_strategy(strategy_id: str):
     """
-    Delete strategy configuration (soft delete)
-    Marks as INACTIVE instead of hard delete
+    Delete strategy configuration (hard delete)
+    Permanently removes the strategy from MongoDB
     """
     try:
         # Check if strategy exists
@@ -249,23 +250,17 @@ async def delete_strategy(strategy_id: str):
         if not existing:
             raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
 
-        # Soft delete - mark as INACTIVE
-        result = strategies_collection.update_one(
-            {"strategy_id": strategy_id},
-            {
-                "$set": {
-                    "status": "INACTIVE",
-                    "deleted_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow()
-                }
-            }
-        )
+        # Hard delete - permanently remove from database
+        result = strategies_collection.delete_one({"strategy_id": strategy_id})
 
-        logger.info(f"✅ Deleted (soft) strategy: {strategy_id}")
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=500, detail=f"Failed to delete strategy {strategy_id}")
+
+        logger.info(f"✅ Deleted (hard) strategy: {strategy_id}")
 
         return {
             "status": "success",
-            "message": f"Strategy {strategy_id} deleted (marked INACTIVE)",
+            "message": f"Strategy {strategy_id} permanently deleted",
             "strategy_id": strategy_id
         }
 
@@ -363,24 +358,56 @@ async def approve_allocation(request: Dict[str, Any]):
     """
     Approve allocation (makes it current)
     Replaces the current allocation with the approved one
+    Also saves to local JSON cache for Cerebro to use
     """
     try:
         allocations = request.get('allocations')
         if not allocations:
             raise HTTPException(status_code=400, detail="allocations field is required")
 
+        # Calculate total allocation (or use provided value)
+        total_allocation_pct = sum(allocations.values())
+
         # Create new current allocation document
         new_allocation = {
             "allocations": allocations,
+            "total_allocation_pct": total_allocation_pct,
             "approved_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
+            "updated_at": datetime.utcnow(),
+            "mode": "approved"
         }
 
         # Replace the current allocation (upsert - insert if doesn't exist)
         current_allocation_collection.delete_many({})  # Remove all existing
         current_allocation_collection.insert_one(new_allocation)
 
+        # Save to local JSON cache for Cerebro
+        cerebro_cache_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'cerebro_service',
+            'current_portfolio_allocation_approved.json'
+        )
+
+        cache_data = {
+            "_comment": "Current approved portfolio allocation (cached from MongoDB)",
+            "_source": "Frontend approval via PortfolioBuilder API",
+            "_metadata": {
+                "approved_at": new_allocation["approved_at"].isoformat(),
+                "updated_at": new_allocation["updated_at"].isoformat(),
+                "num_strategies": len(allocations)
+            },
+            "allocations": allocations,
+            "total_allocation_pct": sum(allocations.values()),
+            "mode": "approved_downloaded_from_mongo",
+            "last_updated": datetime.utcnow().isoformat(),
+            "update_action": "allocation_changed_by_user"
+        }
+
+        with open(cerebro_cache_path, 'w') as f:
+            json.dump(cache_data, f, indent=2)
+
         logger.info(f"✅ Approved new allocation with {len(allocations)} strategies")
+        logger.info(f"✅ Saved to cache: {cerebro_cache_path}")
 
         return {
             "status": "success",
@@ -628,15 +655,72 @@ async def run_portfolio_test(request: Dict[str, Any]):
 # Activity Tab APIs (Read-Only)
 # ============================================================================
 
+def serialize_mongo_document(doc):
+    """Recursively convert MongoDB document to JSON-serializable format"""
+    from bson import ObjectId
+
+    if isinstance(doc, dict):
+        return {k: serialize_mongo_document(v) for k, v in doc.items()}
+    elif isinstance(doc, list):
+        return [serialize_mongo_document(item) for item in doc]
+    elif isinstance(doc, ObjectId):
+        return str(doc)
+    elif isinstance(doc, datetime):
+        return doc.isoformat()
+    else:
+        return doc
+
 @app.get("/api/v1/activity/signals")
 async def get_recent_signals(limit: int = 50, environment: str = None):
-    """Get recent signals - filtered by environment if specified"""
+    """Get recent signals from signal_store - filtered by environment if specified"""
     try:
         query = {}
         if environment:
             query['environment'] = environment
 
-        signals = list(incoming_signals_collection.find(query, {'_id': 0}).sort('received_at', -1).limit(limit))
+        # Query signal_store - serialize all documents to handle ObjectIds and datetimes
+        signal_store_docs = list(signal_store_collection.find(query).sort('received_at', -1).limit(limit))
+
+        # Serialize all documents to handle ObjectIds and datetimes
+        signal_store_docs = [serialize_mongo_document(doc) for doc in signal_store_docs]
+
+        # Format signals for frontend
+        signals = []
+        for doc in signal_store_docs:
+            signal_data = doc.get('signal_data', {})
+            signal_details = signal_data.get('signal', {})
+
+            # Handle both single-leg and multi-leg signals
+            if isinstance(signal_details, list) and len(signal_details) > 0:
+                signal_details = signal_details[0]  # Use first leg for display
+
+            # Extract cerebro decision and remove any _id fields
+            cerebro_decision = doc.get('cerebro_decision')
+            decision_status = None
+            if cerebro_decision:
+                # Remove _id from cerebro_decision if present
+                if isinstance(cerebro_decision, dict) and '_id' in cerebro_decision:
+                    cerebro_decision.pop('_id', None)
+                decision_status = cerebro_decision.get('decision', 'PENDING')
+
+            formatted_signal = {
+                'signal_id': doc.get('signal_id') or signal_data.get('signalID') or signal_data.get('signal_id'),
+                'strategy_id': signal_data.get('strategy_name', 'Unknown'),
+                'timestamp': doc.get('received_at'),
+                'created_at': doc.get('received_at'),
+                'instrument': signal_details.get('ticker') or signal_details.get('instrument'),
+                'action': signal_details.get('action'),
+                'direction': signal_details.get('direction'),
+                'price': signal_details.get('price') or signal_details.get('entry_price'),
+                'quantity': signal_details.get('quantity'),
+                'environment': doc.get('environment', 'production'),
+                'processed_by_cerebro': cerebro_decision is not None,
+                'receive_lag_ms': doc.get('receive_lag_ms', 0),
+                'cerebro_decision': cerebro_decision,
+                'decision_status': decision_status
+            }
+            signals.append(formatted_signal)
+
         return {"status": "success", "count": len(signals), "signals": signals}
     except Exception as e:
         logger.error(f"Error fetching signals: {str(e)}")
@@ -660,13 +744,27 @@ async def get_recent_orders(limit: int = 50, environment: str = None):
 
 @app.get("/api/v1/activity/decisions")
 async def get_cerebro_decisions(limit: int = 50, environment: str = None):
-    """Get recent Cerebro decisions - filtered by environment if specified"""
+    """Get recent Cerebro decisions from signal_store (embedded decisions)"""
     try:
-        query = {}
+        query = {
+            'cerebro_decision': {'$ne': None}  # Only get signals with decisions
+        }
         if environment:
             query['environment'] = environment
 
-        decisions = list(cerebro_decisions_collection.find(query, {'_id': 0}).sort('timestamp', -1).limit(limit))
+        # Query signal_store and extract embedded decisions
+        signal_store_docs = list(signal_store_collection.find(query, {'_id': 0}).sort('received_at', -1).limit(limit))
+
+        # Extract decisions from signal_store documents
+        decisions = []
+        for doc in signal_store_docs:
+            decision = doc.get('cerebro_decision', {})
+            if decision:
+                # Add signal_id from signal_data for consistency with old format
+                signal_data = doc.get('signal_data', {})
+                decision['signal_id'] = doc.get('signal_id') or signal_data.get('signalID') or signal_data.get('signal_id')
+                decisions.append(decision)
+
         return {"status": "success", "count": len(decisions), "decisions": decisions}
     except Exception as e:
         logger.error(f"Error fetching decisions: {str(e)}")

@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../services/api';
-import { Activity as ActivityIcon, TrendingUp, TrendingDown, Clock } from 'lucide-react';
+import { Activity as ActivityIcon, TrendingUp, TrendingDown, Clock, ChevronDown, ChevronRight } from 'lucide-react';
 
 export const Activity: React.FC = () => {
   const [selectedTab, setSelectedTab] = useState<'signals' | 'orders' | 'decisions'>('signals');
   const [environment, setEnvironment] = useState<'production' | 'staging'>('staging');
+  const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
 
   // Fetch signals
   const { data: signalsData, isLoading: isLoadingSignals } = useQuery({
@@ -71,7 +72,7 @@ export const Activity: React.FC = () => {
               : 'text-gray-400 hover:text-white'
           }`}
         >
-          Recent Signals ({signals.length})
+          Signals ({signals.length})
         </button>
         <button
           onClick={() => setSelectedTab('orders')}
@@ -99,7 +100,7 @@ export const Activity: React.FC = () => {
       {selectedTab === 'signals' && (
         <div className="card">
           <h3 className="text-lg font-semibold text-white mb-4">
-            Recent Signals - {environment.toUpperCase()}
+            Signals - {environment.toUpperCase()}
           </h3>
 
           {isLoadingSignals ? (
@@ -124,55 +125,105 @@ export const Activity: React.FC = () => {
                     <th className="table-header">Action</th>
                     <th className="table-header">Direction</th>
                     <th className="table-header">Price</th>
+                    <th className="table-header">Cerebro Decision</th>
                     <th className="table-header">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
-                  {signals.map((signal: any) => (
-                    <tr key={signal.signal_id} className="hover:bg-gray-700/50">
-                      <td className="table-cell text-sm">
-                        <div className="flex items-center gap-2">
-                          <Clock className="h-4 w-4 text-gray-400" />
-                          {new Date(signal.created_at || signal.timestamp).toLocaleString()}
-                        </div>
-                      </td>
-                      <td className="table-cell font-mono text-xs">{signal.signal_id}</td>
-                      <td className="table-cell">
-                        <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
-                          {signal.strategy_id}
-                        </span>
-                      </td>
-                      <td className="table-cell font-semibold">{signal.instrument}</td>
-                      <td className="table-cell">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          signal.action === 'ENTRY' || signal.action === 'BUY' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'
-                        }`}>
-                          {signal.action}
-                        </span>
-                      </td>
-                      <td className="table-cell">
-                        <div className="flex items-center gap-1">
-                          {signal.direction === 'LONG' ? (
-                            <>
-                              <TrendingUp className="h-4 w-4 text-green-500" />
-                              <span className="text-green-500">LONG</span>
-                            </>
-                          ) : (
-                            <>
-                              <TrendingDown className="h-4 w-4 text-red-500" />
-                              <span className="text-red-500">SHORT</span>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                      <td className="table-cell">${signal.price?.toFixed(2) || 'N/A'}</td>
-                      <td className="table-cell">
-                        <span className="px-2 py-1 bg-green-900/30 text-green-400 rounded text-xs font-medium">
-                          {signal.processed_by_cerebro ? 'PROCESSED' : 'PENDING'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {signals.map((signal: any) => {
+                    const isExpanded = expandedSignalId === signal.signal_id;
+                    const hasDecision = signal.cerebro_decision && signal.decision_status;
+
+                    return (
+                      <React.Fragment key={signal.signal_id}>
+                        <tr className="hover:bg-gray-700/50">
+                          <td className="table-cell text-sm">
+                            <div className="flex items-center gap-2">
+                              <Clock className="h-4 w-4 text-gray-400" />
+                              {new Date(signal.created_at || signal.timestamp).toLocaleString()}
+                            </div>
+                          </td>
+                          <td className="table-cell font-mono text-xs">{signal.signal_id}</td>
+                          <td className="table-cell">
+                            <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
+                              {signal.strategy_id}
+                            </span>
+                          </td>
+                          <td className="table-cell font-semibold">{signal.instrument}</td>
+                          <td className="table-cell">
+                            <span className={`px-2 py-1 rounded text-xs font-medium ${
+                              signal.action === 'ENTRY' || signal.action === 'BUY' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'
+                            }`}>
+                              {signal.action}
+                            </span>
+                          </td>
+                          <td className="table-cell">
+                            <div className="flex items-center gap-1">
+                              {signal.direction === 'LONG' ? (
+                                <>
+                                  <TrendingUp className="h-4 w-4 text-green-500" />
+                                  <span className="text-green-500">LONG</span>
+                                </>
+                              ) : (
+                                <>
+                                  <TrendingDown className="h-4 w-4 text-red-500" />
+                                  <span className="text-red-500">SHORT</span>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                          <td className="table-cell">${signal.price?.toFixed(2) || 'N/A'}</td>
+                          <td className="table-cell">
+                            {hasDecision ? (
+                              <div className="flex items-center gap-2">
+                                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                  signal.decision_status === 'APPROVED' ? 'bg-green-900/30 text-green-400' :
+                                  signal.decision_status === 'REJECTED' ? 'bg-red-900/30 text-red-400' :
+                                  'bg-yellow-900/30 text-yellow-400'
+                                }`}>
+                                  {signal.decision_status}
+                                </span>
+                                <button
+                                  onClick={() => setExpandedSignalId(isExpanded ? null : signal.signal_id)}
+                                  className="p-1 hover:bg-gray-600 rounded transition-colors"
+                                  title="View decision details"
+                                >
+                                  {isExpanded ? (
+                                    <ChevronDown className="h-4 w-4 text-blue-400" />
+                                  ) : (
+                                    <ChevronRight className="h-4 w-4 text-gray-400" />
+                                  )}
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="px-2 py-1 bg-gray-700/30 text-gray-400 rounded text-xs font-medium">
+                                PENDING
+                              </span>
+                            )}
+                          </td>
+                          <td className="table-cell">
+                            <span className="px-2 py-1 bg-green-900/30 text-green-400 rounded text-xs font-medium">
+                              {signal.processed_by_cerebro ? 'PROCESSED' : 'PENDING'}
+                            </span>
+                          </td>
+                        </tr>
+
+                        {/* Expanded JSON viewer row */}
+                        {isExpanded && hasDecision && (
+                          <tr>
+                            <td colSpan={9} className="bg-gray-800/50 p-4">
+                              <div className="max-w-full overflow-x-auto">
+                                <h4 className="text-sm font-semibold text-white mb-2">Cerebro Decision Details</h4>
+                                <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-x-auto">
+                                  {JSON.stringify(signal.cerebro_decision, null, 2)}
+                                </pre>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

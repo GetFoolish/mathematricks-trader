@@ -146,6 +146,11 @@ class PositionManager:
             metadata = signal.get('metadata', {})
             original_signal = metadata.get('original_signal', {})
             nested_signal = original_signal.get('signal', {})
+
+            # Handle signal as array (new format) or dict (legacy)
+            if isinstance(nested_signal, list):
+                nested_signal = nested_signal[0] if len(nested_signal) > 0 else {}
+
             explicit_type = nested_signal.get('signal_type', '').upper()
 
         if explicit_type in ['ENTRY', 'EXIT', 'SCALE_IN', 'SCALE_OUT']:

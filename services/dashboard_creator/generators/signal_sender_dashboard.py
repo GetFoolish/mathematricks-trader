@@ -29,12 +29,16 @@ def generate_signal_sender_dashboard(
 
     logger.info(f"Generating signal sender dashboard for {strategy_id}...")
 
-    # Query cerebro_decisions for this strategy
-    decisions = list(
-        db['cerebro_decisions'].find(
-            {"strategy_id": strategy_id}
-        ).sort("timestamp", -1).limit(100)
+    # Query signal_store for this strategy's decisions (embedded)
+    signal_store_docs = list(
+        db['signal_store'].find({
+            "cerebro_decision": {"$ne": None},
+            "cerebro_decision.strategy_id": strategy_id
+        }).sort("received_at", -1).limit(100)
     )
+
+    # Extract embedded decisions
+    decisions = [doc.get('cerebro_decision') for doc in signal_store_docs if doc.get('cerebro_decision')]
 
     # Query account_state for open positions (filter by strategy)
     account_state = db['account_state'].find_one(sort=[("timestamp", -1)])

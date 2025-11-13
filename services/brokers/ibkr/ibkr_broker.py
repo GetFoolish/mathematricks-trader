@@ -116,18 +116,124 @@ class IBKRBroker(AbstractBroker):
     # ORDER MANAGEMENT
     # ========================================================================
 
+    def _translate_direction_to_side(self, direction: str) -> str:
+        """
+        Translate internal direction to IBKR side.
+
+        Args:
+            direction: Internal direction ("LONG" or "SHORT")
+
+        Returns:
+            IBKR side ("BUY" or "SELL")
+        """
+        mapping = {
+            'LONG': 'BUY',
+            'SHORT': 'SELL'
+        }
+        direction_upper = direction.upper() if direction else ''
+        return mapping.get(direction_upper, direction_upper)
+
+    def _translate_order(self, internal_order: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Translate internal order schema to IBKR-specific schema.
+
+        This method converts the universal internal order format used across
+        the system to the IBKR-specific format expected by the broker API.
+
+        Internal Schema (what ExecutionService sends):
+        {
+            'order_id': str,           # Internal tracking ID
+            'strategy_id': str,        # Strategy identifier
+            'instrument': str,         # Universal symbol (e.g., "AAPL", "AUDCAD")
+            'instrument_type': str,    # "STOCK" | "OPTION" | "FOREX" | "FUTURE"
+            'direction': str,          # "LONG" | "SHORT"
+            'action': str,             # "ENTRY" | "EXIT" (not sent to broker)
+            'quantity': float,         # Quantity
+            'order_type': str,         # "MARKET" | "LIMIT"
+            'limit_price': float,      # Optional: for LIMIT orders
+            'legs': [...]              # Optional: for multi-leg options
+        }
+
+        IBKR Schema (what IBKR API expects):
+        {
+            'symbol': str,             # Renamed from 'instrument'
+            'side': str,               # "BUY" | "SELL" (translated from direction)
+            'quantity': int,           # Integer quantity
+            'order_type': str,         # "MARKET" | "LIMIT"
+            'limit_price': float,      # Optional
+            'instrument_type': str,    # Pass-through
+            'legs': [...]              # Pass-through for options
+        }
+
+        Args:
+            internal_order: Standard internal order format
+
+        Returns:
+            IBKR-formatted order data
+
+        Raises:
+            ValueError: If required fields are missing or invalid
+        """
+        logger.debug(f"Translating internal order to IBKR format: {internal_order.get('order_id', 'unknown')}")
+
+        # Field name translations
+        ibkr_order = {
+            # Rename 'instrument' to 'symbol' and uppercase
+            'symbol': internal_order.get('instrument', '').upper(),
+
+            # Translate 'direction' to 'side' (LONG→BUY, SHORT→SELL)
+            'side': self._translate_direction_to_side(internal_order.get('direction', '')),
+
+            # Convert quantity to integer
+            'quantity': int(internal_order.get('quantity', 0)),
+
+            # Pass-through fields
+            'order_type': internal_order.get('order_type', 'MARKET'),
+            'instrument_type': internal_order.get('instrument_type', 'STOCK'),
+        }
+
+        # Conditional fields
+        if 'limit_price' in internal_order and internal_order['limit_price']:
+            ibkr_order['limit_price'] = internal_order['limit_price']
+
+        if 'stop_price' in internal_order and internal_order['stop_price']:
+            ibkr_order['stop_price'] = internal_order['stop_price']
+
+        # Multi-leg support (for options) - pass through
+        if 'legs' in internal_order and internal_order['legs']:
+            ibkr_order['legs'] = internal_order['legs']
+
+        # Pass through optional fields for specific instrument types
+        if 'underlying' in internal_order:
+            ibkr_order['underlying'] = internal_order['underlying']
+
+        if 'expiry' in internal_order:
+            ibkr_order['expiry'] = internal_order['expiry']
+
+        if 'exchange' in internal_order:
+            ibkr_order['exchange'] = internal_order['exchange']
+
+        if 'account_id' in internal_order:
+            ibkr_order['account_id'] = internal_order['account_id']
+
+        logger.debug(f"Translated order - symbol: {ibkr_order.get('symbol')}, side: {ibkr_order.get('side')}, qty: {ibkr_order.get('quantity')}")
+        return ibkr_order
+
     def place_order(self, order: Dict[str, Any]) -> Dict[str, Any]:
         """
         Place an order with IBKR.
 
+        This method accepts orders in the internal standard format and automatically
+        translates them to IBKR-specific format before placement.
+
         Args:
-            order: Order details
+            order: Order details in internal standard format
                 {
-                    "symbol": "AAPL",
-                    "side": "BUY" | "SELL",
-                    "quantity": 100,
+                    "instrument": "AAPL",              # Universal symbol
+                    "direction": "LONG" | "SHORT",    # Internal direction
+                    "quantity": 100,                  # Can be float
                     "order_type": "MARKET" | "LIMIT",
-                    "limit_price": 150.00,  # for LIMIT orders
+                    "limit_price": 150.00,            # for LIMIT orders
                     "instrument_type": "STOCK" | "OPTION" | "FOREX" | "FUTURE",
                     "account_id": "DU123456",
 
@@ -161,7 +267,11 @@ class IBKRBroker(AbstractBroker):
             if not self.is_connected():
                 raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
 
-            # Validate required fields
+            # Step 1: Translate internal order format to IBKR format
+            order = self._translate_order(order)
+            logger.info(f"Order translated for IBKR: {order.get('symbol')} {order.get('side')} {order.get('quantity')}")
+
+            # Step 2: Validate required fields (now in IBKR format)
             symbol = order.get("symbol", "").strip()
             side = order.get("side", "").upper()
             quantity = order.get("quantity", 0)
@@ -494,17 +604,42 @@ class IBKRBroker(AbstractBroker):
             for pos in positions:
                 side = "LONG" if pos.position > 0 else "SHORT"
                 quantity = abs(pos.position)
-                avg_price = pos.avgCost / quantity if quantity > 0 else 0
+
+                # avgCost in IBKR is already the average price per share
+                avg_price = abs(pos.avgCost)
+
+                # Request live market data for current price
+                current_price = 0
+                market_value = 0
+                unrealized_pnl = 0
+
+                try:
+                    # Request market data snapshot
+                    self.ib.reqMktData(pos.contract, snapshot=True)
+                    self.ib.sleep(0.5)  # Brief wait for data
+
+                    ticker = self.ib.ticker(pos.contract)
+                    if ticker and ticker.marketPrice():
+                        current_price = ticker.marketPrice()
+                        market_value = current_price * quantity
+                        unrealized_pnl = (current_price - avg_price) * quantity * (1 if side == "LONG" else -1)
+                    else:
+                        # Fallback: use avg_price if no market data available
+                        market_value = avg_price * quantity
+
+                except Exception as e:
+                    logger.warning(f"Could not fetch market data for {pos.contract.symbol}: {e}")
+                    market_value = avg_price * quantity
 
                 open_positions.append({
                     "symbol": pos.contract.symbol,
                     "quantity": quantity,
                     "side": side,
                     "avg_price": avg_price,
-                    "current_price": 0,  # Would need market data subscription
-                    "unrealized_pnl": 0,  # Would calculate from market data
+                    "current_price": current_price,
+                    "unrealized_pnl": unrealized_pnl,
                     "realized_pnl": 0,
-                    "market_value": quantity * avg_price
+                    "market_value": market_value
                 })
 
             return open_positions

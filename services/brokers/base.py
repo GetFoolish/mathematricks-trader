@@ -107,17 +107,53 @@ class AbstractBroker(ABC):
         """
         Place an order with the broker.
 
-        Args:
-            order: Order details
+        This method accepts orders in the INTERNAL STANDARD FORMAT used across
+        the Mathematricks trading system. Each broker implementation is responsible
+        for translating this format to its broker-specific schema.
+
+        INTERNAL STANDARD ORDER SCHEMA (what ExecutionService sends):
+        {
+            'order_id': str,              # Internal tracking ID (not sent to broker)
+            'strategy_id': str,           # Strategy identifier (not sent to broker)
+            'instrument': str,            # Universal symbol (e.g., "AAPL", "AUDCAD")
+            'instrument_type': str,       # "STOCK" | "ETF" | "OPTION" | "FOREX" | "FUTURE" | "CRYPTO"
+            'direction': str,             # "LONG" | "SHORT" (universal direction)
+            'action': str,                # "ENTRY" | "EXIT" | "SCALE_IN" | "SCALE_OUT" (not sent to broker)
+            'quantity': float,            # Quantity (can be fractional for forex/crypto)
+            'order_type': str,            # "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT"
+            'limit_price': float,         # Optional: for LIMIT orders
+            'stop_price': float,          # Optional: for STOP orders
+
+            # For multi-leg (options)
+            'legs': [                     # Optional: array of legs for complex orders
                 {
-                    "symbol": "AAPL",
-                    "side": "BUY" | "SELL",
-                    "quantity": 100,
-                    "order_type": "MARKET" | "LIMIT" | "STOP",
-                    "limit_price": 150.00,  # for LIMIT orders
-                    "stop_price": 145.00,   # for STOP orders
-                    "account_id": "IBKR_Main"
+                    'strike': float,
+                    'expiry': str,        # Format: "YYYYMMDD"
+                    'right': str,         # "C" | "P" | "CALL" | "PUT"
+                    'action': str,        # "BUY" | "SELL"
+                    'quantity': int
                 }
+            ],
+
+            # Additional optional fields
+            'underlying': str,            # For options/futures
+            'expiry': str,                # For futures/options
+            'exchange': str,              # Exchange code (can be inferred by broker)
+            'account_id': str             # Optional account identifier
+        }
+
+        BROKER IMPLEMENTATION REQUIREMENTS:
+        - Each broker MUST implement a `_translate_order()` method that converts
+          the internal format to broker-specific format
+        - Translation should happen at the START of place_order()
+        - Common translations needed:
+          * 'instrument' → broker's symbol field name (e.g., 'symbol', 'tradingsymbol')
+          * 'direction' → broker's side field (LONG→BUY, SHORT→SELL)
+          * 'quantity' → may need type conversion (float → int)
+          * Add broker-specific fields (exchange, product type, variety, etc.)
+
+        Args:
+            order: Order details in INTERNAL STANDARD FORMAT (see above)
 
         Returns:
             {

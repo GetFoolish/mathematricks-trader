@@ -12,6 +12,8 @@ export const Allocations: React.FC = () => {
   // State for Part 2: Allocation Editor
   const [editorAllocations, setEditorAllocations] = useState<Record<string, number>>({});
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
+  const [targetTotalAllocation, setTargetTotalAllocation] = useState<number | null>(null);
+  const [isEditingTotal, setIsEditingTotal] = useState(false);
 
   // State for Part 3: Table sorting
   const [sortField, setSortField] = useState<string>('created_at');
@@ -364,14 +366,73 @@ export const Allocations: React.FC = () => {
               {/* Total Allocation Display */}
               <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-700">
                 <div>
-                  <p className="text-sm text-gray-400">Total Allocation</p>
-                  <p className={`font-bold text-xl ${
-                    getTotalAllocation() > 230 ? 'text-red-400' :
-                    getTotalAllocation() > 200 ? 'text-yellow-400' :
-                    'text-green-400'
-                  }`}>
-                    {getTotalAllocation().toFixed(1)}%
-                  </p>
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-sm text-gray-400">Total Allocation</p>
+                    {!isEditingTotal && (
+                      <button
+                        onClick={() => {
+                          setTargetTotalAllocation(getTotalAllocation());
+                          setIsEditingTotal(true);
+                        }}
+                        className="p-0.5 hover:bg-gray-700 rounded"
+                        title="Edit total allocation"
+                      >
+                        <Edit className="h-3 w-3 text-gray-400 hover:text-white" />
+                      </button>
+                    )}
+                  </div>
+                  {isEditingTotal ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        value={targetTotalAllocation || ''}
+                        onChange={(e) => setTargetTotalAllocation(parseFloat(e.target.value) || 0)}
+                        className="w-24 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xl font-bold"
+                        step="0.1"
+                        min="0"
+                        max="300"
+                        autoFocus
+                      />
+                      <span className="text-xl font-bold text-gray-400">%</span>
+                      <button
+                        onClick={() => {
+                          if (targetTotalAllocation && targetTotalAllocation > 0) {
+                            // Scale all allocations proportionally
+                            const currentTotal = getTotalAllocation();
+                            const scaleFactor = targetTotalAllocation / currentTotal;
+                            const scaledAllocations: Record<string, number> = {};
+                            Object.entries(editorAllocations).forEach(([strategyId, allocation]) => {
+                              scaledAllocations[strategyId] = allocation * scaleFactor;
+                            });
+                            setEditorAllocations(scaledAllocations);
+                          }
+                          setIsEditingTotal(false);
+                        }}
+                        className="p-1 bg-green-600 hover:bg-green-700 rounded"
+                        title="Apply"
+                      >
+                        <Check className="h-4 w-4 text-white" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          setIsEditingTotal(false);
+                          setTargetTotalAllocation(null);
+                        }}
+                        className="p-1 bg-gray-600 hover:bg-gray-700 rounded"
+                        title="Cancel"
+                      >
+                        <X className="h-4 w-4 text-white" />
+                      </button>
+                    </div>
+                  ) : (
+                    <p className={`font-bold text-xl ${
+                      getTotalAllocation() > 230 ? 'text-red-400' :
+                      getTotalAllocation() > 200 ? 'text-yellow-400' :
+                      'text-green-400'
+                    }`}>
+                      {getTotalAllocation().toFixed(1)}%
+                    </p>
+                  )}
                 </div>
                 <div>
                   <p className="text-sm text-gray-400">Number of Strategies</p>
@@ -557,7 +618,7 @@ export const Allocations: React.FC = () => {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            window.open(`http://localhost:8001/api/v1/portfolio-tests/${test.test_id}/tearsheet`, '_blank');
+                            window.open(`http://localhost:8003/api/v1/portfolio-tests/${test.test_id}/tearsheet`, '_blank');
                           }}
                           className="text-blue-400 hover:text-blue-300 transition-colors"
                           title="View Tearsheet"

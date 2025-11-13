@@ -20,27 +20,21 @@ class SignalStandardizer:
     @staticmethod
     def generate_signal_id(signal_data: dict, now: Optional[datetime.datetime] = None) -> str:
         """
-        Generate clean signal ID: {strategy}_{YYYYMMDD}_{HHMMSS}_{seq}
+        Use original signalID if present, otherwise generate: {strategy}_{YYYYMMDD}_{HHMMSS}_{seq}
         """
+        # Use original signalID if provided
+        original_id = signal_data.get('signalID') or signal_data.get('signal_id')
+        if original_id:
+            return str(original_id)
+
+        # Otherwise generate new ID (backwards compatibility)
         if now is None:
             now = datetime.datetime.utcnow()
 
         strategy_name = signal_data.get('strategy_name', 'Unknown').replace(' ', '_').replace('-', '_')
         date_str = now.strftime('%Y%m%d')
         time_str = now.strftime('%H%M%S')
-
-        # Extract sequence number from original signalID if available
-        original_id = signal_data.get('signalID') or signal_data.get('signal_id')
-        if original_id:
-            # Extract sequence number from end of original ID (e.g., "001" from "SPY_20251027_104528_001")
-            parts = str(original_id).split('_')
-            if len(parts) > 0 and parts[-1].isdigit():
-                seq = parts[-1].zfill(3)[:3]  # Ensure exactly 3 digits
-            else:
-                seq = str(int(now.microsecond / 1000)).zfill(3)[:3]
-        else:
-            # Use milliseconds as sequence number (always 3 digits)
-            seq = str(int(now.microsecond / 1000)).zfill(3)[:3]
+        seq = str(int(now.microsecond / 1000)).zfill(3)[:3]
 
         return f"{strategy_name}_{date_str}_{time_str}_{seq}"
 
@@ -72,11 +66,34 @@ class SignalStandardizer:
 
         Args:
             signal_data: Raw signal data from MongoDB
+                         signal can be:
+                         - dict (legacy single-leg)
+                         - list with 1 item (single-leg)
+                         - list with multiple items (multi-leg)
 
         Returns:
             Standardized signal dictionary ready for Pub/Sub
         """
-        signal_payload = signal_data.get('signal', {})
+        signal_payload_raw = signal_data.get('signal', {})
+
+        # Handle signal as array (new format)
+        is_multi_leg = False
+        legs = None
+
+        if isinstance(signal_payload_raw, list):
+            if len(signal_payload_raw) == 0:
+                raise ValueError("Signal array is empty")
+            elif len(signal_payload_raw) == 1:
+                # Single-leg: extract the item
+                signal_payload = signal_payload_raw[0]
+            else:
+                # Multi-leg: use first leg for main fields, store all legs
+                is_multi_leg = True
+                signal_payload = signal_payload_raw[0]  # Primary leg
+                legs = signal_payload_raw  # All legs
+        else:
+            # Legacy format: signal is a dict
+            signal_payload = signal_payload_raw
 
         # Generate clean signal ID
         signal_id = SignalStandardizer.generate_signal_id(signal_data)
@@ -101,11 +118,13 @@ class SignalStandardizer:
             # Multi-asset support fields
             "instrument_type": signal_payload.get('instrument_type'),  # STOCK, OPTION, FOREX, FUTURE
             "underlying": signal_payload.get('underlying'),  # For options
-            "legs": signal_payload.get('legs'),  # For multi-leg options
+            "legs": legs or signal_payload.get('legs'),  # Multi-leg array or legacy legs field
             "exchange": signal_payload.get('exchange'),  # For futures
             "metadata": {
                 "expected_alpha": 0.02,  # Would come from backtest data
-                "original_signal": signal_data
+                "original_signal": signal_data,
+                "is_multi_leg": is_multi_leg,
+                "leg_count": len(legs) if legs else 1
             },
             "processed_by_cerebro": False,
             "created_at": datetime.datetime.utcnow().isoformat()

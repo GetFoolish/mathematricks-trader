@@ -143,21 +143,168 @@ class ZerodhaBroker(AbstractBroker):
     # ORDER MANAGEMENT
     # ========================================================================
 
+    def _translate_direction_to_side(self, direction: str) -> str:
+        """
+        Translate internal direction to Zerodha side.
+
+        Args:
+            direction: Internal direction ("LONG" or "SHORT")
+
+        Returns:
+            Zerodha side ("BUY" or "SELL")
+        """
+        mapping = {
+            'LONG': 'BUY',
+            'SHORT': 'SELL'
+        }
+        direction_upper = direction.upper() if direction else ''
+        return mapping.get(direction_upper, direction_upper)
+
+    def _determine_exchange(self, order: Dict[str, Any]) -> str:
+        """
+        Determine appropriate exchange for Zerodha order.
+
+        Args:
+            order: Internal order format
+
+        Returns:
+            Exchange code (NSE, BSE, NFO, MCX, etc.)
+        """
+        # If exchange explicitly provided, use it
+        if 'exchange' in order:
+            return order['exchange'].upper()
+
+        # Otherwise infer from instrument_type
+        instrument_type = order.get('instrument_type', 'STOCK').upper()
+
+        if instrument_type in ['STOCK', 'ETF']:
+            return 'NSE'  # Default equity exchange
+        elif instrument_type in ['OPTION', 'FUTURE']:
+            return 'NFO'  # National Futures & Options exchange
+        elif instrument_type == 'FOREX':
+            return 'CDS'  # Currency Derivatives Segment
+        else:
+            return 'NSE'  # Safe default
+
+    def _determine_product_type(self, order: Dict[str, Any]) -> str:
+        """
+        Determine Zerodha product type based on order characteristics.
+
+        Product types:
+        - CNC (Cash and Carry): Delivery trading for stocks
+        - MIS (Margin Intraday Square-off): Intraday with leverage
+        - NRML (Normal): Futures and Options, overnight positions
+
+        Args:
+            order: Internal order format
+
+        Returns:
+            Product type (CNC, MIS, NRML)
+        """
+        # If product explicitly provided, use it
+        if 'product' in order:
+            return order['product'].upper()
+
+        instrument_type = order.get('instrument_type', 'STOCK').upper()
+
+        # F&O always use NRML
+        if instrument_type in ['OPTION', 'FUTURE']:
+            return 'NRML'
+
+        # For stocks/ETFs, default to CNC (delivery)
+        # Users can override this in their signals if they want intraday (MIS)
+        return 'CNC'
+
+    def _translate_order(self, internal_order: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Translate internal order schema to Zerodha-specific schema.
+
+        This method converts the universal internal order format to Zerodha's
+        Kite Connect API format.
+
+        Internal Schema (what ExecutionService sends):
+        {
+            'order_id': str,
+            'strategy_id': str,
+            'instrument': str,         # Universal symbol
+            'instrument_type': str,    # "STOCK" | "OPTION" | "FOREX" | "FUTURE"
+            'direction': str,          # "LONG" | "SHORT"
+            'quantity': float,
+            'order_type': str,         # "MARKET" | "LIMIT"
+            'limit_price': float       # Optional
+        }
+
+        Zerodha Schema (what Kite API expects):
+        {
+            'tradingsymbol': str,      # Zerodha's symbol format
+            'side': str,               # "BUY" | "SELL"
+            'quantity': int,
+            'order_type': str,
+            'exchange': str,           # "NSE" | "BSE" | "NFO" | "CDS"
+            'product': str,            # "CNC" | "MIS" | "NRML"
+            'variety': str             # "regular" | "amo" | "co" | "iceberg"
+        }
+
+        Args:
+            internal_order: Standard internal order format
+
+        Returns:
+            Zerodha-formatted order data
+
+        Raises:
+            ValueError: If required fields are missing or invalid
+        """
+        logger.debug(f"Translating internal order to Zerodha format: {internal_order.get('order_id', 'unknown')}")
+
+        # Field translations
+        zerodha_order = {
+            # Rename 'instrument' to 'symbol' (Zerodha uses 'tradingsymbol' but we'll use 'symbol' for now)
+            'symbol': internal_order.get('instrument', '').upper(),
+
+            # Translate 'direction' to 'side' (LONG→BUY, SHORT→SELL)
+            'side': self._translate_direction_to_side(internal_order.get('direction', '')),
+
+            # Convert quantity to integer
+            'quantity': int(internal_order.get('quantity', 0)),
+
+            # Pass-through
+            'order_type': internal_order.get('order_type', 'MARKET'),
+
+            # Zerodha-specific fields (determined from context)
+            'exchange': self._determine_exchange(internal_order),
+            'product': self._determine_product_type(internal_order),
+            'variety': internal_order.get('variety', 'regular').lower()
+        }
+
+        # Conditional fields
+        if 'limit_price' in internal_order and internal_order['limit_price']:
+            zerodha_order['limit_price'] = internal_order['limit_price']
+
+        if 'stop_price' in internal_order and internal_order['stop_price']:
+            zerodha_order['trigger_price'] = internal_order['stop_price']  # Zerodha calls it trigger_price
+
+        logger.debug(f"Translated order - symbol: {zerodha_order.get('symbol')}, side: {zerodha_order.get('side')}, exchange: {zerodha_order.get('exchange')}, product: {zerodha_order.get('product')}")
+        return zerodha_order
+
     def place_order(self, order: Dict[str, Any]) -> Dict[str, Any]:
         """
         Place an order with Zerodha.
 
+        This method accepts orders in the internal standard format and automatically
+        translates them to Zerodha-specific format before placement.
+
         Args:
-            order: Order details
+            order: Order details in internal standard format
                 {
-                    "symbol": "RELIANCE",
-                    "side": "BUY" | "SELL",
-                    "quantity": 100,
+                    "instrument": "RELIANCE",              # Universal symbol
+                    "direction": "LONG" | "SHORT",        # Internal direction
+                    "quantity": 100,                      # Can be float
                     "order_type": "MARKET" | "LIMIT",
-                    "limit_price": 2500.00,  # for LIMIT orders
-                    "exchange": "NSE" | "BSE" | "NFO" | "MCX",  # Default: NSE
-                    "product": "CNC" | "MIS" | "NRML",  # CNC=delivery, MIS=intraday, NRML=futures
-                    "variety": "regular" | "amo" | "co" | "iceberg"
+                    "limit_price": 2500.00,               # for LIMIT orders
+                    "instrument_type": "STOCK" | "OPTION" | "FUTURE" | "FOREX",
+                    "exchange": "NSE",                    # Optional, inferred if not provided
+                    "product": "CNC",                     # Optional, inferred if not provided
+                    "variety": "regular"                  # Optional
                 }
 
         Returns:
@@ -179,7 +326,11 @@ class ZerodhaBroker(AbstractBroker):
             if not self.is_connected():
                 raise BrokerConnectionError("Not connected to Zerodha - access token missing", broker_name="Zerodha")
 
-            # Validate required fields
+            # Step 1: Translate internal order format to Zerodha format
+            order = self._translate_order(order)
+            logger.info(f"Order translated for Zerodha: {order.get('symbol')} {order.get('side')} {order.get('quantity')} @ {order.get('exchange')}")
+
+            # Step 2: Validate required fields (now in Zerodha format)
             symbol = order.get("symbol", "").upper().strip()
             side = order.get("side", "").upper()
             quantity = order.get("quantity", 0)

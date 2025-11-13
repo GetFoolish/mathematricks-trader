@@ -86,12 +86,31 @@ async def get_signals(
         else:
             raise HTTPException(status_code=400, detail="status must be EXECUTED or REJECTED")
 
-    # Query decisions
-    decisions = list(
-        db['cerebro_decisions'].find(query)
-        .sort("timestamp", -1)
+    # Query decisions from signal_store (embedded)
+    # Need to match on signal_data.strategy_id since that's where the strategy is stored
+    signal_store_query = {
+        'cerebro_decision': {'$ne': None},
+        'signal_data.strategy_name': strategy_id  # Match strategy in signal_data
+    }
+    if status:
+        if status == "EXECUTED":
+            signal_store_query['cerebro_decision.decision'] = "APPROVED"
+        elif status == "REJECTED":
+            signal_store_query['cerebro_decision.decision'] = {"$ne": "APPROVED"}
+
+    # Get signal_store documents and extract decisions
+    signal_store_docs = list(
+        db['signal_store'].find(signal_store_query)
+        .sort("received_at", -1)
         .limit(limit)
     )
+
+    # Extract decisions from signal_store
+    decisions = []
+    for doc in signal_store_docs:
+        decision = doc.get('cerebro_decision', {})
+        if decision:
+            decisions.append(decision)
 
     # Format response
     signals = []
@@ -144,10 +163,12 @@ async def get_signal_details(
 
     db = _mongo_client['mathematricks_trading']
 
-    # Get cerebro decision
-    decision = db['cerebro_decisions'].find_one({"signal_id": signal_id})
-    if not decision:
+    # Get signal from signal_store (with embedded cerebro decision)
+    signal_doc = db['signal_store'].find_one({"signal_id": signal_id})
+    if not signal_doc or not signal_doc.get('cerebro_decision'):
         raise HTTPException(status_code=404, detail="Signal not found")
+
+    decision = signal_doc.get('cerebro_decision')
 
     # Verify signal belongs to this strategy
     if decision.get("strategy_id") != strategy_id:

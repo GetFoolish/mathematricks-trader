@@ -1290,7 +1290,7 @@ signal_collector.py (637 lines, root level)
 
 #### Target Structure
 ```
-services/signal_ingestion/
+services/signal_ingestion_service/
 ├── main.py (entry point, port 8000)
 ├── mongodb_watcher.py (Change Stream monitoring)
 ├── signal_standardizer.py (format conversion)
@@ -1303,7 +1303,7 @@ services/signal_ingestion/
 
 **3.1. Create Service Directory**
 ```bash
-mkdir -p services/signal_ingestion
+mkdir -p services/signal_ingestion_service
 ```
 
 **3.2. Extract Code from signal_collector.py**
@@ -1329,7 +1329,7 @@ mkdir -p services/signal_ingestion
 # Lines ~500-600 from signal_collector.py
 ```
 
-**File:** `services/signal_ingestion/main.py`
+**File:** `services/signal_ingestion_service/main.py`
 ```python
 """Signal Ingestion Service - Entry Point"""
 import logging
@@ -1359,7 +1359,7 @@ if __name__ == "__main__":
 ```bash
 # Replace signal_collector.py startup with:
 echo "Starting SignalIngestionService..."
-$PYTHON_PATH services/signal_ingestion/main.py > "$LOG_DIR/signal_ingestion.log" 2>&1 &
+$PYTHON_PATH services/signal_ingestion/main.py > "$LOG_DIR/signal_ingestion_service.log" 2>&1 &
 SIGNAL_INGESTION_PID=$!
 echo "SignalIngestionService started (PID: $SIGNAL_INGESTION_PID) on port 8000"
 ```
@@ -1379,7 +1379,7 @@ curl http://localhost:8000/health
 
 # Send test signal via TradingView webhook (inserts into MongoDB)
 # Watch logs
-tail -f logs/signal_ingestion.log
+tail -f logs/signal_ingestion_service.log
 
 # Verify signal flows to Cerebro
 tail -f logs/cerebro_service.log
@@ -2240,7 +2240,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ---
 
-### ✅ PHASE 5: Shared Broker Library - COMPLETED November 9, 2025
+### ✅ ~~PHASE 5: Shared Broker Library - COMPLETED November 9, 2025~~
 **Duration:** 3-4 days
 **Risk Level:** Medium
 **Dependencies:** Phase 4 complete
@@ -2668,7 +2668,7 @@ PASSED in 8.99s
 
 ---
 
-### ✅ PHASE 6: Multi-Broker AccountDataService - COMPLETED November 10, 2025
+### ✅ ~~PHASE 6: Multi-Broker AccountDataService - COMPLETED November 10, 2025~~
 **Duration:** 4-5 days
 **Risk Level:** Medium
 **Dependencies:** Phase 5 complete
@@ -3136,8 +3136,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ---
 
-### ✅ PHASE 7: MongoDB Consolidation - COMPLETED November 10, 2025
-
+### ✅ ~~PHASE 7: MongoDB Consolidation - COMPLETED November 10, 2025~~
 **What Was Accomplished:**
 - ✅ Migrated `trading_signals` collection from `mathematricks_signals` → `mathematricks_trading`
 - ✅ Updated SignalIngestionService (`mongodb_watcher.py`) to use consolidated database
@@ -3273,18 +3272,591 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ---
 
-### PHASE 8: Documentation & Deployment
+### PHASE 8: Manual System Testing & Validation
 **Duration:** 2-3 days
 **Risk Level:** Low
-**Dependencies:** All phases complete
+**Dependencies:** Phase 7 complete (MongoDB Consolidation)
+
+#### Overview
+Before deploying the system to production, we must perform comprehensive manual testing to ensure all components work together correctly. This phase validates the entire system end-to-end, from service lifecycle management to signal processing and frontend display.
 
 #### Tasks
 
-**8.1. Update CLAUDE.md**
+**8.1. Service Lifecycle Testing**
+
+Test system startup, shutdown, and process management.
+
+```bash
+# Test 1: Clean system startup
+./run_mvp_demo.sh
+
+# Verify all services started
+# Expected: See startup messages for all 6 services + Pub/Sub emulator
+# - signal_collector.py
+# - cerebro_service/main.py
+# - execution_service/main.py
+# - account_data_service/main.py
+# - portfolio_builder/main.py
+# - dashboard_creator/main.py
+# - Pub/Sub Emulator (port 8085)
+
+# Check all ports are listening
+lsof -i :8000  # SignalIngestionService
+lsof -i :8002  # AccountDataService
+lsof -i :8003  # PortfolioBuilderService
+lsof -i :8004  # DashboardCreatorService
+lsof -i :8085  # Pub/Sub Emulator
+
+OR FOR A QUICK CLEAN OUTPUT: 
+for port in 8000 8002 8003 8004 8085; do echo "Port $port:"; lsof -i :$port | grep LISTEN || echo "  ❌ Not listening"; done
+
+# Test 2: Graceful shutdown
+./stop_mvp_demo.sh
+
+# Send Test Symbol
+SIGNAL_ID="test_spy_fresh_$RANDOM" && echo "Sending signal: $SIGNAL_ID" && curl -X POST https://staging.mathematricks.fund/api/signals -H "Content-Type: application/json" -d '{
+    "strategy_name": "Forex",
+    "signal_sent_EPOCH": '$(date +%s)',
+    "signalID": "'$SIGNAL_ID'",
+    "passphrase": "test_password_123",
+    "signal": {"ticker": "AUDCAD", "action": "BUY", "quantity":100000}
+}'
+
+# Verify all services stopped cleanly
+# Expected: No orphaned processes
+
+# Test 3: Check for orphaned processes
+ps aux | grep python | grep -E "(signal_collector|cerebro|execution|account_data|portfolio_builder|dashboard_creator)"
+ps aux | grep "pubsub-emulator"
+
+# Expected: No results (all processes should be stopped)
+
+# Test 4: Check port cleanup
+lsof -i :8000
+lsof -i :8002
+lsof -i :8003
+lsof -i :8004
+lsof -i :8085
+
+# Expected: No results (all ports should be free)
+
+# Test 5: Restart after clean shutdown
+./run_mvp_demo.sh
+
+# Expected: Clean startup with no port conflicts
+```
+
+**Success Criteria:**
+- ✅ All services start without errors
+- ✅ All required ports (8000, 8002, 8003, 8004, 8085) are listening
+- ✅ Stop script terminates all processes cleanly
+- ✅ No orphaned processes remain after shutdown
+- ✅ System can restart cleanly after stop
+
+**Automated Test:**
+```bash
+# Run service lifecycle test
+python tests/integration/test_service_lifecycle.py
+```
+
+---
+
+**8.2. Frontend Admin Testing**
+
+Test the React admin interface for strategy management and portfolio allocation.
+
+```bash
+# Prerequisite: System must be running
+./run_mvp_demo.sh
+
+# Test 1: Access frontend
+open http://localhost:5173
+
+# Expected: Frontend loads without console errors
+
+# Test 2: Dashboard Page
+# Navigate to: http://localhost:5173/
+# Verify:
+# - Portfolio metrics display (Equity, P&L, Margin Used)
+# - Recent activity feed shows latest signals/orders
+# - All API calls succeed (check browser console)
+# - No JavaScript errors
+
+# Test 3: Strategies Page
+# Navigate to: http://localhost:5173/strategies
+# Verify:
+# - Strategies table loads
+# - Can filter by status/account/mode
+# - Can search by strategy ID
+# - Edit/Delete/Sync buttons work
+
+# Test 4: Allocations Page
+# Navigate to: http://localhost:5173/allocations
+# Verify:
+# - Current allocations table displays
+# - Correlation matrix renders
+# - Can view allocation history
+
+# Test 5: Activity Page
+# Navigate to: http://localhost:5173/activity
+# Verify:
+# - Recent signals table loads
+# - Recent orders table loads
+# - Cerebro decisions log displays
+```
+
+**Success Criteria:**
+- ✅ Frontend loads at localhost:5173
+- ✅ All pages render without errors
+- ✅ All API endpoints respond successfully
+- ✅ Navigation works between all pages
+- ✅ No console errors in browser devtools
+
+**Manual Checks:**
+- Check browser console for errors: `Cmd+Option+J` (Mac) / `F12` (Windows)
+- Check network tab for failed API calls
+- Verify responsive design on different screen sizes
+
+---
+
+**8.3. Strategy Management Testing**
+
+Test adding, editing, and managing strategies via the frontend.
+
+```bash
+# Prerequisite: Frontend must be running
+open http://localhost:5173/strategies
+
+# Test 1: Add new strategy via UI
+# Click "Add Strategy" button
+# Fill form:
+#   - Strategy ID: "test_strategy_001"
+#   - Name: "Test Momentum Strategy"
+#   - Status: ACTIVE
+#   - Account: "IBKR_DU123456"
+#   - Mode: PAPER
+#   - Include in Optimization: Yes
+# Submit form
+
+# Verify in MongoDB:
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.strategies.findOne({strategy_id: 'test_strategy_001'})"
+
+# Expected: Strategy document exists with correct fields
+
+# Test 2: Edit strategy via UI
+# Click "Edit" on test_strategy_001
+# Change Name to: "Updated Test Strategy"
+# Change Mode to: LIVE
+# Submit
+
+# Verify update in MongoDB
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.strategies.findOne({strategy_id: 'test_strategy_001'}, {strategy_name: 1, mode: 1})"
+
+# Expected: Name and mode updated
+
+# Test 3: Toggle include_in_optimization
+# Toggle checkbox for test_strategy_001
+# Verify in MongoDB that include_in_optimization changed
+
+# Test 4: Delete strategy
+# Click "Delete" on test_strategy_001
+# Confirm deletion
+# Verify removed from MongoDB
+
+# Test 5: Bulk add multiple strategies
+# Add 3-5 test strategies with different configurations
+# Verify all appear in table and MongoDB
+```
+
+**Success Criteria:**
+- ✅ Can create new strategies via UI
+- ✅ Strategies persist to MongoDB correctly
+- ✅ Can edit existing strategies
+- ✅ Can toggle status/mode/include_in_optimization
+- ✅ Can delete strategies
+- ✅ UI updates immediately after changes
+
+**Automated Test:**
+```bash
+# Run strategy management integration tests
+python tests/integration/test_strategy_management.py
+```
+
+---
+
+**8.4. Portfolio Allocation Testing**
+
+Test portfolio optimization and allocation approval workflow.
+
+```bash
+# Prerequisite: Multiple strategies must exist in MongoDB
+# If needed, load sample strategies:
+python tools/load_strategies_from_folder.py
+
+# Test 1: Run portfolio optimization
+# In frontend: Navigate to Allocations page
+# Click "Run Optimization"
+# Select algorithm: "max_hybrid"
+# Click "Run"
+
+# Expected:
+# - Optimization runs successfully
+# - Recommended allocations appear
+# - Correlation matrix displays
+
+# Verify optimization saved to MongoDB:
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.portfolio_optimization_runs.find().sort({timestamp: -1}).limit(1).pretty()"
+
+# Test 2: Review recommended allocation
+# Check allocation percentages sum to 100%
+# Verify no strategy exceeds concentration limits
+# Check margin constraint is satisfied
+
+# Test 3: Approve allocation
+# Click "Approve Allocation" button
+# Confirm approval
+
+# Verify approved allocation saved:
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.portfolio_allocations.findOne({status: 'approved'}, {sort: {timestamp: -1}})"
+
+# Test 4: Custom allocation
+# Click "Custom Allocation"
+# Manually adjust percentages
+# Submit custom allocation
+
+# Verify custom allocation saved with status='custom'
+
+# Test 5: Test all optimization algorithms
+# Run each algorithm and verify results:
+python -c "
+from services.portfolio_builder.api.optimize import run_optimization
+algorithms = ['max_hybrid', 'max_sharpe', 'max_cagr']
+for algo in algorithms:
+    result = run_optimization(algo)
+    print(f'{algo}: {result}')
+"
+```
+
+**Success Criteria:**
+- ✅ Portfolio optimizations run successfully
+- ✅ Results are mathematically valid (weights sum to 1.0)
+- ✅ Margin constraints are satisfied
+- ✅ Can approve recommended allocations
+- ✅ Can create custom allocations
+- ✅ All allocation changes persist to MongoDB
+
+**Automated Test:**
+```bash
+# Run portfolio allocation integration tests
+python tests/integration/test_portfolio_allocation.py
+```
+
+---
+
+**8.5. End-to-End Signal Flow Testing**
+
+Test the complete signal processing pipeline from ingestion to execution.
+
+```bash
+# Prerequisite: System must be running with approved allocation
+./run_mvp_demo.sh
+
+# Ensure at least one strategy has allocation:
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.portfolio_allocations.findOne({status: 'approved'})"
+
+# Test 1: Send manual test signal
+python dev/leslie_strategies/signal_sender.py --ticker AAPL --action BUY --price 150.25 --strategy test_strategy_001
+
+# Expected signal ID format: test_strategy_001_20250110_143022_abc123
+
+# Test 2: Verify signal in MongoDB (signals collection)
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.signals.find().sort({timestamp: -1}).limit(1).pretty()"
+
+# Expected: Signal document with standardized fields
+
+# Test 3: Check signal_collector.py logs
+tail -f logs/signal_ingestion.log | grep "test_strategy_001"
+
+# Expected: "Publishing signal to Pub/Sub: test_strategy_001_..."
+
+# Test 4: Check CerebroService received signal
+tail -f logs/cerebro_service.log | grep "test_strategy_001"
+
+# Expected:
+# - "Received signal: test_strategy_001_..."
+# - "Fetching allocation for strategy: test_strategy_001"
+# - "Position sizing calculation..."
+# - "Publishing order: test_strategy_001_..._ORD"
+
+# Test 5: Verify cerebro_decisions in MongoDB
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.cerebro_decisions.find().sort({timestamp: -1}).limit(1).pretty()"
+
+# Expected: Decision document with:
+# - signal_id
+# - strategy_id
+# - allocation_pct
+# - available_capital
+# - position_size
+# - margin_impact
+# - approval_status
+
+# Test 6: Verify order created in MongoDB
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.orders.find().sort({timestamp: -1}).limit(1).pretty()"
+
+# Expected: Order document with:
+# - order_id: "{signal_id}_ORD"
+# - signal_id
+# - ticker: "AAPL"
+# - action: "BUY"
+# - quantity (whole number)
+# - order_status: "pending" or "submitted"
+
+# Test 7: Check ExecutionService received order
+tail -f logs/execution_service.log | grep "test_strategy_001"
+
+# Expected:
+# - "Received order: test_strategy_001_..._ORD"
+# - "Placing order with IBKR..."
+# - "Order submitted successfully" OR "Order filled"
+
+# Test 8: Verify execution confirmation in MongoDB
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.order_confirmations.find().sort({timestamp: -1}).limit(1).pretty()"
+
+# Expected: Confirmation document with:
+# - order_id
+# - broker_order_id (from IBKR)
+# - status: "filled" or "submitted"
+# - filled_qty
+# - avg_fill_price
+
+# Test 9: Check AccountDataService updated account state
+tail -f logs/account_data_service.log | grep "test_strategy_001"
+
+# Expected: "Updated account state with new position"
+
+# Verify account_state in MongoDB:
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.account_state.find().sort({timestamp: -1}).limit(1).pretty()"
+
+# Expected: Account state reflects new position
+```
+
+**Success Criteria:**
+- ✅ Signal ingested and stored in MongoDB
+- ✅ Signal published to Pub/Sub by signal_collector
+- ✅ CerebroService processes signal correctly
+- ✅ Position sizing calculation is accurate
+- ✅ Order created with correct format (signal_id + "_ORD")
+- ✅ Order published to Pub/Sub
+- ✅ ExecutionService receives and submits order to IBKR
+- ✅ Execution confirmation saved to MongoDB
+- ✅ AccountDataService updates account state
+- ✅ All logs show correct flow progression
+
+**Automated Test:**
+```bash
+# Run end-to-end signal flow test
+python tests/integration/test_signal_flow_e2e.py
+```
+
+**Troubleshooting:**
+- If signal not appearing: Check MongoDB connection and signal_collector logs
+- If Cerebro not processing: Check Pub/Sub emulator running on port 8085
+- If order not executing: Check IBKR TWS connection and credentials
+- If account state not updating: Check AccountDataService Pub/Sub subscription
+
+---
+
+**8.6. Frontend Client Dashboard Testing**
+
+Test the client-facing dashboard displays signals and portfolio data correctly.
+
+```bash
+# Prerequisite: Signal flow test (8.5) completed successfully
+
+# Test 1: Access client dashboard
+# Navigate to: https://mathematricks.fund
+# OR if testing locally: open http://localhost:3000
+
+# Test 2: Verify latest signal appears
+# Check "Recent Signals" section
+# Expected: test_strategy_001 signal from 8.5 appears with:
+# - Timestamp
+# - Ticker (AAPL)
+# - Action (BUY)
+# - Price ($150.25)
+# - Status
+
+# Test 3: Verify portfolio metrics update
+# Check "Portfolio Overview" section
+# Expected:
+# - Total Equity displays current value
+# - Daily P&L reflects test trade
+# - Margin Used percentage updated
+# - Open Positions count incremented
+
+# Test 4: Check signal detail page
+# Click on test_strategy_001 signal
+# Expected detail page shows:
+# - Full signal metadata
+# - Position sizing details
+# - Order execution details
+# - Current P&L for this position
+
+# Test 5: Verify dashboard JSON generation
+# Check that DashboardCreatorService generated JSON:
+curl http://localhost:8004/api/v1/dashboards/client | jq
+
+# Expected: JSON with:
+# - portfolio_metrics
+# - recent_signals (includes test signal)
+# - recent_orders
+# - open_positions
+
+# Verify JSON saved to MongoDB:
+mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/mathematricks_trading" --eval "db.dashboard_snapshots.findOne({dashboard_type: 'client'}, {sort: {timestamp: -1}})"
+
+# Test 6: Test strategy-specific dashboard
+curl http://localhost:8004/api/v1/dashboards/signal-sender/test_strategy_001 | jq
+
+# Expected: JSON with strategy-specific data:
+# - signals sent by test_strategy_001
+# - positions opened
+# - P&L for this strategy
+```
+
+**Success Criteria:**
+- ✅ Client dashboard loads successfully
+- ✅ Recent signals display correctly
+- ✅ Portfolio metrics are accurate
+- ✅ Signal detail pages work
+- ✅ Dashboard JSON API responds
+- ✅ Dashboard snapshots saved to MongoDB
+- ✅ Strategy-specific dashboards work
+
+**Manual Verification:**
+- Compare displayed data with MongoDB collections
+- Verify P&L calculations are correct
+- Check that all timestamps are in correct timezone
+- Ensure dashboard updates within reasonable latency (<30s)
+
+---
+
+**8.7. System Health Checks**
+
+Final health checks before declaring Phase 8 complete.
+
+```bash
+# Test 1: Service health endpoints
+curl http://localhost:8000/health  # SignalIngestion
+curl http://localhost:8002/health  # AccountData
+curl http://localhost:8003/health  # PortfolioBuilder
+curl http://localhost:8004/health  # DashboardCreator
+
+# Expected: All return 200 OK with {"status": "healthy"}
+
+# Test 2: MongoDB collections audit
+python tools/audit_mongodb.py
+
+# Expected: All Phase 6+ collections present and populated
+
+# Test 3: Pub/Sub topics and subscriptions
+gcloud pubsub topics list --project=${GOOGLE_CLOUD_PROJECT}
+gcloud pubsub subscriptions list --project=${GOOGLE_CLOUD_PROJECT}
+
+# Expected topics:
+# - standardized-signals
+# - trading-orders
+# - execution-confirmations
+# - account-updates
+
+# Test 4: Log review
+# Check all service logs for errors
+grep -i "error" logs/*.log
+grep -i "exception" logs/*.log
+grep -i "failed" logs/*.log
+
+# Expected: No critical errors (minor warnings OK)
+
+# Test 5: Memory and CPU usage
+ps aux | grep python | awk '{print $2, $3, $4, $11}'
+
+# Expected: All services under 10% CPU, under 500MB memory
+
+# Test 6: Database connection check
+python -c "
+from pymongo import MongoClient
+import os
+from dotenv import load_dotenv
+load_dotenv('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/.env')
+client = MongoClient(os.getenv('MONGODB_URI'))
+print('Databases:', client.list_database_names())
+db = client['mathematricks_trading']
+print('Collections:', db.list_collection_names())
+print('Connection successful!')
+"
+
+# Expected: Lists all databases and collections
+```
+
+**Success Criteria:**
+- ✅ All health endpoints return 200 OK
+- ✅ All MongoDB collections present and correct
+- ✅ All Pub/Sub topics and subscriptions exist
+- ✅ No critical errors in logs
+- ✅ Resource usage is reasonable
+- ✅ Database connections stable
+
+---
+
+**8.8. Git Commit**
+
+Once all tests pass, commit Phase 8 completion.
+
+```bash
+git add -A
+git commit -m "Phase 8: Manual System Testing & Validation Complete
+
+- ✅ Service lifecycle testing (start/stop/orphan check)
+- ✅ Frontend admin fully functional
+- ✅ Strategy management tested (CRUD operations)
+- ✅ Portfolio allocation workflow validated
+- ✅ End-to-end signal flow working (ingestion → execution)
+- ✅ Frontend client dashboard displaying correctly
+- ✅ All health checks passing
+
+System ready for Phase 9 (Documentation & Deployment)
+
+🤖 Generated with Claude Code
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+#### Expected Outcome
+- ✅ All manual tests completed successfully
+- ✅ End-to-end signal flow validated
+- ✅ Both frontend-admin and frontend-client working
+- ✅ System stable and ready for production deployment
+- ✅ Documentation of test results
+
+#### Notes
+- All tests should be performed on a clean system restart
+- Document any issues found during testing
+- Create GitHub issues for any bugs discovered
+- Update CLAUDE.md with testing results
+
+---
+
+### PHASE 9: Documentation & Deployment
+**Duration:** 2-3 days
+**Risk Level:** Low
+**Dependencies:** Phase 8 complete (Manual Testing)
+
+#### Tasks
+
+**9.1. Update CLAUDE.md**
 
 Update project status to reflect v4 architecture.
 
-**8.2. Create Architecture Diagram**
+**9.2. Create Architecture Diagram**
 
 **File:** `documentation/Architecture_v4.md`
 ```markdown
@@ -3303,7 +3875,7 @@ Update project status to reflect v4 architecture.
 [Table of all collections with schemas]
 ```
 
-**8.3. Create Deployment Guide**
+**9.3. Create Deployment Guide**
 
 **File:** `documentation/Deployment_Guide.md`
 ```markdown
@@ -3327,7 +3899,7 @@ Update project status to reflect v4 architecture.
 - 8085: Pub/Sub Emulator
 ```
 
-**8.4. Create Docker Compose**
+**9.4. Create Docker Compose**
 
 **File:** `docker-compose.yml`
 ```yaml
@@ -3419,7 +3991,7 @@ services:
       - portfolio-builder
 ```
 
-**8.5. Create Dockerfiles for Each Service**
+**9.5. Create Dockerfiles for Each Service**
 
 Example: `services/portfolio_builder/Dockerfile`
 ```dockerfile
@@ -3438,7 +4010,7 @@ EXPOSE 8003
 CMD ["python", "main.py"]
 ```
 
-**8.6. Test Deployment**
+**9.6. Test Deployment**
 ```bash
 # Build and start all services
 docker-compose up --build
@@ -3459,10 +4031,10 @@ python dev/leslie_strategies/send_test_FOREX_signal.sh
 docker-compose logs -f cerebro
 ```
 
-**8.7. Git Commit**
+**9.7. Git Commit**
 ```bash
 git add -A
-git commit -m "Phase 8: Documentation and deployment
+git commit -m "Phase 9: Documentation and deployment
 
 - Updated CLAUDE.md with v4 architecture
 - Created Architecture_v4.md documentation
