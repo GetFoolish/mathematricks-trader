@@ -1,8 +1,9 @@
-{
-    "entry": {
+[
+    {
         "strategy_name": "Forex",
         "passphrase": "test_password_123",
-        "signal": [
+        "signal_type": "ENTRY",
+        "signal_legs": [
             {
                 "instrument": "AUDCAD",
                 "instrument_type": "FOREX",
@@ -13,12 +14,14 @@
                 "price": 0.9123,
                 "environment": "staging"
             }
-        ]
+        ],
+        "wait": 10
     },
-    "exit": {
+    {
         "strategy_name": "Forex",
         "passphrase": "test_password_123",
-        "signal": [
+        "signal_type": "EXIT",
+        "signal_legs": [
             {
                 "instrument": "AUDCAD",
                 "instrument_type": "FOREX",
@@ -31,4 +34,4 @@
             }
         ]
     }
-}
+]

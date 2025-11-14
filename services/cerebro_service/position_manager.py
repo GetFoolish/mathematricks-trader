@@ -138,8 +138,8 @@ class PositionManager:
         direction = signal.get('direction', '').upper()  # LONG or SHORT
 
         # Method 1: Check for explicit signal_type field (check multiple locations)
-        # Try top-level first
-        explicit_type = signal.get('signal_type', '').upper()
+        # Try top-level first (handle None case)
+        explicit_type = (signal.get('signal_type') or '').upper()
 
         # If not found, check nested in metadata.original_signal.signal
         if not explicit_type:
@@ -151,7 +151,7 @@ class PositionManager:
             if isinstance(nested_signal, list):
                 nested_signal = nested_signal[0] if len(nested_signal) > 0 else {}
 
-            explicit_type = nested_signal.get('signal_type', '').upper()
+            explicit_type = (nested_signal.get('signal_type') or '').upper()
 
         if explicit_type in ['ENTRY', 'EXIT', 'SCALE_IN', 'SCALE_OUT']:
             return {

@@ -153,6 +153,7 @@ class MongoDBWatcher:
                         'signal_sent_EPOCH': raw_signal_doc.get('signal_sent_EPOCH'),
                         'strategy_name': raw_signal_doc.get('strategy_name', 'Unknown Strategy'),
                         'signal': raw_signal_doc.get('signal', {}),
+                        'signal_type': raw_signal_doc.get('signal_type'),
                         'environment': raw_signal_doc.get('environment', 'production'),
                         'mathematricks_signal_id': str(mathematricks_signal_id)
                     }
@@ -302,6 +303,7 @@ class MongoDBWatcher:
                             'signal_sent_EPOCH': raw_signal_doc.get('signal_sent_EPOCH'),
                             'strategy_name': raw_signal_doc.get('strategy_name', 'Unknown Strategy'),
                             'signal': raw_signal_doc.get('signal', {}),
+                            'signal_type': raw_signal_doc.get('signal_type'),
                             'environment': raw_signal_doc.get('environment', 'production'),
                             'mathematricks_signal_id': str(mathematricks_signal_id)  # Pass to signal_ingestion
                         }

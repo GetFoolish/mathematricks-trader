@@ -101,11 +101,15 @@ class SignalStandardizer:
         # Get timestamp
         timestamp = SignalStandardizer.get_timestamp(signal_data)
 
+        # Extract signal_type from top level of signal_data (new format)
+        signal_type = (signal_data.get('signal_type') or '').upper()
+
         # Build standardized signal
         standardized_signal = {
             "signal_id": signal_id,
             "strategy_id": signal_data.get('strategy_name', 'Unknown'),
             "timestamp": timestamp,
+            "signal_type": signal_type,  # ENTRY, EXIT, etc. (empty string if not provided)
             "instrument": signal_payload.get('instrument') or signal_payload.get('ticker', ''),
             "direction": signal_payload.get('direction', 'LONG').upper(),
             "action": signal_payload.get('action', 'ENTRY').upper(),

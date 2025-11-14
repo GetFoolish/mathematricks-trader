@@ -1,33 +1,18 @@
 #!/usr/bin/env python3
 """
-Send test signal directly to local MongoDB
-Accepts JSON payload exactly like the webhook does
+Send test signals directly to local MongoDB
+Supports array format with sequential signal sending and wait times
 
 Usage:
-    # Using JSON string
-    python send_test_signal.py '{"strategy_name": "Forex", "signal_sent_EPOCH": 1234567890, "signalID": "test_123", "passphrase": "test_password_123", "signal": {"ticker": "AUDCAD", "action": "BUY", "quantity": 100000}}'
-
-    # Using heredoc (easier for complex JSON)
-    python send_test_signal.py "$(cat <<'EOF'
-    {
-        "strategy_name": "Forex",
-        "signal_sent_EPOCH": $(date +%s),
-        "signalID": "test_forex_$(date +%s)",
-        "passphrase": "test_password_123",
-        "signal": {
-            "ticker": "AUDCAD",
-            "action": "BUY",
-            "quantity": 100000
-        }
-    }
-    EOF
-    )"
-
-    # From file
-    python send_test_signal.py @signal.json
+    # From file (recommended)
+    python send_test_signal.py @simple_signal_equity_1.json
 
     # List available strategies
     python send_test_signal.py --list-strategies
+
+Format:
+    Array of signals with signal_type, signal_legs, and wait fields
+    See sample files in services/signal_ingestion/sample_signals/
 """
 import argparse
 import json
@@ -71,8 +56,13 @@ def send_signal(payload: dict, signal_type: str = "single"):
     # Use timezone-aware UTC datetime
     now_utc = datetime.now(timezone.utc)
 
+    # Normalize signal_legs → signal for MongoDB (mongodb_watcher expects 'signal' field)
+    normalized_payload = payload.copy()
+    if "signal_legs" in normalized_payload and "signal" not in normalized_payload:
+        normalized_payload["signal"] = normalized_payload.pop("signal_legs")
+
     signal_doc = {
-        **payload,
+        **normalized_payload,
         "created_at": now_utc,
         "received_at": now_utc,  # Required by signal_ingestion
         "source": "test_script",
@@ -87,8 +77,8 @@ def send_signal(payload: dict, signal_type: str = "single"):
 
     if "signalID" not in signal_doc:
         strategy = signal_doc.get("strategy_name", "unknown")
-        # Handle signal as array or dict
-        signal_raw = signal_doc.get("signal", {})
+        # Handle signal_legs (new) or signal (legacy) as array or dict
+        signal_raw = signal_doc.get("signal_legs") or signal_doc.get("signal", {})
         if isinstance(signal_raw, list):
             instrument = signal_raw[0].get("instrument") or signal_raw[0].get("ticker", "unknown") if len(signal_raw) > 0 else "unknown"
         else:
@@ -110,8 +100,9 @@ def send_signal(payload: dict, signal_type: str = "single"):
         print(f"Signal ID:    {signal_doc['signalID']}")
         print(f"Strategy:     {signal_doc.get('strategy_name', 'N/A')}")
 
-        signal_data = signal_doc.get('signal', {})
-        # Handle signal as array or dict
+        # Support both signal_legs (new) and signal (legacy)
+        signal_data = signal_doc.get('signal_legs') or signal_doc.get('signal', {})
+        # Handle signal_legs/signal as array or dict
         if isinstance(signal_data, list):
             first_leg = signal_data[0] if len(signal_data) > 0 else {}
             action = first_leg.get('action', 'N/A')
@@ -124,6 +115,10 @@ def send_signal(payload: dict, signal_type: str = "single"):
             instrument = signal_data.get('instrument') or signal_data.get('ticker', 'N/A')
             leg_count = ""
         print(f"Action:       {action} {quantity} {instrument}{leg_count}")
+
+        # Show signal type if present (new array format)
+        if "signal_type" in signal_doc:
+            print(f"Type:         {signal_doc['signal_type']}")
 
         print(f"Staging:      {'Yes' if signal_doc.get('staging') else 'No'}")
         print(f"MongoDB ID:   {result.inserted_id}")
@@ -180,59 +175,59 @@ def main():
         epilog="""
 Examples:
 
-  1. Simple JSON string:
-     python send_test_signal.py '{"strategy_name": "Forex", "signal": {"ticker": "AUDCAD", "action": "BUY", "quantity": 100000}}'
+  1. Simple equity signal:
+     python send_test_signal.py @simple_signal_equity_1.json
 
-  2. Using bash variables (recommended):
-     SIGNAL_ID="test_forex_$RANDOM" && python send_test_signal.py '{
-         "strategy_name": "Forex",
-         "signal_sent_EPOCH": '$(date +%s)',
-         "signalID": "'$SIGNAL_ID'",
-         "passphrase": "test_password_123",
-         "signal": {"ticker": "AUDCAD", "action": "BUY", "quantity": 100000}
-     }'
+  2. Ladder signal (6 sequential trades):
+     python send_test_signal.py @ladder_signal_equity_1.json
 
-  3. From a file (single signal):
-     python send_test_signal.py @signal.json
+  3. Pairs trading signal (multi-leg):
+     python send_test_signal.py @pairs_signal_equity_1.json
 
-  4. From a file with entry/exit pair:
-     python send_test_signal.py @sample_forex_signal.json
-     python send_test_signal.py @sample_forex_signal.json --wait 15
-
-  5. List available strategies:
+  4. List available strategies:
      python send_test_signal.py --list-strategies
 
-Signal Formats:
+Signal Format (Array):
 
-  A. Single Signal (legacy):
-     {
-       "strategy_name": "Forex",
-       "signal": [{"instrument": "AUDCAD", "action": "BUY", ...}]
-     }
+  [
+    {
+      "strategy_name": "US_Equity",
+      "passphrase": "test_password_123",
+      "signal_type": "ENTRY",
+      "signal_legs": [
+        {
+          "instrument": "AAPL",
+          "instrument_type": "STOCK",
+          "action": "BUY",
+          "direction": "LONG",
+          "quantity": 10,
+          "order_type": "MARKET",
+          "price": 150.00,
+          "environment": "staging"
+        }
+      ],
+      "wait": 10
+    },
+    {
+      "strategy_name": "US_Equity",
+      "signal_type": "EXIT",
+      "signal_legs": [...]
+    }
+  ]
 
-  B. Entry/Exit Pair (recommended for testing):
-     {
-       "entry": {
-         "strategy_name": "Forex",
-         "signal": [{"instrument": "AUDCAD", "action": "BUY", ...}]
-       },
-       "exit": {
-         "strategy_name": "Forex",
-         "signal": [{"instrument": "AUDCAD", "action": "SELL", ...}]
-       }
-     }
-     (Sends entry, waits N seconds, then sends exit)
-
-Required JSON fields (per signal):
+Required fields per signal:
   - strategy_name: Name of the strategy
-  - signal: Array with instrument, action, quantity
+  - signal_type: "ENTRY" or "EXIT"
+  - signal_legs: Array of legs with instrument, action, direction, quantity
 
-Optional JSON fields:
+Optional fields per signal:
   - signalID: Unique ID (auto-generated if missing)
   - signal_sent_EPOCH: Unix timestamp (auto-generated if missing)
   - passphrase: Authentication (not checked locally)
   - staging: true/false (default: true)
-  - --wait N: Seconds between entry/exit (default: 10)
+  - wait: Seconds to wait after sending this signal (default: 0)
+
+See sample files in services/signal_ingestion/sample_signals/
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -246,12 +241,6 @@ Optional JSON fields:
         "--list-strategies",
         action="store_true",
         help="List available strategies from MongoDB"
-    )
-    parser.add_argument(
-        "--wait",
-        type=int,
-        default=10,
-        help="Seconds to wait between entry and exit signals (default: 10)"
     )
 
     args = parser.parse_args()
@@ -289,51 +278,52 @@ Optional JSON fields:
         print(f"\nReceived: {json_str[:200]}...")
         sys.exit(1)
 
-    # Check if this is an entry/exit pair or a single signal
-    has_entry_exit = "entry" in payload and "exit" in payload
+    # Check format: array of signals or single signal
+    if isinstance(payload, list):
+        # Array format: Sequential signals with wait_after
+        print("\n" + "=" * 80)
+        print(f"📋 Processing {len(payload)} sequential signals")
+        print("=" * 80)
 
-    if has_entry_exit:
-        # Entry/Exit format - validate and send both
-        entry_payload = payload["entry"]
-        exit_payload = payload["exit"]
+        total_wait_time = 0
+        for i, signal_payload in enumerate(payload, 1):
+            # Validate signal
+            _validate_signal_payload(signal_payload, allow_signal_type=True)
 
-        # Validate entry signal
-        _validate_signal_payload(entry_payload)
+            # Get signal type for display
+            signal_type = signal_payload.get("signal_type", "UNKNOWN").upper()
+            print(f"\n{'🔵' if signal_type == 'ENTRY' else '🔴'} Sending signal {i}/{len(payload)} ({signal_type})...")
 
-        # Validate exit signal
-        _validate_signal_payload(exit_payload)
+            # Send signal (pass signal_type lowercase)
+            send_signal(signal_payload, signal_type=signal_type.lower())
 
-        # Send entry signal
-        print("\n🔵 Sending ENTRY signal...")
-        send_signal(entry_payload, signal_type="entry")
-
-        # Wait between signals
-        wait_seconds = args.wait
-        print(f"\n⏳ Waiting {wait_seconds} seconds before sending EXIT signal...")
-        time.sleep(wait_seconds)
-
-        # Send exit signal
-        print("\n🔴 Sending EXIT signal...")
-        send_signal(exit_payload, signal_type="exit")
+            # Wait if specified
+            wait_seconds = signal_payload.get("wait", 0)
+            if wait_seconds > 0 and i < len(payload):  # Don't wait after last signal
+                print(f"\n⏳ Waiting {wait_seconds} seconds before next signal...")
+                time.sleep(wait_seconds)
+                total_wait_time += wait_seconds
 
         print("\n" + "=" * 80)
-        print("✅ Entry/Exit Signal Pair Sent Successfully")
+        print(f"✅ All {len(payload)} Signals Sent Successfully")
         print("=" * 80)
-        print(f"⏱️  Total time: {wait_seconds} seconds between entry and exit")
+        if total_wait_time > 0:
+            print(f"⏱️  Total wait time: {total_wait_time} seconds")
         print("")
 
     else:
-        # Single signal format (backward compatible)
+        # Single signal format
         _validate_signal_payload(payload)
         send_signal(payload, signal_type="single")
 
 
-def _validate_signal_payload(payload: dict):
+def _validate_signal_payload(payload: dict, allow_signal_type: bool = False):
     """
     Validate a single signal payload
 
     Args:
         payload: Signal JSON to validate
+        allow_signal_type: If True, check for signal_type field (new array format)
 
     Raises:
         SystemExit: If validation fails
@@ -343,33 +333,39 @@ def _validate_signal_payload(payload: dict):
         print("❌ Missing required field: strategy_name")
         sys.exit(1)
 
-    if "signal" not in payload:
-        print("❌ Missing required field: signal")
+    # Check for signal_type if required (new array format)
+    if allow_signal_type and "signal_type" not in payload:
+        print("❌ Missing required field: signal_type (must be 'ENTRY' or 'EXIT')")
         sys.exit(1)
 
-    signal = payload["signal"]
+    # Support both "signal_legs" (new) and "signal" (legacy)
+    signal_legs = payload.get("signal_legs") or payload.get("signal")
 
-    # Handle signal as array (new format) or dict (legacy)
-    if isinstance(signal, list):
-        if len(signal) == 0:
-            print("❌ Signal array is empty")
+    if not signal_legs:
+        print("❌ Missing required field: signal_legs (or 'signal' for legacy format)")
+        sys.exit(1)
+
+    # Handle signal_legs as array (new format) or dict (legacy)
+    if isinstance(signal_legs, list):
+        if len(signal_legs) == 0:
+            print("❌ Signal legs array is empty")
             sys.exit(1)
         # Validate first leg
-        signal_to_validate = signal[0]
+        signal_to_validate = signal_legs[0]
     else:
         # Legacy format: signal is a dict
-        signal_to_validate = signal
+        signal_to_validate = signal_legs
 
     # Check for instrument (new) or ticker (legacy)
     if "instrument" not in signal_to_validate and "ticker" not in signal_to_validate:
-        print("❌ Missing required field in signal: instrument (or ticker for legacy format)")
+        print("❌ Missing required field in signal leg: instrument (or ticker for legacy format)")
         sys.exit(1)
 
     # Check other required fields
     required_signal_fields = ["action", "quantity"]
     for field in required_signal_fields:
         if field not in signal_to_validate:
-            print(f"❌ Missing required field in signal: {field}")
+            print(f"❌ Missing required field in signal leg: {field}")
             sys.exit(1)
 
 

@@ -720,6 +720,100 @@ def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) ->
         return None
 
 
+def wait_for_entry_fill(strategy_id: str, instrument: str, direction: str, max_wait: int = 30) -> Optional[Dict[str, Any]]:
+    """
+    Wait for entry order to fill with exponential backoff retry logic.
+
+    This handles the case where EXIT signals arrive before ENTRY orders fill in the broker.
+    Instead of rejecting the EXIT signal, we wait for the entry to fill.
+
+    Args:
+        strategy_id: Strategy identifier
+        instrument: Instrument name
+        direction: Direction of the EXIT signal (we need opposite for ENTRY)
+        max_wait: Maximum total wait time in seconds (default: 30)
+
+    Returns:
+        Entry signal document from signal_store if filled, or None if timeout
+    """
+    logger.info(f"⏳ Waiting for entry order to fill (max {max_wait}s)...")
+
+    # First check if entry signal already filled
+    entry_signal = find_open_entry_signal(strategy_id, instrument, direction)
+    if entry_signal:
+        logger.info(f"✅ Entry already filled, proceeding with exit")
+        return entry_signal
+
+    # Check if there's a pending ENTRY order
+    entry_direction = opposite_direction(direction)
+
+    try:
+        # Query for pending ENTRY order in signal_store (cerebro approved but not filled yet)
+        pending_entry = signal_store_collection.find_one({
+            "strategy_id": strategy_id,
+            "instrument": instrument,
+            "direction": entry_direction,
+            "position_status": "OPEN",
+            "cerebro_decision.action": "APPROVE",
+            "execution.status": {"$in": ["PENDING", "SUBMITTED", "PARTIAL"]}
+        })
+
+        if not pending_entry:
+            logger.warning(f"⚠️ No pending entry order found for {strategy_id}/{instrument}/{entry_direction}")
+            logger.warning(f"   Cannot wait for fill - rejecting EXIT signal")
+            return None
+
+        logger.info(f"📋 Found pending entry order: {pending_entry.get('signal_id')}")
+        logger.info(f"   Status: {pending_entry.get('execution', {}).get('status', 'UNKNOWN')}")
+
+        # Retry with exponential backoff: 2s, 4s, 8s, 16s (max 30s total)
+        retry_delays = [2, 4, 8, 16]
+        total_waited = 0
+
+        for i, delay in enumerate(retry_delays, 1):
+            # Cap delay to not exceed max_wait
+            actual_delay = min(delay, max_wait - total_waited)
+            if actual_delay <= 0:
+                break
+
+            logger.info(f"⏳ Retry {i}/{len(retry_delays)}: Waiting {actual_delay}s for entry to fill...")
+            time.sleep(actual_delay)
+            total_waited += actual_delay
+
+            # Check if entry filled during wait
+            entry_signal = find_open_entry_signal(strategy_id, instrument, direction)
+            if entry_signal:
+                logger.info(f"✅ Entry filled after {total_waited}s wait! Proceeding with exit")
+                return entry_signal
+
+            # Check if we've exceeded max wait time
+            if total_waited >= max_wait:
+                logger.error(f"⏰ Timeout after {total_waited}s - entry order still not filled")
+                break
+
+        # Timeout - send critical alert
+        logger.critical(f"🚨 CRITICAL: EXIT signal timeout waiting for entry fill")
+        logger.critical(f"   Strategy: {strategy_id}")
+        logger.critical(f"   Instrument: {instrument}")
+        logger.critical(f"   Direction: {entry_direction}")
+        logger.critical(f"   Pending Entry Signal: {pending_entry.get('signal_id')}")
+        logger.critical(f"   Waited: {total_waited}s")
+        logger.critical(f"   Action Required: Manual intervention needed to close position")
+
+        # TODO: Send Telegram notification
+        # send_telegram_alert(
+        #     f"🚨 EXIT signal timeout for {strategy_id}/{instrument}\n"
+        #     f"Entry order {pending_entry.get('signal_id')} still pending after {total_waited}s\n"
+        #     f"Manual intervention required"
+        # )
+
+        return None
+
+    except Exception as e:
+        logger.error(f"❌ Error in wait_for_entry_fill: {e}")
+        return None
+
+
 # ============================================================================
 # SLIPPAGE CALCULATION
 # ============================================================================
@@ -1135,7 +1229,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     signal_type_info = position_manager.determine_signal_type(signal)
 
     # Step 4a.1: Check for pending ENTRY orders if this is an EXIT signal
-    check_and_cancel_pending_entry(signal, signal_type_info)
+    # DISABLED: We now use retry logic to wait for entry fills instead of canceling
+    # check_and_cancel_pending_entry(signal, signal_type_info)
 
     # Step 4a.2: EXIT SIGNAL HANDLING - Query signal_store for exact entry quantity
     signal_type = signal_type_info.get('signal_type')
@@ -1148,6 +1243,16 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             instrument=signal.get('instrument'),
             direction=signal.get('direction')  # EXIT direction (we'll find opposite)
         )
+
+        # If entry not found immediately, wait for it to fill (with retry logic)
+        if not entry_signal:
+            logger.warning(f"⚠️ Entry not filled yet - initiating retry logic")
+            entry_signal = wait_for_entry_fill(
+                strategy_id=signal.get('strategy_id'),
+                instrument=signal.get('instrument'),
+                direction=signal.get('direction'),
+                max_wait=30
+            )
 
         if entry_signal and entry_signal.get('execution') and entry_signal['execution'].get('quantity_filled'):
             # Found entry signal with execution data - use exact quantity
@@ -1177,18 +1282,23 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             logger.info(f"⏭️ Skipping margin calculator for EXIT signal")
 
         else:
-            # No entry signal found or no execution data - reject
-            logger.error(f"❌ No open entry signal found in signal_store for {signal.get('instrument')}")
+            # Timeout or no entry found after retry - reject with critical error
+            logger.critical(f"🚨 CRITICAL: EXIT signal REJECTED - No filled entry found after retry")
+            logger.critical(f"   Strategy: {signal.get('strategy_id')}")
+            logger.critical(f"   Instrument: {signal.get('instrument')}")
+            logger.critical(f"   This indicates a serious issue - manual intervention required")
+
             decision_obj = SignalDecision(
                 action="REJECTED",
                 quantity=0,
-                reason=f"No open position found in signal_store for {signal.get('strategy_id')}/{signal.get('instrument')}",
+                reason=f"No open position found in signal_store for {signal.get('strategy_id')}/{signal.get('instrument')} after 30s retry",
                 allocated_capital=0,
                 margin_required=0,
                 metadata={
                     **decision_obj.metadata,
                     'signal_type_info': signal_type_info,
-                    'rejection_reason': 'no_open_position_found'
+                    'rejection_reason': 'no_open_position_found_after_retry',
+                    'retry_attempted': True
                 }
             )
 
