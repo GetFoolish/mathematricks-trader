@@ -755,19 +755,20 @@ def wait_for_entry_fill(strategy_id: str, instrument: str, direction: str, max_w
     entry_direction = opposite_direction(direction)
 
     try:
-        # DEBUG: First let's see what entry signals exist for this instrument
+        # DEBUG: First let's see what entry signals exist for this instrument (newest first)
         debug_query = {
             "strategy_id": strategy_id,
             "instrument": instrument,
             "direction": entry_direction
         }
-        all_entries = list(signal_store_collection.find(debug_query).limit(5))
-        logger.info(f"🔍 DEBUG: Found {len(all_entries)} entry signals for {strategy_id}/{instrument}/{entry_direction}")
+        all_entries = list(signal_store_collection.find(debug_query).sort("created_at", -1).limit(5))
+        logger.info(f"🔍 DEBUG: Found {len(all_entries)} entry signals for {strategy_id}/{instrument}/{entry_direction} (showing 5 most recent)")
         for idx, entry in enumerate(all_entries, 1):
             logger.info(f"   Entry {idx}: signal_id={entry.get('signal_id')}")
             logger.info(f"            cerebro_decision.action={entry.get('cerebro_decision', {}).get('action')}")
             logger.info(f"            position_status={entry.get('position_status')}")
-            logger.info(f"            execution={entry.get('execution')}")
+            logger.info(f"            execution.status={entry.get('execution', {}).get('status') if entry.get('execution') else None}")
+            logger.info(f"            execution (full)={entry.get('execution')}")
 
         # Query for pending ENTRY order in signal_store (cerebro approved but not filled yet)
         # Note: execution field is null until order fills, position_status is null until filled

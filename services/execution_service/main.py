@@ -407,8 +407,11 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
 
         mathematricks_signal_id = order_data.get('mathematricks_signal_id')
         if not mathematricks_signal_id:
-            logger.warning("⚠️ No mathematricks_signal_id in order_data - cannot update signal_store")
+            logger.error(f"❌ No mathematricks_signal_id in order_data - cannot update signal_store | OrderID: {order_data.get('order_id')}")
+            logger.error(f"   Order data keys: {list(order_data.keys())}")
             return
+
+        logger.debug(f"Updating signal_store for mathematricks_signal_id: {mathematricks_signal_id}")
 
         action = order_data.get('action', 'ENTRY').upper()
         is_exit = action in ['EXIT', 'SELL']
@@ -435,11 +438,14 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
             )
 
             # Update signal_store
-            signal_store_collection.update_one(
+            result = signal_store_collection.update_one(
                 {"_id": ObjectId(mathematricks_signal_id)},
                 {"$set": execution_update}
             )
-            logger.debug(f"Updated signal_store {mathematricks_signal_id} with ENTRY execution (position OPEN)")
+            if result.matched_count > 0:
+                logger.info(f"✅ Updated signal_store {mathematricks_signal_id} with ENTRY execution (position OPEN)")
+            else:
+                logger.error(f"❌ Failed to update signal_store - signal {mathematricks_signal_id} not found in database")
 
         else:
             # EXIT signal: Calculate PnL and update entry signal
