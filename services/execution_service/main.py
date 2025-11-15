@@ -6,6 +6,7 @@ import os
 import sys
 import logging
 import json
+import argparse
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 from google.cloud import pubsub_v1
@@ -30,22 +31,34 @@ from brokers.exceptions import (
     InvalidSymbolError
 )
 
-# Load environment variables
-load_dotenv('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/.env')
+# Load environment variables from project root
+env_path = os.path.join(PROJECT_ROOT, '.env')
+load_dotenv(env_path)
 
 # Configure logging
+LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# Create custom formatter matching Cerebro format
+custom_formatter = logging.Formatter('|%(levelname)s|%(message)s|%(asctime)s|file:%(filename)s:line No.%(lineno)d')
+
+# Create file handler with custom format
+file_handler = logging.FileHandler(os.path.join(LOG_DIR, 'execution_service.log'))
+file_handler.setFormatter(custom_formatter)
+
+# Create console handler with same format
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(custom_formatter)
+
+# Configure root logger
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/logs/execution_service.log'),
-        logging.StreamHandler()
-    ]
+    handlers=[file_handler, console_handler]
 )
 logger = logging.getLogger(__name__)
 
 # Signal processing log handler - unified log for complete signal journey
-signal_processing_handler = logging.FileHandler('/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/logs/signal_processing.log')
+signal_processing_handler = logging.FileHandler(os.path.join(LOG_DIR, 'signal_processing.log'))
 signal_processing_handler.setLevel(logging.INFO)
 signal_processing_formatter = logging.Formatter(
     '%(asctime)s | [EXECUTION] | %(message)s',
@@ -60,13 +73,41 @@ signal_logger = logging.getLogger('signal_processing')
 signal_logger.addHandler(signal_processing_handler)
 signal_logger.setLevel(logging.INFO)
 
+# ========================================================================
+# COMMAND-LINE ARGUMENTS
+# ========================================================================
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description='Execution Service - Order Execution Engine')
+parser.add_argument('--use-mock-broker', action='store_true',
+                    help='Use Mock broker for all orders (testing mode, overrides strategy account routing)')
+args = parser.parse_args()
+
+# Log mode
+if args.use_mock_broker:
+    logger.warning("=" * 80)
+    logger.warning("🧪 MOCK MODE ENABLED: All orders will be routed to Mock_Paper broker")
+    logger.warning("=" * 80)
+
+# ========================================================================
+# DATABASE AND PUB/SUB INITIALIZATION
+# ========================================================================
+
 # Initialize MongoDB
 mongo_uri = os.getenv('MONGODB_URI')
-mongo_client = MongoClient(
-    mongo_uri,
-    tls=True,
-    tlsAllowInvalidCertificates=True  # For development only
-)
+if not mongo_uri:
+    raise ValueError("MONGODB_URI environment variable is not set - check .env file")
+
+# Only use TLS for remote MongoDB Atlas connections (not localhost)
+use_tls = 'mongodb+srv' in mongo_uri or 'mongodb.net' in mongo_uri
+if use_tls:
+    mongo_client = MongoClient(
+        mongo_uri,
+        tls=True,
+        tlsAllowInvalidCertificates=True  # For development only
+    )
+else:
+    mongo_client = MongoClient(mongo_uri)  # No TLS for localhost
 db = mongo_client['mathematricks_trading']
 execution_confirmations_collection = db['execution_confirmations']
 trading_orders_collection = db['trading_orders']
@@ -142,23 +183,21 @@ def initialize_broker_pool():
     accounts = get_active_accounts_from_service()
 
     if not accounts:
-        # Fallback: Create single IBKR broker (backward compatible)
-        logger.warning("No accounts from AccountDataService - creating single IBKR broker as fallback")
-        account_id = os.getenv('IBKR_ACCOUNT_ID', 'IBKR_Paper')
+        # Fallback: Always create Mock broker (safer for testing and development)
+        logger.warning("No accounts from AccountDataService - creating Mock broker as fallback")
+        account_id = "Mock_Paper"
         broker_config = {
-            "broker": "IBKR",
-            "host": IBKR_HOST,
-            "port": IBKR_PORT,
-            "client_id": IBKR_CLIENT_ID,
-            "account_id": account_id
+            "broker": "Mock",
+            "account_id": account_id,
+            "initial_equity": 1000000.0
         }
 
         try:
             broker_instance = BrokerFactory.create_broker(broker_config)
             broker_pool[account_id] = broker_instance
-            logger.info(f"✅ Created fallback IBKR broker for account: {account_id}")
+            logger.info(f"✅ Created fallback Mock broker for account: {account_id}")
         except Exception as e:
-            logger.error(f"❌ Failed to create fallback IBKR broker: {str(e)}")
+            logger.error(f"❌ Failed to create fallback Mock broker: {str(e)}")
 
         return
 
@@ -258,6 +297,7 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
     Submit order to broker using broker pool (multi-broker routing).
 
     Routes order to correct broker based on order['account'] field.
+    In mock mode (--use-mock-broker), overrides all routing to Mock_Paper.
     """
     try:
         # Get account from order
@@ -265,6 +305,12 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
         if not account_id:
             logger.error(f"❌ Order {order_data.get('order_id')} missing 'account' field - cannot route to broker")
             return None
+
+        # MOCK MODE OVERRIDE: Route all orders to Mock_Paper if flag set
+        if args.use_mock_broker:
+            original_account = account_id
+            account_id = 'Mock_Paper'
+            logger.debug(f"MOCK MODE: Overriding account {original_account} → Mock_Paper")
 
         # Get broker instance for this account
         broker = get_broker_for_account(account_id)
@@ -274,12 +320,12 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
 
         # Ensure broker is connected
         if not broker.is_connected():
-            logger.info(f"Connecting to {broker.broker_name} for account {account_id}...")
+            logger.debug(f"Connecting to {broker.broker_name} for account {account_id}...")
             if not broker.connect():
                 logger.error(f"❌ Failed to connect to {broker.broker_name} for {account_id}")
                 return None
 
-        logger.info(f"📋 Submitting order {order_data.get('order_id')} to {broker.broker_name} (account: {account_id})")
+        logger.debug(f"Submitting order {order_data.get('order_id')} to {broker.broker_name} (account: {account_id})")
 
         # Use broker library's place_order method
         # The broker library handles all contract creation, qualification, and submission
@@ -294,15 +340,17 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
         broker_order_id = result.get('broker_order_id')
         active_ibkr_orders[order_id] = broker_order_id
 
-        logger.info(f"✅ Order {order_data.get('order_id')} submitted - Broker Order ID: {broker_order_id}, Status: {result.get('status')}")
+        logger.debug(f"Order {order_data.get('order_id')} submitted - Broker Order ID: {broker_order_id}, Status: {result.get('status')}")
 
+        # Return result with fill data from broker (Mock broker fills instantly, real broker updates later)
         return {
             "order_id": order_data['order_id'],
             "ib_order_id": broker_order_id,
             "status": result.get('status'),
-            "filled": 0,  # Will be updated when order fills
-            "remaining": order_data.get('quantity', 0),
-            "avg_fill_price": 0,
+            "filled": result.get('filled', 0),
+            "remaining": result.get('remaining', order_data.get('quantity', 0)),
+            "avg_fill_price": result.get('avg_fill_price', 0),
+            "fills": result.get('fills', []),
             "num_legs": 1
         }
 
@@ -328,7 +376,7 @@ def publish_execution_confirmation(execution_data: Dict[str, Any]):
         message_data = json.dumps(execution_data, default=str).encode('utf-8')
         future = publisher.publish(execution_confirmations_topic, message_data)
         message_id = future.result()
-        logger.info(f"Published execution confirmation: {message_id}")
+        logger.debug(f"Published execution confirmation: {message_id}")
     except Exception as e:
         logger.error(f"Error publishing execution confirmation: {str(e)}")
 
@@ -391,7 +439,7 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
                 {"_id": ObjectId(mathematricks_signal_id)},
                 {"$set": execution_update}
             )
-            logger.info(f"✅ Updated signal_store {mathematricks_signal_id} with ENTRY execution (position OPEN)")
+            logger.debug(f"Updated signal_store {mathematricks_signal_id} with ENTRY execution (position OPEN)")
 
         else:
             # EXIT signal: Calculate PnL and update entry signal
@@ -458,10 +506,10 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
                 }
             )
 
-            logger.info(f"✅ Updated signal_store with EXIT execution and PnL")
-            logger.info(f"   Entry signal: {entry_signal['signal_id']} → position CLOSED")
-            logger.info(f"   Exit signal: {order_data.get('signal_id')}")
-            logger.info(f"   Gross P&L: ${gross_pnl:.2f} | Net P&L: ${net_pnl:.2f} ({pnl_percent:.2f}%)")
+            logger.debug(f"Updated signal_store with EXIT execution and PnL")
+            logger.debug(f"Entry signal: {entry_signal['signal_id']} → position CLOSED")
+            logger.debug(f"Exit signal: {order_data.get('signal_id')}")
+            logger.debug(f"Gross P&L: ${gross_pnl:.2f} | Net P&L: ${net_pnl:.2f} ({pnl_percent:.2f}%)")
 
     except Exception as e:
         logger.error(f"❌ Error updating signal_store with execution: {e}", exc_info=True)
@@ -566,40 +614,12 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
 def get_account_state() -> Dict[str, Any]:
     """
     Get current account state using broker library
+
+    TODO: Update this function to work with broker pool architecture
+    For now, this function is disabled (calls are commented out)
     """
-    try:
-        if not broker.is_connected():
-            if not connect_to_ibkr():
-                return {}
-
-        # Get account balance using broker library
-        balance = broker.get_account_balance()
-
-        # Get open positions
-        positions = broker.get_open_positions()
-
-        # Get margin info
-        margin_info = broker.get_margin_info()
-
-        # Get open orders
-        open_orders = broker.get_open_orders()
-
-        return {
-            "account": "IBKR_Main",
-            "timestamp": datetime.utcnow(),
-            "equity": balance.get('equity', 0),
-            "cash_balance": balance.get('cash', 0),
-            "margin_used": margin_info.get('margin_used', 0),
-            "margin_available": margin_info.get('margin_available', 0),
-            "unrealized_pnl": balance.get('unrealized_pnl', 0),
-            "realized_pnl": 0,  # Track from executions
-            "open_positions": positions,
-            "open_orders": open_orders
-        }
-
-    except Exception as e:
-        logger.error(f"Error getting account state: {str(e)}", exc_info=True)
-        return {}
+    logger.warning("get_account_state() called but is disabled - needs broker pool update")
+    return {}
 
 
 def cancel_order(order_id: str) -> bool:
@@ -694,7 +714,7 @@ def trading_orders_callback(message):
         order_data = json.loads(message.data.decode('utf-8'))
         order_id = order_data.get('order_id')
 
-        logger.info(f"Received trading order: {order_id} - adding to queue")
+        logger.debug(f"Received trading order: {order_id} - adding to queue")
 
         # Add order to queue for main thread processing
         # Include the message so we can ack/nack it later
@@ -721,7 +741,7 @@ def process_order_from_queue(order_item: Dict[str, Any]):
     signal_id = order_id.replace('_ORD', '') if order_id.endswith('_ORD') else order_id
 
     try:
-        logger.info(f"Processing order from queue: {order_id}")
+        logger.debug(f"Processing order from queue: {order_id}")
 
         # 🚨 CRITICAL FAILSAFE: Check if signal already processed
         if signal_id in processed_signal_ids:
@@ -732,13 +752,15 @@ def process_order_from_queue(order_item: Dict[str, Any]):
 
         # Add to processed set
         processed_signal_ids.add(signal_id)
-        logger.info(f"✅ Signal {signal_id} marked as processed (total tracked: {len(processed_signal_ids)})")
+        logger.debug(f"Signal {signal_id} marked as processed (total tracked: {len(processed_signal_ids)})")
 
-        # Log to signal_processing.log - Order received
+        # Log to signal_processing.log - Order received (concise)
+        logger.info("-" * 50)
+        logger.info(f"📥 ORDER RECEIVED: {order_data.get('instrument')} | {order_data.get('direction')} | Qty: {order_data.get('quantity')} | OrderID: {order_id}")
         signal_logger.info(f"ORDER: {signal_id} | ORDER_RECEIVED | OrderID={order_id} | Instrument={order_data.get('instrument')} | Direction={order_data.get('direction')} | Quantity={order_data.get('quantity')}")
 
         # Submit order to broker (now safe - we're in main thread)
-        signal_logger.info(f"ORDER: {signal_id} | SUBMITTING_TO_IBKR | Sending order to Interactive Brokers...")
+        logger.debug(f"Submitting order {order_id} to broker...")
         result = submit_order_to_broker(order_data)
 
         if result:
@@ -750,14 +772,10 @@ def process_order_from_queue(order_item: Dict[str, Any]):
             ib_order_id = result.get('ib_order_id')
             avg_fill_price = result.get('avg_fill_price', 0)
 
-            logger.info(f"🔍 Order {order_id} result: status={status}, filled={filled_qty}")
-
-            # Log IBKR response
-            signal_logger.info(f"ORDER: {signal_id} | IBKR_RESPONSE | Status={status} | IBKR_OrderID={ib_order_id} | Filled={filled_qty} | AvgPrice=${avg_fill_price}")
+            logger.debug(f"Order {order_id} result: status={status}, filled={filled_qty}")
 
             # Only proceed if there was an actual fill
             if status in ['Filled', 'PartiallyFilled'] or filled_qty > 0:
-                signal_logger.info(f"ORDER: {signal_id} | ORDER_FILLED | Quantity={filled_qty} | Price=${avg_fill_price} | Status={status}")
 
                 # Create execution confirmation
                 execution = {
@@ -781,9 +799,11 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                 })
 
                 # Publish execution confirmation
+                logger.debug(f"Publishing execution confirmation for {order_id}")
                 publish_execution_confirmation(execution)
 
                 # Create or update position in open_positions collection
+                logger.debug(f"Creating/updating position for {order_id}")
                 create_or_update_position(order_data, filled_qty, avg_fill_price)
 
                 # Update signal_store with execution data and calculate PnL
@@ -794,6 +814,7 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                     "fills": result.get('fills', []),
                     "commission": 0  # TODO: Get actual commission from IBKR
                 }
+                logger.debug(f"Updating signal_store for {order_id}")
                 update_signal_store_with_execution(order_data, execution_data)
 
                 # Update order status in database
@@ -803,7 +824,7 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                 )
 
                 signal_logger.info(f"ORDER: {signal_id} | EXECUTION_CONFIRMED | Fill confirmed and saved to database")
-                logger.info(f"✅ Order {order_id} executed: {execution['status']}")
+                logger.info(f"✅ ORDER COMPLETED: {order_data.get('instrument')} | Filled: {filled_qty} @ ${avg_fill_price:.2f} | Status: {execution['status']}")
             else:
                 # Order submitted but not filled yet - just update status
                 signal_logger.info(f"ORDER: {signal_id} | WAITING_FOR_FILL | Order accepted by IBKR, waiting for execution...")
@@ -830,9 +851,10 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                 # TODO: Trigger "raise hell" alerts
 
         # Get and publish updated account state
-        account_state = get_account_state()
-        if account_state:
-            publish_account_update(account_state)
+        # TODO: Update get_account_state() to work with broker pool
+        # account_state = get_account_state()
+        # if account_state:
+        #     publish_account_update(account_state)
 
         # Acknowledge message
         message.ack()
@@ -848,7 +870,7 @@ def start_trading_orders_subscriber():
     Runs in background thread
     """
     streaming_pull_future = subscriber.subscribe(trading_orders_subscription, callback=trading_orders_callback)
-    logger.info("ExecutionService listening for trading orders...")
+    logger.debug("Trading orders subscriber started")
 
     try:
         streaming_pull_future.result()
@@ -863,7 +885,7 @@ def start_order_commands_subscriber():
     Runs in background thread
     """
     streaming_pull_future = subscriber.subscribe(order_commands_subscription, callback=order_commands_callback)
-    logger.info("ExecutionService listening for order commands...")
+    logger.debug("Order commands subscriber started")
 
     try:
         streaming_pull_future.result()
@@ -879,37 +901,32 @@ def periodic_account_updates():
     while True:
         try:
             time.sleep(30)
-            account_state = get_account_state()
-            if account_state:
-                publish_account_update(account_state)
+            # TODO: Update get_account_state() to work with broker pool
+            # account_state = get_account_state()
+            # if account_state:
+            #     publish_account_update(account_state)
         except Exception as e:
             logger.error(f"Error in periodic account updates: {str(e)}")
 
 
 if __name__ == "__main__":
-    logger.info("Starting Execution Service with Broker Pool (Multi-Broker Support)")
+    logger.info("🚀 Execution Service Starting")
 
     # Connect to all brokers in pool (continue even if some fail - orders will route to available brokers)
     if not connect_all_brokers():
-        logger.warning("⚠️  Failed to connect to any brokers - service will continue (orders will queue until brokers connect)")
+        logger.warning("⚠️  No brokers connected - orders will queue until brokers available")
     else:
-        logger.info(f"✅ Broker pool initialized: {len(broker_pool)} broker(s) ready")
-
-    # MVP: Disabled periodic account updates to avoid asyncio event loop issues in threads
-    # Account state is published after each execution
-    logger.info("Periodic account updates disabled for MVP - account state published after executions")
+        logger.info(f"✅ Broker pool: {len(broker_pool)} broker(s) ready")
 
     # Start Pub/Sub subscribers in background threads
     orders_subscriber_thread = threading.Thread(target=start_trading_orders_subscriber, daemon=True)
     orders_subscriber_thread.start()
-    logger.info("Trading orders subscriber started in background thread")
 
     commands_subscriber_thread = threading.Thread(target=start_order_commands_subscriber, daemon=True)
     commands_subscriber_thread.start()
-    logger.info("Order commands subscriber started in background thread")
 
-    # Main loop: process orders AND commands from queues in main thread
-    logger.info("Main thread ready to process orders and commands from queues")
+    logger.info("✅ Execution Service ready - listening for orders")
+    logger.info("*" * 50)
     try:
         while True:
             # Check if there are orders in the queue (non-blocking)

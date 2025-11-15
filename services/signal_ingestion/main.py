@@ -36,13 +36,21 @@ except ImportError:
 LOG_FILE = os.path.join(PROJECT_ROOT, 'logs', 'signal_ingestion.log')
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
+# Create custom formatter matching Cerebro format
+custom_formatter = logging.Formatter('|%(levelname)s|%(message)s|%(asctime)s|file:%(filename)s:line No.%(lineno)d')
+
+# Create file handler with custom format
+file_handler = logging.FileHandler(LOG_FILE)
+file_handler.setFormatter(custom_formatter)
+
+# Create console handler with same format
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(custom_formatter)
+
+# Configure root logger
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
+    handlers=[file_handler, console_handler]
 )
 logger = logging.getLogger('signal_ingestion')
 

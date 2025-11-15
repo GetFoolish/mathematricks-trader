@@ -31,13 +31,22 @@ from services.account_data_service.models import CreateAccountRequest
 # Configure logging
 LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
+
+# Create custom formatter matching Cerebro format
+custom_formatter = logging.Formatter('|%(levelname)s|%(message)s|%(asctime)s|file:%(filename)s:line No.%(lineno)d')
+
+# Create file handler with custom format
+file_handler = logging.FileHandler(os.path.join(LOG_DIR, 'account_data_service.log'))
+file_handler.setFormatter(custom_formatter)
+
+# Create console handler with same format
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(custom_formatter)
+
+# Configure root logger
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, 'account_data_service.log')),
-        logging.StreamHandler()
-    ]
+    handlers=[file_handler, console_handler]
 )
 logger = logging.getLogger(__name__)
 

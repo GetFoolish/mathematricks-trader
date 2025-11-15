@@ -44,7 +44,7 @@ class MockBroker(AbstractBroker):
 
         self.broker_name = "Mock"
         self.account_id = config.get("account_id", "Mock_Paper")
-        self.initial_equity = config.get("initial_equity", 100000.0)
+        self.initial_equity = config.get("initial_equity", 1000000.0)
 
         # In-memory storage
         self.mock_orders = {}  # {broker_order_id: order_data}
@@ -132,7 +132,7 @@ class MockBroker(AbstractBroker):
             'timestamp': datetime.utcnow()
         }
 
-        logger.info(
+        logger.debug(
             f"Mock Broker: Order {broker_order_id} FILLED instantly | "
             f"Instrument={order.get('instrument')} | "
             f"Qty={quantity} | "
