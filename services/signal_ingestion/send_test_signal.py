@@ -28,13 +28,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def send_signal(payload: dict, signal_type: str = "single"):
+def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None):
     """
     Insert signal directly into MongoDB signal_store collection
 
     Args:
         payload: Signal JSON matching webhook format
         signal_type: Type of signal ("entry", "exit", or "single")
+        previous_entry_id: MongoDB ObjectId of previous ENTRY signal (for EXIT signals)
     """
     # Connect to MongoDB
     mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/?replicaSet=rs0')
@@ -48,6 +49,13 @@ def send_signal(payload: dict, signal_type: str = "single"):
         sys.exit(1)
 
     db = client['mathematricks_trading']
+
+    # Inject entry_signal_id if this is an EXIT signal and we have a previous ENTRY
+    if signal_type == "exit" and previous_entry_id:
+        # Check if payload has $PREVIOUS marker
+        if payload.get("entry_signal_id") == "$PREVIOUS":
+            payload["entry_signal_id"] = previous_entry_id
+            print(f"✓ Injected entry_signal_id: {previous_entry_id[:12]}...")
 
     # Add metadata for local testing
     # Determine environment (staging by default for local testing)
@@ -131,11 +139,38 @@ def send_signal(payload: dict, signal_type: str = "single"):
         print("   tail -f logs/execution_service.log    # Should show order placement")
         print("")
 
+        # For ENTRY signals, wait for signal_store to be populated and return the MongoDB _id
+        entry_store_id = None
+        if signal_type == "entry":
+            print("⏳ Waiting for signal_ingestion to process ENTRY signal...")
+            signal_id = signal_doc['signalID']
+
+            # Poll signal_store for up to 10 seconds
+            for i in range(20):  # 20 attempts, 0.5s each = 10s total
+                time.sleep(0.5)
+                signal_store_doc = db.signal_store.find_one({"signal_id": signal_id})
+                if signal_store_doc:
+                    entry_store_id = str(signal_store_doc['_id'])
+                    print(f"✓ ENTRY signal processed - signal_store ID: {entry_store_id[:12]}...")
+                    break
+
+            if not entry_store_id:
+                print("⚠️  WARNING: ENTRY signal not found in signal_store after 10s")
+                print("   EXIT signal pairing may fail!")
+
+        # Return both MongoDB _id and signal_store _id
+        return_value = {
+            "raw_id": str(result.inserted_id),
+            "signal_id": signal_doc['signalID'],
+            "signal_store_id": entry_store_id  # Only set for ENTRY signals
+        }
+
     except Exception as e:
         print(f"❌ Failed to insert signal: {e}")
         sys.exit(1)
 
     client.close()
+    return return_value
 
 
 def list_strategies():
@@ -286,6 +321,8 @@ See sample files in services/signal_ingestion/sample_signals/
         print("=" * 80)
 
         total_wait_time = 0
+        previous_entry_id = None
+
         for i, signal_payload in enumerate(payload, 1):
             # Validate signal
             _validate_signal_payload(signal_payload, allow_signal_type=True)
@@ -294,8 +331,12 @@ See sample files in services/signal_ingestion/sample_signals/
             signal_type = signal_payload.get("signal_type", "UNKNOWN").upper()
             print(f"\n{'🔵' if signal_type == 'ENTRY' else '🔴'} Sending signal {i}/{len(payload)} ({signal_type})...")
 
-            # Send signal (pass signal_type lowercase)
-            send_signal(signal_payload, signal_type=signal_type.lower())
+            # Send signal (pass signal_type lowercase and previous_entry_id)
+            result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=previous_entry_id)
+
+            # Capture ENTRY signal_store ID for next EXIT signal
+            if signal_type == "ENTRY" and result and result.get("signal_store_id"):
+                previous_entry_id = result["signal_store_id"]
 
             # Wait if specified
             wait_seconds = signal_payload.get("wait", 0)

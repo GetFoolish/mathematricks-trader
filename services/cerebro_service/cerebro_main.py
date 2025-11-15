@@ -711,7 +711,7 @@ def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) ->
             "instrument": instrument,
             "direction": entry_direction,
             "position_status": "OPEN",
-            "cerebro_decision.action": "APPROVE",
+            "cerebro_decision.decision": "APPROVE",
             "execution.status": "FILLED"
         })
 
@@ -776,7 +776,7 @@ def wait_for_entry_fill(strategy_id: str, instrument: str, direction: str, max_w
             "strategy_id": strategy_id,
             "instrument": instrument,
             "direction": entry_direction,
-            "cerebro_decision.action": "APPROVE",
+            "cerebro_decision.decision": "APPROVE",
             "position_status": {"$ne": "CLOSED"},  # Include null, "OPEN", and any other non-CLOSED status
             "$or": [
                 {"execution": None},  # Order not yet sent to execution_service
@@ -1264,22 +1264,41 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     if signal_type in ['EXIT', 'SCALE_OUT'] and decision_obj.action in ['APPROVE', 'RESIZE']:
         logger.info(f"🔴 EXIT signal detected - querying signal_store for entry quantity")
 
-        # Query signal_store for open entry signal
-        entry_signal = find_open_entry_signal(
-            strategy_id=signal.get('strategy_id'),
-            instrument=signal.get('instrument'),
-            direction=signal.get('direction')  # EXIT direction (we'll find opposite)
-        )
+        # PRIORITY 1: Check if EXIT signal explicitly provides entry_signal_id
+        entry_signal_id = signal.get('entry_signal_id')
+        entry_signal = None
 
-        # If entry not found immediately, wait for it to fill (with retry logic)
+        if entry_signal_id and entry_signal_id != "$PREVIOUS":
+            # Direct lookup by ObjectId - most reliable method
+            logger.info(f"✅ EXIT signal has entry_signal_id - using direct lookup: {entry_signal_id[:12]}...")
+            try:
+                from bson import ObjectId
+                entry_signal = signal_store_collection.find_one({"_id": ObjectId(entry_signal_id)})
+                if entry_signal:
+                    logger.info(f"✅ Found exact entry signal by ID: {entry_signal.get('signal_id')}")
+                else:
+                    logger.warning(f"⚠️ entry_signal_id provided but signal not found: {entry_signal_id}")
+            except Exception as e:
+                logger.error(f"❌ Error looking up entry_signal_id {entry_signal_id}: {e}")
+
+        # PRIORITY 2: Fallback to fuzzy matching if no entry_signal_id provided or lookup failed
         if not entry_signal:
-            logger.warning(f"⚠️ Entry not filled yet - initiating retry logic")
-            entry_signal = wait_for_entry_fill(
+            logger.info("Using fuzzy matching to find ENTRY signal (strategy/instrument/direction)")
+            entry_signal = find_open_entry_signal(
                 strategy_id=signal.get('strategy_id'),
                 instrument=signal.get('instrument'),
-                direction=signal.get('direction'),
-                max_wait=30
+                direction=signal.get('direction')  # EXIT direction (we'll find opposite)
             )
+
+            # If entry not found immediately, wait for it to fill (with retry logic)
+            if not entry_signal:
+                logger.warning(f"⚠️ Entry not filled yet - initiating retry logic")
+                entry_signal = wait_for_entry_fill(
+                    strategy_id=signal.get('strategy_id'),
+                    instrument=signal.get('instrument'),
+                    direction=signal.get('direction'),
+                    max_wait=30
+                )
 
         if entry_signal and entry_signal.get('execution') and entry_signal['execution'].get('quantity_filled'):
             # Found entry signal with execution data - use exact quantity

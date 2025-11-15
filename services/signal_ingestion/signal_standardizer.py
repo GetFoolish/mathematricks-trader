@@ -104,12 +104,20 @@ class SignalStandardizer:
         # Extract signal_type from top level of signal_data (new format)
         signal_type = (signal_data.get('signal_type') or '').upper()
 
+        # Extract entry_signal_id from top level (for EXIT signals)
+        # Convert ObjectId to string if needed
+        entry_signal_id = signal_data.get('entry_signal_id')
+        if entry_signal_id and hasattr(entry_signal_id, '__str__'):
+            # Handle MongoDB ObjectId or other types
+            entry_signal_id = str(entry_signal_id)
+
         # Build standardized signal
         standardized_signal = {
             "signal_id": signal_id,
             "strategy_id": signal_data.get('strategy_name', 'Unknown'),
             "timestamp": timestamp,
             "signal_type": signal_type,  # ENTRY, EXIT, etc. (empty string if not provided)
+            "entry_signal_id": entry_signal_id,  # MongoDB ObjectId of entry signal (for EXIT signals)
             "instrument": signal_payload.get('instrument') or signal_payload.get('ticker', ''),
             "direction": signal_payload.get('direction', 'LONG').upper(),
             "action": signal_payload.get('action', 'ENTRY').upper(),

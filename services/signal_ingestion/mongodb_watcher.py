@@ -154,6 +154,7 @@ class MongoDBWatcher:
                         'strategy_name': raw_signal_doc.get('strategy_name', 'Unknown Strategy'),
                         'signal': raw_signal_doc.get('signal', {}),
                         'signal_type': raw_signal_doc.get('signal_type'),
+                        'entry_signal_id': raw_signal_doc.get('entry_signal_id'),  # For EXIT signals
                         'environment': raw_signal_doc.get('environment', 'production'),
                         'mathematricks_signal_id': str(mathematricks_signal_id)
                     }
@@ -304,6 +305,7 @@ class MongoDBWatcher:
                             'strategy_name': raw_signal_doc.get('strategy_name', 'Unknown Strategy'),
                             'signal': raw_signal_doc.get('signal', {}),
                             'signal_type': raw_signal_doc.get('signal_type'),
+                            'entry_signal_id': raw_signal_doc.get('entry_signal_id'),  # For EXIT signals
                             'environment': raw_signal_doc.get('environment', 'production'),
                             'mathematricks_signal_id': str(mathematricks_signal_id)  # Pass to signal_ingestion
                         }

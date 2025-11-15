@@ -21,6 +21,7 @@
         "strategy_name": "SPX_1-D_Opt",
         "passphrase": "test_password_123",
         "signal_type": "EXIT",
+        "entry_signal_id": "$PREVIOUS",
         "signal_legs": [
             {
                 "instrument": "AAPL",

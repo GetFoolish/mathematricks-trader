@@ -9,6 +9,7 @@ import time
 import json
 import subprocess
 import signal
+import argparse
 from pathlib import Path
 from typing import Dict, List
 
@@ -198,7 +199,7 @@ def check_service_health(name: str, check_func, timeout: int = 10):
         time.sleep(1)
     return False
 
-def print_status():
+def print_status(use_mock_broker: bool = False):
     """Print final status of all services"""
     print("\n" + "=" * 70)
     print(f"{Colors.GREEN}✓ ALL SERVICES STARTED!{Colors.NC}")
@@ -209,7 +210,13 @@ def print_status():
     print("  • PortfolioBuilderService: http://localhost:8003")
     print("  • DashboardCreatorService: http://localhost:8004")
     print("  • CerebroService: Background (consumes from Pub/Sub)")
-    print("  • ExecutionService: Background (consumes from Pub/Sub)")
+
+    # Show mock mode indicator if enabled
+    exec_status = "  • ExecutionService: Background (consumes from Pub/Sub)"
+    if use_mock_broker:
+        exec_status += f" {Colors.YELLOW}[MOCK MODE]{Colors.NC}"
+    print(exec_status)
+
     print("  • SignalIngestionService: Monitoring staging.mathematricks.fund")
     print("  • Admin Frontend: http://localhost:5173")
     print("\nAdmin Dashboard:")
@@ -229,9 +236,24 @@ def print_status():
 
 def main():
     """Main entry point"""
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Mathematricks MVP Demo - Start all services')
+    parser.add_argument('--use-mock-broker', action='store_true',
+                        help='Use Mock broker for all orders (testing mode, overrides strategy account routing)')
+    args = parser.parse_args()
+
     print("=" * 70)
     print("MATHEMATRICKS MVP DEMO")
     print("=" * 70)
+
+    # Show mock mode warning if enabled
+    if args.use_mock_broker:
+        print(f"{Colors.YELLOW}")
+        print("=" * 70)
+        print("🧪 MOCK MODE ENABLED: All orders will be routed to Mock_Paper broker")
+        print("=" * 70)
+        print(f"{Colors.NC}")
+
     print("")
 
     # Check prerequisites
@@ -251,7 +273,7 @@ def main():
         # Start services
         start_service(
             "account_data_service",
-            [str(VENV_PYTHON), "main.py"],
+            [str(VENV_PYTHON), "account_data_main.py"],
             PROJECT_ROOT / "services" / "account_data_service",
             port=8082
         )
@@ -275,22 +297,27 @@ def main():
 
         start_service(
             "cerebro_service",
-            [str(VENV_PYTHON), "main.py"],
+            [str(VENV_PYTHON), "cerebro_main.py"],
             PROJECT_ROOT / "services" / "cerebro_service",
             env={"ACCOUNT_DATA_SERVICE_URL": "http://localhost:8082"}
         )
         time.sleep(2)
 
+        # Start execution service (conditionally add mock broker flag)
+        exec_command = [str(VENV_PYTHON), "execution_main.py"]
+        if args.use_mock_broker:
+            exec_command.append("--use-mock-broker")
+
         start_service(
             "execution_service",
-            [str(VENV_PYTHON), "main.py"],
+            exec_command,
             PROJECT_ROOT / "services" / "execution_service"
         )
         time.sleep(2)
 
         start_service(
             "signal_ingestion",
-            [str(VENV_PYTHON), "main.py", "--staging"],
+            [str(VENV_PYTHON), "signal_ingestion_main.py", "--staging"],
             PROJECT_ROOT / "services" / "signal_ingestion"
         )
         time.sleep(2)
@@ -316,7 +343,7 @@ def main():
         PROCESSES["frontend"] = proc
 
         # Print status
-        print_status()
+        print_status(use_mock_broker=args.use_mock_broker)
 
         # Keep main process alive
         print(f"{Colors.YELLOW}Services running. Press Ctrl+C to stop all services.{Colors.NC}\n")
