@@ -31,6 +31,7 @@
         "strategy_name": "Pairs_Trading",
         "passphrase": "test_password_123",
         "signal_type": "EXIT",
+        "entry_signal_id": "$PREVIOUS",
         "signal_legs": [
             {
                 "instrument": "AAPL",

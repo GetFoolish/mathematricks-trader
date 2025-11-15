@@ -1,6 +1,6 @@
 [
     {
-        "strategy_name": "US_Equity",
+        "strategy_name": "SPX_1-D_Opt",
         "passphrase": "test_password_123",
         "signal_type": "ENTRY",
         "signal_legs": [
@@ -18,7 +18,7 @@
         "wait": 5
     },
     {
-        "strategy_name": "US_Equity",
+        "strategy_name": "SPX_1-D_Opt",
         "passphrase": "test_password_123",
         "signal_type": "ENTRY",
         "signal_legs": [
@@ -36,7 +36,7 @@
         "wait": 5
     },
     {
-        "strategy_name": "US_Equity",
+        "strategy_name": "SPX_1-D_Opt",
         "passphrase": "test_password_123",
         "signal_type": "ENTRY",
         "signal_legs": [
@@ -54,9 +54,10 @@
         "wait": 10
     },
     {
-        "strategy_name": "US_Equity",
+        "strategy_name": "SPX_1-D_Opt",
         "passphrase": "test_password_123",
         "signal_type": "EXIT",
+        "entry_signal_id": "$PREVIOUS",
         "signal_legs": [
             {
                 "instrument": "AAPL",
@@ -72,9 +73,10 @@
         "wait": 5
     },
     {
-        "strategy_name": "US_Equity",
+        "strategy_name": "SPX_1-D_Opt",
         "passphrase": "test_password_123",
         "signal_type": "EXIT",
+        "entry_signal_id": "$PREVIOUS",
         "signal_legs": [
             {
                 "instrument": "AAPL",
@@ -90,9 +92,10 @@
         "wait": 5
     },
     {
-        "strategy_name": "US_Equity",
+        "strategy_name": "SPX_1-D_Opt",
         "passphrase": "test_password_123",
         "signal_type": "EXIT",
+        "entry_signal_id": "$PREVIOUS",
         "signal_legs": [
             {
                 "instrument": "AAPL",
