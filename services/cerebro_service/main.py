@@ -42,13 +42,20 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(PROJECT_ROOT, '..', 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 
+# Create custom formatter for both file and console
+custom_formatter = logging.Formatter('|%(levelname)s|%(message)s|%(asctime)s|file:%(filename)s:line No.%(lineno)d')
+
+# Create file handler with custom format
+file_handler = logging.FileHandler(os.path.join(LOG_DIR, 'cerebro_service.log'))
+file_handler.setFormatter(custom_formatter)
+
+# Create console handler with same format
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(custom_formatter)
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, 'cerebro_service.log')),
-        logging.StreamHandler()
-    ]
+    handlers=[file_handler, console_handler]
 )
 logger = logging.getLogger(__name__)
 
@@ -748,14 +755,33 @@ def wait_for_entry_fill(strategy_id: str, instrument: str, direction: str, max_w
     entry_direction = opposite_direction(direction)
 
     try:
+        # DEBUG: First let's see what entry signals exist for this instrument
+        debug_query = {
+            "strategy_id": strategy_id,
+            "instrument": instrument,
+            "direction": entry_direction
+        }
+        all_entries = list(signal_store_collection.find(debug_query).limit(5))
+        logger.info(f"🔍 DEBUG: Found {len(all_entries)} entry signals for {strategy_id}/{instrument}/{entry_direction}")
+        for idx, entry in enumerate(all_entries, 1):
+            logger.info(f"   Entry {idx}: signal_id={entry.get('signal_id')}")
+            logger.info(f"            cerebro_decision.action={entry.get('cerebro_decision', {}).get('action')}")
+            logger.info(f"            position_status={entry.get('position_status')}")
+            logger.info(f"            execution={entry.get('execution')}")
+
         # Query for pending ENTRY order in signal_store (cerebro approved but not filled yet)
+        # Note: execution field is null until order fills, position_status is null until filled
         pending_entry = signal_store_collection.find_one({
             "strategy_id": strategy_id,
             "instrument": instrument,
             "direction": entry_direction,
-            "position_status": "OPEN",
             "cerebro_decision.action": "APPROVE",
-            "execution.status": {"$in": ["PENDING", "SUBMITTED", "PARTIAL"]}
+            "position_status": {"$ne": "CLOSED"},  # Include null, "OPEN", and any other non-CLOSED status
+            "$or": [
+                {"execution": None},  # Order not yet sent to execution_service
+                {"execution": {"$exists": False}},  # No execution field at all
+                {"execution.status": {"$nin": ["FILLED"]}}  # Order in-flight but not filled
+            ]
         })
 
         if not pending_entry:
