@@ -57,6 +57,7 @@ from .exceptions import (
 # Export broker implementations
 from .ibkr import IBKRBroker
 from .zerodha import ZerodhaBroker
+from .mock import MockBroker
 
 __all__ = [
     # Factory
@@ -84,6 +85,7 @@ __all__ = [
     # Broker implementations
     'IBKRBroker',
     'ZerodhaBroker',
+    'MockBroker',
 ]
 
 __version__ = '1.0.0'

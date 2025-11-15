@@ -7,13 +7,14 @@ import sys
 import logging
 import json
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from google.cloud import pubsub_v1
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import threading
 import time
 import queue
+import requests
 
 # Add services directory to path so we can import brokers package
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -82,22 +83,132 @@ order_commands_subscription = subscriber.subscription_path(project_id, 'order-co
 execution_confirmations_topic = publisher.topic_path(project_id, 'execution-confirmations')
 account_updates_topic = publisher.topic_path(project_id, 'account-updates')
 
-# IBKR Configuration
+# Account Data Service Configuration
+ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:5001')
+
+# IBKR Configuration (fallback for backward compatibility)
 IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
 IBKR_PORT = int(os.getenv('IBKR_PORT', '7497'))  # 7497 for TWS, 4002 for IB Gateway
 IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', '1'))
 
-# Initialize broker using BrokerFactory
-broker_config = {
-    "broker": "IBKR",
-    "host": IBKR_HOST,
-    "port": IBKR_PORT,
-    "client_id": IBKR_CLIENT_ID,
-    "account_id": os.getenv('IBKR_ACCOUNT_ID', 'IBKR_Main')
-}
+# ========================================================================
+# BROKER POOL - Multi-Broker Architecture
+# ========================================================================
 
-broker = BrokerFactory.create_broker(broker_config)
-logger.info(f"Broker created: {broker.broker_name}")
+# Broker pool: {account_id: broker_instance}
+broker_pool = {}
+
+
+def get_active_accounts_from_service() -> List[Dict[str, Any]]:
+    """
+    Query AccountDataService for all active accounts.
+
+    Returns:
+        List of active account dictionaries
+    """
+    try:
+        response = requests.get(f"{ACCOUNT_DATA_SERVICE_URL}/api/v1/accounts")
+        response.raise_for_status()
+        accounts_data = response.json()
+
+        # Filter for ACTIVE accounts only
+        active_accounts = [
+            acc for acc in accounts_data.get('accounts', [])
+            if acc.get('status') == 'ACTIVE'
+        ]
+
+        logger.info(f"Found {len(active_accounts)} active accounts from AccountDataService")
+        return active_accounts
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to get accounts from AccountDataService: {str(e)}")
+        logger.warning("Falling back to single IBKR broker configuration")
+        return []
+    except Exception as e:
+        logger.error(f"Unexpected error getting accounts: {str(e)}")
+        return []
+
+
+def initialize_broker_pool():
+    """
+    Initialize broker pool by creating broker instances for all active accounts.
+    Falls back to single IBKR broker if AccountDataService unavailable.
+    """
+    global broker_pool
+
+    logger.info("Initializing broker pool from AccountDataService...")
+
+    # Get active accounts
+    accounts = get_active_accounts_from_service()
+
+    if not accounts:
+        # Fallback: Create single IBKR broker (backward compatible)
+        logger.warning("No accounts from AccountDataService - creating single IBKR broker as fallback")
+        account_id = os.getenv('IBKR_ACCOUNT_ID', 'IBKR_Paper')
+        broker_config = {
+            "broker": "IBKR",
+            "host": IBKR_HOST,
+            "port": IBKR_PORT,
+            "client_id": IBKR_CLIENT_ID,
+            "account_id": account_id
+        }
+
+        try:
+            broker_instance = BrokerFactory.create_broker(broker_config)
+            broker_pool[account_id] = broker_instance
+            logger.info(f"✅ Created fallback IBKR broker for account: {account_id}")
+        except Exception as e:
+            logger.error(f"❌ Failed to create fallback IBKR broker: {str(e)}")
+
+        return
+
+    # Create broker instance for each active account
+    for account in accounts:
+        account_id = account.get('account_id')
+        broker_name = account.get('broker')
+        auth_details = account.get('authentication_details', {})
+
+        try:
+            # Build broker config
+            broker_config = {
+                "broker": broker_name,
+                "account_id": account_id,
+                **auth_details  # Spread auth details (host, port, client_id, etc.)
+            }
+
+            # Create broker instance
+            broker_instance = BrokerFactory.create_broker(broker_config)
+            broker_pool[account_id] = broker_instance
+
+            logger.info(f"✅ Created {broker_name} broker for account: {account_id}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to create {broker_name} broker for account {account_id}: {str(e)}")
+            continue
+
+    logger.info(f"Broker pool initialized with {len(broker_pool)} broker(s)")
+
+
+def get_broker_for_account(account_id: str) -> Optional['AbstractBroker']:
+    """
+    Get broker instance for specific account.
+
+    Args:
+        account_id: Account ID (e.g., "IBKR_Paper", "Mock_Paper")
+
+    Returns:
+        Broker instance, or None if not found
+    """
+    if account_id not in broker_pool:
+        logger.error(f"❌ No broker found for account: {account_id}")
+        logger.error(f"   Available accounts: {list(broker_pool.keys())}")
+        return None
+
+    return broker_pool[account_id]
+
+
+# Initialize broker pool on startup
+initialize_broker_pool()
 
 # Order queue for threading safety
 # Pub/Sub callbacks run in thread pool, orders are processed in main thread
@@ -112,41 +223,63 @@ processed_signal_ids = set()  # In-memory deduplication
 SIGNAL_ID_EXPIRY_HOURS = 24  # Keep signal IDs for 24 hours
 
 
-def connect_to_ibkr():
+def connect_all_brokers():
     """
-    Connect to Interactive Brokers using broker library
+    Connect to all brokers in the broker pool.
     """
-    try:
-        if not broker.is_connected():
-            logger.info(f"Connecting to IBKR at {IBKR_HOST}:{IBKR_PORT}")
-            success = broker.connect()
-            if success:
-                logger.info("Connected to IBKR successfully")
-                return True
+    logger.info(f"Connecting to {len(broker_pool)} broker(s)...")
+
+    success_count = 0
+    for account_id, broker_instance in broker_pool.items():
+        try:
+            if not broker_instance.is_connected():
+                logger.info(f"Connecting to {broker_instance.broker_name} for account {account_id}...")
+                success = broker_instance.connect()
+                if success:
+                    logger.info(f"✅ Connected to {broker_instance.broker_name} for {account_id}")
+                    success_count += 1
+                else:
+                    logger.error(f"❌ Failed to connect to {broker_instance.broker_name} for {account_id}")
             else:
-                logger.error("Failed to connect to IBKR")
-                return False
-        return True
-    except BrokerConnectionError as e:
-        logger.error(f"Broker connection error: {str(e)}")
-        return False
-    except Exception as e:
-        logger.error(f"Unexpected error connecting to IBKR: {str(e)}")
-        return False
+                logger.info(f"Already connected to {broker_instance.broker_name} for {account_id}")
+                success_count += 1
+
+        except BrokerConnectionError as e:
+            logger.error(f"❌ Broker connection error for {account_id}: {str(e)}")
+        except Exception as e:
+            logger.error(f"❌ Unexpected error connecting {account_id}: {str(e)}")
+
+    logger.info(f"Broker pool connection complete: {success_count}/{len(broker_pool)} connected")
+    return success_count > 0
 
 
 def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Submit order to broker using broker library
+    Submit order to broker using broker pool (multi-broker routing).
 
-    Uses the AbstractBroker interface for placing orders.
+    Routes order to correct broker based on order['account'] field.
     """
     try:
+        # Get account from order
+        account_id = order_data.get('account')
+        if not account_id:
+            logger.error(f"❌ Order {order_data.get('order_id')} missing 'account' field - cannot route to broker")
+            return None
+
+        # Get broker instance for this account
+        broker = get_broker_for_account(account_id)
+        if not broker:
+            logger.error(f"❌ No broker found for account {account_id} - order {order_data.get('order_id')} cannot be executed")
+            return None
+
+        # Ensure broker is connected
         if not broker.is_connected():
-            if not connect_to_ibkr():
+            logger.info(f"Connecting to {broker.broker_name} for account {account_id}...")
+            if not broker.connect():
+                logger.error(f"❌ Failed to connect to {broker.broker_name} for {account_id}")
                 return None
 
-        logger.info(f"📋 Submitting order {order_data.get('order_id')} via broker library")
+        logger.info(f"📋 Submitting order {order_data.get('order_id')} to {broker.broker_name} (account: {account_id})")
 
         # Use broker library's place_order method
         # The broker library handles all contract creation, qualification, and submission
@@ -754,13 +887,13 @@ def periodic_account_updates():
 
 
 if __name__ == "__main__":
-    logger.info("Starting Execution Service MVP (IBKR)")
+    logger.info("Starting Execution Service with Broker Pool (Multi-Broker Support)")
 
-    # Connect to IBKR (continue even if connection fails - orders will queue)
-    if not connect_to_ibkr():
-        logger.warning("⚠️  Failed to connect to IBKR - service will continue (orders will queue until IBKR connects)")
+    # Connect to all brokers in pool (continue even if some fail - orders will route to available brokers)
+    if not connect_all_brokers():
+        logger.warning("⚠️  Failed to connect to any brokers - service will continue (orders will queue until brokers connect)")
     else:
-        logger.info("✅ IBKR broker connected successfully")
+        logger.info(f"✅ Broker pool initialized: {len(broker_pool)} broker(s) ready")
 
     # MVP: Disabled periodic account updates to avoid asyncio event loop issues in threads
     # Account state is published after each execution

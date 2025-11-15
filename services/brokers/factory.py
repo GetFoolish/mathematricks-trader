@@ -8,6 +8,7 @@ from typing import Dict, Any
 from .base import AbstractBroker
 from .ibkr import IBKRBroker
 from .zerodha import ZerodhaBroker
+from .mock import MockBroker
 from .exceptions import BrokerError
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class BrokerFactory:
     BROKERS = {
         "IBKR": IBKRBroker,
         "Zerodha": ZerodhaBroker,
+        "Mock": MockBroker,
         # Add more brokers here as they're implemented
     }
 
