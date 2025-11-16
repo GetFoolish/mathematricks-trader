@@ -73,25 +73,29 @@ class TradingAccountRepository:
         )
         logger.debug(f"Updated balances for {account_id}")
 
-    def update_positions(self, account_id: str, positions: List[Dict]):
+    def update_broker_positions_snapshot(self, account_id: str, positions: List[Dict]):
         """
-        Update open positions with timestamp
+        Store broker's position snapshot for monitoring/comparison only.
+        Does NOT update open_positions (ExecutionService owns that field).
+
+        This method stores the latest positions reported by the broker in a separate
+        field so we can compare broker state vs. execution state and detect discrepancies.
 
         Args:
             account_id: Account ID
-            positions: List of position dicts
+            positions: List of position dicts from broker
         """
         self.collection.update_one(
             {"_id": account_id},
             {
                 "$set": {
-                    "open_positions": positions,
-                    "positions_last_updated": datetime.utcnow(),
+                    "broker_positions_snapshot": positions,
+                    "broker_positions_last_updated": datetime.utcnow(),
                     "updated_at": datetime.utcnow()
                 }
             }
         )
-        logger.debug(f"Updated {len(positions)} positions for {account_id}")
+        logger.debug(f"Updated broker snapshot: {len(positions)} positions for {account_id}")
 
     def update_connection_status(self, account_id: str, status: str, success: bool):
         """

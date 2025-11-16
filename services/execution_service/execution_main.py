@@ -111,7 +111,7 @@ else:
 db = mongo_client['mathematricks_trading']
 execution_confirmations_collection = db['execution_confirmations']
 trading_orders_collection = db['trading_orders']
-open_positions_collection = db['open_positions']
+trading_accounts_collection = db['trading_accounts']  # For position tracking
 signal_store_collection = db['signal_store']  # For updating execution data
 
 # Initialize Google Cloud Pub/Sub
@@ -523,7 +523,7 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
 
 def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg_fill_price: float):
     """
-    Create or update position in open_positions collection after order fill
+    Create or update position in trading_accounts.{account_id}.open_positions after order fill
     Handles both ENTRY (create/increase) and EXIT (decrease/close) actions
     """
     try:
@@ -531,16 +531,47 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
         instrument = order_data.get('instrument')
         direction = order_data.get('direction', 'LONG').upper()
         action = order_data.get('action', 'ENTRY').upper()
+        signal_type = order_data.get('signal_type', '').upper()
         order_id = order_data.get('order_id')
 
-        # Find existing position
-        existing_position = open_positions_collection.find_one({
-            'strategy_id': strategy_id,
-            'instrument': instrument,
-            'status': 'OPEN'
-        })
+        # For Mock broker, use "Mock_Paper" account
+        # TODO: Get account_id from order_data when multi-account support is added
+        account_id = "Mock_Paper" if args.use_mock_broker else "IBKR_Main"
 
-        if action in ['ENTRY', 'BUY']:
+        # Find account document
+        account_doc = trading_accounts_collection.find_one({"account_id": account_id})
+        if not account_doc:
+            # Create account document if it doesn't exist
+            account_doc = {
+                "account_id": account_id,
+                "open_positions": [],
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+            trading_accounts_collection.insert_one(account_doc)
+
+        # Find existing position in open_positions array
+        existing_position = None
+        position_index = None
+        open_positions = account_doc.get('open_positions', [])
+
+        for idx, pos in enumerate(open_positions):
+            if (pos.get('strategy_id') == strategy_id and
+                pos.get('instrument') == instrument and
+                pos.get('status') == 'OPEN'):
+                existing_position = pos
+                position_index = idx
+                break
+
+        # Determine if this is ENTRY or EXIT using signal_type OR direction+action
+        # signal_type is preferred (set by Cerebro), fallback to direction+action logic
+        is_entry = (
+            signal_type == 'ENTRY' or
+            (not signal_type and direction == 'LONG' and action == 'BUY') or
+            (not signal_type and direction == 'SHORT' and action == 'SELL')
+        )
+
+        if is_entry:
             # ENTRY: Create new position or add to existing
             if existing_position:
                 # Add to existing position (scale-in)
@@ -551,18 +582,19 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
                 # Calculate new weighted average price
                 new_avg_price = ((current_qty * current_avg_price) + (filled_qty * avg_fill_price)) / new_qty
 
-                open_positions_collection.update_one(
-                    {'_id': existing_position['_id']},
+                # Update the position in the array using array index
+                trading_accounts_collection.update_one(
+                    {'account_id': account_id},
                     {'$set': {
-                        'quantity': new_qty,
-                        'avg_entry_price': new_avg_price,
-                        'updated_at': datetime.utcnow(),
-                        'last_order_id': order_id
+                        f'open_positions.{position_index}.quantity': new_qty,
+                        f'open_positions.{position_index}.avg_entry_price': new_avg_price,
+                        f'open_positions.{position_index}.updated_at': datetime.utcnow(),
+                        f'open_positions.{position_index}.last_order_id': order_id
                     }}
                 )
                 logger.info(f"✅ Updated position {strategy_id}/{instrument}: {current_qty} → {new_qty} shares @ ${new_avg_price:.2f}")
             else:
-                # Create new position
+                # Create new position and add to array
                 position = {
                     'strategy_id': strategy_id,
                     'instrument': instrument,
@@ -577,36 +609,39 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
                     'created_at': datetime.utcnow(),
                     'updated_at': datetime.utcnow()
                 }
-                open_positions_collection.insert_one(position)
+                trading_accounts_collection.update_one(
+                    {'account_id': account_id},
+                    {'$push': {'open_positions': position}}
+                )
                 logger.info(f"✅ Created position {strategy_id}/{instrument}: {filled_qty} shares @ ${avg_fill_price:.2f}")
 
-        elif action in ['EXIT', 'SELL']:
+        else:
             # EXIT: Reduce or close position
             if existing_position:
                 current_qty = existing_position['quantity']
 
                 if filled_qty >= current_qty:
-                    # Full exit - close position
-                    open_positions_collection.update_one(
-                        {'_id': existing_position['_id']},
+                    # Full exit - close position by updating status in array
+                    trading_accounts_collection.update_one(
+                        {'account_id': account_id},
                         {'$set': {
-                            'status': 'CLOSED',
-                            'exit_order_id': order_id,
-                            'avg_exit_price': avg_fill_price,
-                            'closed_at': datetime.utcnow(),
-                            'updated_at': datetime.utcnow()
+                            f'open_positions.{position_index}.status': 'CLOSED',
+                            f'open_positions.{position_index}.exit_order_id': order_id,
+                            f'open_positions.{position_index}.avg_exit_price': avg_fill_price,
+                            f'open_positions.{position_index}.closed_at': datetime.utcnow(),
+                            f'open_positions.{position_index}.updated_at': datetime.utcnow()
                         }}
                     )
                     logger.info(f"✅ Closed position {strategy_id}/{instrument}: {current_qty} shares @ ${avg_fill_price:.2f}")
                 else:
-                    # Partial exit - reduce position
+                    # Partial exit - reduce position quantity in array
                     new_qty = current_qty - filled_qty
-                    open_positions_collection.update_one(
-                        {'_id': existing_position['_id']},
+                    trading_accounts_collection.update_one(
+                        {'account_id': account_id},
                         {'$set': {
-                            'quantity': new_qty,
-                            'updated_at': datetime.utcnow(),
-                            'last_order_id': order_id
+                            f'open_positions.{position_index}.quantity': new_qty,
+                            f'open_positions.{position_index}.updated_at': datetime.utcnow(),
+                            f'open_positions.{position_index}.last_order_id': order_id
                         }}
                     )
                     logger.info(f"✅ Reduced position {strategy_id}/{instrument}: {current_qty} → {new_qty} shares")
@@ -923,6 +958,21 @@ if __name__ == "__main__":
         logger.warning("⚠️  No brokers connected - orders will queue until brokers available")
     else:
         logger.info(f"✅ Broker pool: {len(broker_pool)} broker(s) ready")
+
+    # Initialize Mock broker with empty positions
+    if args.use_mock_broker:
+        account_id = "Mock_Paper"
+        trading_accounts_collection.update_one(
+            {'account_id': account_id},
+            {
+                '$set': {
+                    'open_positions': [],
+                    'updated_at': datetime.utcnow()
+                }
+            },
+            upsert=True
+        )
+        logger.info(f"✅ Mock broker account '{account_id}' initialized with empty positions")
 
     # Start Pub/Sub subscribers in background threads
     orders_subscriber_thread = threading.Thread(target=start_trading_orders_subscriber, daemon=True)

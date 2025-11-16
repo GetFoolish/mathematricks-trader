@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 import random
 import time
 import uuid
+from pymongo import MongoClient
 
 # Import base classes and exceptions
 import sys
@@ -17,6 +18,33 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from base import AbstractBroker, OrderSide, OrderType, OrderStatus
 
 logger = logging.getLogger(__name__)
+
+# MongoDB connection will be lazy-loaded
+_mongo_client = None
+_trading_accounts_collection = None
+
+
+def get_trading_accounts_collection():
+    """Lazy load MongoDB connection for position tracking"""
+    global _mongo_client, _trading_accounts_collection
+
+    if _trading_accounts_collection is None:
+        try:
+            # Use MONGODB_URI (same as other services)
+            MONGO_URI = os.getenv('MONGODB_URI')
+            if not MONGO_URI:
+                logger.warning("MONGODB_URI not set, position tracking disabled")
+                return None
+
+            _mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+            db = _mongo_client['mathematricks_trading']
+            _trading_accounts_collection = db['trading_accounts']
+            logger.info("✅ Connected to MongoDB for position tracking")
+        except Exception as e:
+            logger.error(f"Failed to connect to MongoDB: {e}")
+            return None
+
+    return _trading_accounts_collection
 
 
 class MockBroker(AbstractBroker):
@@ -243,18 +271,51 @@ class MockBroker(AbstractBroker):
 
     def get_open_positions(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Return open positions (empty for simplest version).
+        Return open positions from MongoDB trading_accounts collection.
 
         Args:
-            account_id: Account ID (optional)
+            account_id: Account ID (optional, defaults to self.account_id)
 
         Returns:
-            Empty list (no position tracking in simple version)
-
-        Note:
-            For Phase 2, could track positions in-memory and return them here
+            List of open position dicts with OPEN status
         """
-        return []
+        try:
+            acc_id = account_id or self.account_id
+
+            # Get MongoDB collection (lazy-loaded)
+            trading_accounts_collection = get_trading_accounts_collection()
+            if trading_accounts_collection is None:
+                logger.warning("MongoDB not available, returning empty positions")
+                return []
+
+            # Fetch account document from MongoDB
+            account_doc = trading_accounts_collection.find_one({"account_id": acc_id})
+
+            if not account_doc:
+                return []
+
+            # Get open_positions array and filter for OPEN status only
+            all_positions = account_doc.get('open_positions', [])
+            open_positions = [pos for pos in all_positions if pos.get('status') == 'OPEN']
+
+            # Convert to format expected by AccountDataService
+            formatted_positions = []
+            for pos in open_positions:
+                formatted_positions.append({
+                    'instrument': pos.get('instrument'),
+                    'quantity': pos.get('quantity', 0),
+                    'side': pos.get('direction', 'LONG'),
+                    'avg_price': pos.get('avg_entry_price', 0),
+                    'current_price': pos.get('current_price', pos.get('avg_entry_price', 0)),
+                    'unrealized_pnl': pos.get('unrealized_pnl', 0),
+                    'strategy_id': pos.get('strategy_id')
+                })
+
+            return formatted_positions
+
+        except Exception as e:
+            logger.error(f"Error fetching positions from MongoDB: {e}", exc_info=True)
+            return []
 
     def get_margin_info(self, account_id: Optional[str] = None) -> Dict[str, Any]:
         """

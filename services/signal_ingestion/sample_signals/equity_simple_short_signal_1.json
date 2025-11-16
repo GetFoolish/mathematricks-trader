@@ -7,7 +7,7 @@
             {
                 "instrument": "AAPL",
                 "instrument_type": "STOCK",
-                "action": "BUY",
+                "action": "SELL",
                 "direction": "LONG",
                 "quantity": 10,
                 "order_type": "MARKET",
@@ -26,7 +26,7 @@
             {
                 "instrument": "AAPL",
                 "instrument_type": "STOCK",
-                "action": "SELL",
+                "action": "BUY",
                 "direction": "SHORT",
                 "quantity": 10,
                 "order_type": "MARKET",

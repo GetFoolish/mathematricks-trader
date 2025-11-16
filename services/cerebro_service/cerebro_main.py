@@ -1535,7 +1535,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         logger.info(f"Allocated Capital: ${decision_obj.allocated_capital:,.2f}")
     if decision_obj.margin_required:
         logger.info(f"Margin Required: ${decision_obj.margin_required:,.2f}")
-    logger.info(f"{'='*70}\n")
+    logger.info(f"{'='*70}")
 
     # Step 5: Save decision to MongoDB
     decision_doc = {
@@ -1626,8 +1626,10 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
             # Unified signal processing log for order creation
             logger.info(f"SIGNAL: {signal_id} | ORDER_CREATED | OrderID={order_id} | Quantity={final_quantity_rounded} | Instrument={signal.get('instrument')} | Direction={signal.get('direction')}")
+            logger.info("-" * 50)
         except Exception as e:
             logger.error(f"Failed to publish order to Pub/Sub: {str(e)}")
+            logger.info("-" * 50)
 
 
 # ============================================================================

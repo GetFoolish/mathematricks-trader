@@ -263,7 +263,6 @@ class SignalIngestionService:
 
         if is_catchup:
             logger.info("🔄 Caught up from MongoDB storage")
-        logger.info("─" * 60)
 
         # Initialize signal processing logger on first signal
         signal_logger = get_signal_processing_logger()
@@ -319,6 +318,7 @@ class SignalIngestionService:
         logger.info(f"   → Mathematricks Signal ID: {mathematricks_signal_id}")
         logger.info(f"   → Instrument: {standardized_signal['instrument']}")
         logger.info(f"   → Action: {standardized_signal['action']}")
+        logger.info("-" * 50)
 
     def start(self):
         """Start the signal ingestion service"""
