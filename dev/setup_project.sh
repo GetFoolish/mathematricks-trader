@@ -41,12 +41,21 @@ else
     echo -e "${GREEN}✅ Homebrew installed${NC}"
 fi
 
-# Check for Python
-if ! command -v python3 &> /dev/null; then
-    echo -e "${YELLOW}⚠️  Python 3 not found. Installing Python ${PYTHON_VERSION}...${NC}"
+# Check for Python 3.11 specifically
+PYTHON_CMD="python3.11"
+
+if ! command -v $PYTHON_CMD &> /dev/null; then
+    echo -e "${YELLOW}⚠️  Python ${PYTHON_VERSION} not found. Installing...${NC}"
     brew install python@${PYTHON_VERSION}
+
+    # Verify installation
+    if ! command -v $PYTHON_CMD &> /dev/null; then
+        echo -e "${RED}❌ Failed to install Python ${PYTHON_VERSION}${NC}"
+        echo "Please install manually: brew install python@${PYTHON_VERSION}"
+        exit 1
+    fi
 else
-    PYTHON_VER=$(python3 --version | awk '{print $2}')
+    PYTHON_VER=$($PYTHON_CMD --version | awk '{print $2}')
     echo -e "${GREEN}✅ Python ${PYTHON_VER} installed${NC}"
 fi
 
@@ -113,13 +122,13 @@ if [ -d "$VENV_DIR" ]; then
     echo ""
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         rm -rf "$VENV_DIR"
-        python3 -m venv "$VENV_DIR"
+        $PYTHON_CMD -m venv "$VENV_DIR"
         echo -e "${GREEN}✅ Virtual environment recreated${NC}"
     else
         echo -e "${BLUE}ℹ️  Using existing virtual environment${NC}"
     fi
 else
-    python3 -m venv "$VENV_DIR"
+    $PYTHON_CMD -m venv "$VENV_DIR"
     echo -e "${GREEN}✅ Virtual environment created at ./${VENV_DIR}${NC}"
 fi
 
@@ -159,25 +168,31 @@ if [ -d "$COLLECTIONS_DIR" ]; then
         echo -e "${YELLOW}⚠️  No exported collection files found in ${COLLECTIONS_DIR}${NC}"
         echo "Skipping MongoDB import. You'll need to set up collections manually."
     else
-        echo "Found exported collections. Importing..."
+        echo "Found exported collections. Checking which need to be imported..."
 
         for file in $LATEST_FILES; do
             collection=$(basename "$file" | sed 's/_[0-9]*\.json$//')
 
-            echo "  Importing: $collection"
-            mongoimport \
-                --db="$MONGO_DB_NAME" \
-                --collection="$collection" \
-                --file="$file" \
-                --jsonArray \
-                --drop \
-                --quiet
+            # Check if collection exists and has documents
+            doc_count=$(mongosh --quiet "$MONGO_DB_NAME" --eval "db.${collection}.countDocuments({})" 2>/dev/null || echo "0")
 
-            if [ $? -eq 0 ]; then
-                doc_count=$(mongosh --quiet "$MONGO_DB_NAME" --eval "db.${collection}.countDocuments({})")
-                echo -e "    ${GREEN}✅ Imported ${doc_count} documents${NC}"
+            if [ "$doc_count" -gt 0 ]; then
+                echo -e "  ${BLUE}ℹ️  ${collection}: Already exists with ${doc_count} documents (skipping)${NC}"
             else
-                echo -e "    ${RED}❌ Failed to import ${collection}${NC}"
+                echo "  Importing: $collection"
+                mongoimport \
+                    --db="$MONGO_DB_NAME" \
+                    --collection="$collection" \
+                    --file="$file" \
+                    --jsonArray \
+                    --quiet
+
+                if [ $? -eq 0 ]; then
+                    new_count=$(mongosh --quiet "$MONGO_DB_NAME" --eval "db.${collection}.countDocuments({})")
+                    echo -e "    ${GREEN}✅ Imported ${new_count} documents${NC}"
+                else
+                    echo -e "    ${RED}❌ Failed to import ${collection}${NC}"
+                fi
             fi
         done
     fi
@@ -232,7 +247,8 @@ echo "2. Update configuration (if needed):"
 echo -e "   ${YELLOW}nano .env${NC}"
 echo ""
 echo "3. Start the demo:"
-echo -e "   ${YELLOW}python mvp_demo_start.py${NC}"
+echo -e "   ${YELLOW}python mvp_demo_start.py${NC} --use-mock-broker"
+echo -e "   ${YELLOW}python mvp_demo_start.py${NC} # if you want to test it with live broker"
 echo ""
 echo -e "${BLUE}📚 Additional Information:${NC}"
 echo ""
