@@ -107,7 +107,10 @@ signals_db = mongo_client['mathematricks_signals']
 incoming_signals_collection = signals_db['trading_signals']  # Raw signals from webhook
 
 # Initialize Position Manager
-position_manager = PositionManager(mongo_client)
+# Use Mock_Paper account by default (consistent with execution_service)
+# TODO: Support multi-account routing based on strategy configuration
+DEFAULT_ACCOUNT_ID = os.getenv('DEFAULT_ACCOUNT_ID', 'Mock_Paper')
+position_manager = PositionManager(mongo_client, default_account_id=DEFAULT_ACCOUNT_ID)
 
 # Initialize Broker Adapter for margin calculations
 broker_adapter = CerebroBrokerAdapter(broker_name="IBKR")
@@ -1586,6 +1589,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             "instrument": signal.get('instrument'),
             "direction": signal.get('direction'),
             "action": signal.get('action'),
+            "signal_type": signal.get('signal_type'),  # ENTRY or EXIT (for execution service)
             "order_type": signal.get('order_type'),
             "price": signal.get('price'),
             "quantity": final_quantity_rounded,

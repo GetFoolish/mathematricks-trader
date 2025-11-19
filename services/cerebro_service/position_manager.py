@@ -22,24 +22,27 @@ class PositionManager:
     - Update positions on order fills
     """
 
-    def __init__(self, mongo_client: MongoClient):
+    def __init__(self, mongo_client: MongoClient, default_account_id: str = "Mock_Paper"):
         """
         Initialize PositionManager.
 
         Args:
             mongo_client: MongoDB client instance
+            default_account_id: Default account ID to use for position queries
         """
         self.db = mongo_client['mathematricks_trading']
-        self.positions = self.db['open_positions']
+        self.trading_accounts = self.db['trading_accounts']
         self.orders = self.db['trading_orders']
+        self.default_account_id = default_account_id
 
-        # Create indexes for efficient queries
-        self.positions.create_index([("strategy_id", 1), ("instrument", 1), ("direction", 1)])
-        self.positions.create_index([("status", 1)])
+        # Create indexes for efficient queries on trading_accounts
+        self.trading_accounts.create_index([("account_id", 1)])
+        self.trading_accounts.create_index([("open_positions.strategy_id", 1)])
+        self.trading_accounts.create_index([("open_positions.instrument", 1)])
 
-    def get_open_position(self, strategy_id: str, instrument: str, direction: str, retry_count: int = 3, retry_delay: float = 0.5) -> Optional[Dict[str, Any]]:
+    def get_open_position(self, strategy_id: str, instrument: str, direction: str, retry_count: int = 3, retry_delay: float = 0.5, account_id: str = None) -> Optional[Dict[str, Any]]:
         """
-        Get open position for strategy + instrument + direction.
+        Get open position for strategy + instrument + direction from trading_accounts collection.
         Includes retry logic to handle race conditions where position is being created.
 
         Args:
@@ -48,22 +51,37 @@ class PositionManager:
             direction: "LONG" or "SHORT"
             retry_count: Number of retries (default: 3)
             retry_delay: Delay between retries in seconds (default: 0.5)
+            account_id: Account ID (defaults to self.default_account_id)
 
         Returns:
             Position document or None if no position exists
         """
+        if account_id is None:
+            account_id = self.default_account_id
+
         for attempt in range(retry_count):
-            position = self.positions.find_one({
-                "strategy_id": strategy_id,
-                "instrument": instrument,
-                "direction": direction,
-                "status": "OPEN"
+            # Query trading_accounts collection for open position in open_positions array
+            account_doc = self.trading_accounts.find_one({
+                "account_id": account_id,
+                "open_positions": {
+                    "$elemMatch": {
+                        "strategy_id": strategy_id,
+                        "instrument": instrument,
+                        "status": "OPEN"
+                    }
+                }
             })
 
-            if position:
-                if attempt > 0:
-                    logger.info(f"✅ Found position for {strategy_id}/{instrument} on retry attempt {attempt + 1}")
-                return position
+            if account_doc:
+                # Find the matching position in the array
+                open_positions = account_doc.get('open_positions', [])
+                for pos in open_positions:
+                    if (pos.get('strategy_id') == strategy_id and
+                        pos.get('instrument') == instrument and
+                        pos.get('status') == 'OPEN'):
+                        if attempt > 0:
+                            logger.info(f"✅ Found position for {strategy_id}/{instrument} on retry attempt {attempt + 1}")
+                        return pos
 
             # If not found and not last attempt, wait and retry
             if attempt < retry_count - 1:
@@ -73,39 +91,58 @@ class PositionManager:
         # Not found after all retries
         return None
 
-    def get_positions_by_strategy(self, strategy_id: str) -> List[Dict[str, Any]]:
+    def get_positions_by_strategy(self, strategy_id: str, account_id: str = None) -> List[Dict[str, Any]]:
         """
-        Get all open positions for a strategy.
+        Get all open positions for a strategy from trading_accounts collection.
 
         Args:
             strategy_id: Strategy identifier
+            account_id: Account ID (defaults to self.default_account_id)
 
         Returns:
             List of position documents
         """
-        return list(self.positions.find({
-            "strategy_id": strategy_id,
-            "status": "OPEN"
-        }))
+        if account_id is None:
+            account_id = self.default_account_id
 
-    def get_deployed_capital(self, strategy_id: str) -> Dict[str, Any]:
+        # Query all accounts if account_id is "ALL", otherwise query specific account
+        query = {} if account_id == "ALL" else {"account_id": account_id}
+
+        all_positions = []
+        for account_doc in self.trading_accounts.find(query):
+            open_positions = account_doc.get('open_positions', [])
+            for pos in open_positions:
+                if pos.get('strategy_id') == strategy_id and pos.get('status') == 'OPEN':
+                    all_positions.append(pos)
+
+        return all_positions
+
+    def get_deployed_capital(self, strategy_id: str, account_id: str = None) -> Dict[str, Any]:
         """
         Calculate deployed capital from OPEN positions (not pending orders).
 
         Args:
             strategy_id: Strategy identifier
+            account_id: Account ID (defaults to self.default_account_id)
 
         Returns:
             Dict with:
                 - deployed_capital: Total cost basis of open positions
-                - deployed_margin: Total margin used
+                - deployed_margin: Total margin used (estimated)
                 - open_positions: List of position documents
                 - position_count: Number of open positions
         """
-        positions = self.get_positions_by_strategy(strategy_id)
+        positions = self.get_positions_by_strategy(strategy_id, account_id)
 
-        total_capital = sum(p.get('total_cost_basis', 0) for p in positions)
-        total_margin = sum(p.get('margin_used', 0) for p in positions)
+        # Calculate total capital deployed (quantity * avg_entry_price)
+        total_capital = sum(
+            p.get('quantity', 0) * p.get('avg_entry_price', 0)
+            for p in positions
+        )
+
+        # Estimate margin (for stocks, typically 25% margin requirement)
+        # TODO: Get actual margin from broker or use margin calculator
+        total_margin = total_capital * 0.25
 
         return {
             'deployed_capital': total_capital,
@@ -208,169 +245,3 @@ class PositionManager:
             'reasoning': reasoning
         }
 
-    def create_or_update_position(self, order_confirmation: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Create or update position when order fills.
-
-        Logic:
-        - If no position exists: create new position
-        - If position exists same direction: scale in (add to position)
-        - If position exists opposite direction: scale out/close opposite position
-
-        Args:
-            order_confirmation: Order fill details from execution service
-
-        Returns:
-            Dict with:
-                - action: "created", "scaled_in", "scaled_out", "closed"
-                - position: Updated position document
-        """
-        strategy_id = order_confirmation.get('strategy_id')
-        instrument = order_confirmation.get('instrument')
-        direction = order_confirmation.get('direction')
-        filled_qty = order_confirmation.get('filled_quantity', 0)
-        fill_price = order_confirmation.get('fill_price', 0)
-        order_id = order_confirmation.get('order_id')
-        margin_used = order_confirmation.get('margin_used', 0)
-
-        # Get existing position (same direction)
-        existing_position = self.get_open_position(strategy_id, instrument, direction)
-
-        if existing_position:
-            # SCALE IN: Add to existing position
-            old_qty = existing_position['quantity']
-            old_cost_basis = existing_position['total_cost_basis']
-            old_avg_price = existing_position['avg_entry_price']
-
-            new_qty = old_qty + filled_qty
-            new_cost_basis = old_cost_basis + (filled_qty * fill_price)
-            new_avg_price = new_cost_basis / new_qty if new_qty > 0 else fill_price
-
-            # Update position
-            self.positions.update_one(
-                {"_id": existing_position['_id']},
-                {
-                    "$set": {
-                        "quantity": new_qty,
-                        "avg_entry_price": new_avg_price,
-                        "total_cost_basis": new_cost_basis,
-                        "margin_used": existing_position.get('margin_used', 0) + margin_used,
-                        "updated_at": datetime.utcnow()
-                    },
-                    "$push": {
-                        "entry_order_ids": order_id
-                    }
-                }
-            )
-
-            logger.info(f"✅ SCALE IN: {strategy_id} {instrument} {direction} {old_qty}→{new_qty} shares @ avg ${new_avg_price:.2f}")
-
-            return {
-                "action": "scaled_in",
-                "position": self.get_open_position(strategy_id, instrument, direction)
-            }
-
-        else:
-            # Check for opposite direction position (scale out scenario)
-            opposite_dir = "SHORT" if direction == "LONG" else "LONG"
-            opposite_position = self.get_open_position(strategy_id, instrument, opposite_dir)
-
-            if opposite_position:
-                # SCALE OUT or CLOSE opposite position
-                opp_qty = opposite_position['quantity']
-
-                if filled_qty >= opp_qty:
-                    # Full close of opposite position
-                    self.positions.update_one(
-                        {"_id": opposite_position['_id']},
-                        {
-                            "$set": {
-                                "status": "CLOSED",
-                                "closed_at": datetime.utcnow(),
-                                "quantity": 0
-                            },
-                            "$push": {
-                                "exit_order_ids": order_id
-                            }
-                        }
-                    )
-
-                    logger.info(f"✅ CLOSED: {strategy_id} {instrument} {opposite_dir} position of {opp_qty} shares")
-
-                    # If filled_qty > opp_qty, create new position in opposite direction
-                    remaining_qty = filled_qty - opp_qty
-                    if remaining_qty > 0:
-                        logger.info(f"✅ FLIP: Creating new {direction} position with {remaining_qty} shares")
-                        return self._create_new_position(
-                            strategy_id, instrument, direction, remaining_qty, fill_price, order_id, margin_used
-                        )
-
-                    return {
-                        "action": "closed",
-                        "position": opposite_position
-                    }
-                else:
-                    # Partial close (scale out)
-                    new_qty = opp_qty - filled_qty
-                    new_cost_basis = opposite_position['total_cost_basis'] * (new_qty / opp_qty)
-
-                    self.positions.update_one(
-                        {"_id": opposite_position['_id']},
-                        {
-                            "$set": {
-                                "quantity": new_qty,
-                                "total_cost_basis": new_cost_basis,
-                                "updated_at": datetime.utcnow()
-                            },
-                            "$push": {
-                                "exit_order_ids": order_id
-                            }
-                        }
-                    )
-
-                    logger.info(f"✅ SCALE OUT: {strategy_id} {instrument} {opposite_dir} {opp_qty}→{new_qty} shares")
-
-                    return {
-                        "action": "scaled_out",
-                        "position": self.get_open_position(strategy_id, instrument, opposite_dir)
-                    }
-
-            else:
-                # NEW ENTRY: No existing position
-                return self._create_new_position(
-                    strategy_id, instrument, direction, filled_qty, fill_price, order_id, margin_used
-                )
-
-    def _create_new_position(self, strategy_id, instrument, direction, quantity, price, order_id, margin_used):
-        """Helper to create a new position"""
-        position_id = f"{strategy_id}_{instrument}_{direction}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-
-        new_position = {
-            "position_id": position_id,
-            "strategy_id": strategy_id,
-            "account": "DU1234567",  # TODO: Get from order
-            "instrument": instrument,
-            "direction": direction,
-            "quantity": quantity,
-            "avg_entry_price": price,
-            "total_cost_basis": quantity * price,
-            "margin_used": margin_used,
-            "status": "OPEN",
-            "opened_at": datetime.utcnow(),
-            "closed_at": None,
-            "entry_order_ids": [order_id],
-            "exit_order_ids": [],
-            "pnl_realized": 0,
-            "pnl_unrealized": 0,
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
-        }
-
-        self.positions.insert_one(new_position)
-
-        logger.info(f"✅ NEW ENTRY: {strategy_id} {instrument} {direction} {quantity} shares @ ${price:.2f}")
-
-        return {
-            "action": "created",
-            "position": new_position
-        }

@@ -109,7 +109,7 @@ if use_tls:
 else:
     mongo_client = MongoClient(mongo_uri)  # No TLS for localhost
 db = mongo_client['mathematricks_trading']
-execution_confirmations_collection = db['execution_confirmations']
+# execution_confirmations collection removed - execution data stored in signal_store.execution field
 trading_orders_collection = db['trading_orders']
 trading_accounts_collection = db['trading_accounts']  # For position tracking
 signal_store_collection = db['signal_store']  # For updating execution data
@@ -833,11 +833,8 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                     "broker_response": result
                 }
 
-                # Store execution
-                execution_confirmations_collection.insert_one({
-                    **execution,
-                    "created_at": datetime.utcnow()
-                })
+                # Note: Execution data is stored in signal_store.execution field
+                # (redundant execution_confirmations collection removed)
 
                 # Publish execution confirmation
                 logger.debug(f"Publishing execution confirmation for {order_id}")
