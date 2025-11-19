@@ -103,6 +103,9 @@ protect_branch "main"
 # Protect staging branch
 protect_branch "staging"
 
+# Protect dev-test branch
+protect_branch "dev-test"
+
 echo ""
 echo "Branch protection setup complete!"
 echo ""
