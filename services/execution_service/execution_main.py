@@ -443,8 +443,9 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
 
         logger.debug(f"Updating signal_store for mathematricks_signal_id: {mathematricks_signal_id}")
 
-        action = order_data.get('action', 'ENTRY').upper()
-        is_exit = action in ['EXIT', 'SELL']
+        # Use signal_type to determine ENTRY vs EXIT (not action, since action can be BUY/SELL for both)
+        signal_type = order_data.get('signal_type', 'ENTRY').upper()
+        is_exit = signal_type == 'EXIT'
 
         # Prepare execution update
         execution_update = {

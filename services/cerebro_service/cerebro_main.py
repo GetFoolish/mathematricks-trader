@@ -1261,6 +1261,28 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     constructor = initialize_portfolio_constructor()
     decision_obj: SignalDecision = constructor.evaluate_signal(signal_obj, context)
 
+    # Step 4.0: Extract legs for multi-leg processing
+    # If 'legs' is provided, use all legs; otherwise create single-leg array from primary signal
+    legs = signal.get('legs')
+    if legs and len(legs) > 1:
+        is_multi_leg = True
+        logger.info(f"🔀 Multi-leg signal detected: {len(legs)} legs")
+        for i, leg in enumerate(legs):
+            logger.info(f"   Leg {i+1}: {leg.get('instrument')} {leg.get('action')} {leg.get('direction')}")
+    else:
+        is_multi_leg = False
+        # Create single-leg array from primary signal fields
+        legs = [{
+            'instrument': signal.get('instrument'),
+            'instrument_type': signal.get('instrument_type', 'STOCK'),
+            'direction': signal.get('direction'),
+            'action': signal.get('action'),
+            'order_type': signal.get('order_type'),
+            'price': signal.get('price'),
+            'quantity': signal.get('quantity'),
+            'environment': signal.get('environment', 'staging')
+        }]
+
     # Step 4a: Determine Signal Type (ENTRY/EXIT/SCALE)
     signal_type_info = position_manager.determine_signal_type(signal)
 
@@ -1311,26 +1333,93 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
         if entry_signal and entry_signal.get('execution') and entry_signal['execution'].get('quantity_filled'):
             # Found entry signal with execution data - use exact quantity
-            exact_quantity = entry_signal['execution']['quantity_filled']
+            entry_quantity_filled = entry_signal['execution']['quantity_filled']
 
             logger.info(f"✅ Found entry signal: {entry_signal['signal_id']}")
-            logger.info(f"✅ Using exact entry quantity: {exact_quantity}")
+            logger.info(f"✅ Entry quantity filled: {entry_quantity_filled}")
+
+            # For multi-leg EXIT signals, query entry's leg_results for exact quantities
+            exit_leg_results = []
+            if is_multi_leg and legs:
+                logger.info(f"🔀 Multi-leg EXIT signal: Processing {len(legs)} legs")
+
+                # Get leg_results from entry signal's cerebro_decision
+                entry_leg_results = entry_signal.get('cerebro_decision', {}).get('risk_assessment', {}).get('metadata', {}).get('leg_results', [])
+
+                if entry_leg_results:
+                    logger.info(f"✅ Found entry leg_results with {len(entry_leg_results)} legs")
+                else:
+                    logger.warning(f"⚠️ Entry signal missing leg_results - will use EXIT signal quantities")
+
+                for leg_index, leg in enumerate(legs):
+                    instrument = leg.get('instrument')
+                    leg_instrument_type = leg.get('instrument_type', 'STOCK')
+
+                    # Find matching entry leg by instrument to get the actual filled quantity
+                    if entry_leg_results:
+                        entry_leg = next((el for el in entry_leg_results if el.get('instrument') == instrument), None)
+                        if entry_leg:
+                            leg_quantity = entry_leg.get('quantity', 0)
+                            logger.info(f"   Leg {leg_index+1}: {instrument} - using entry qty={leg_quantity}")
+                        else:
+                            # Instrument not found in entry - use EXIT signal quantity as fallback
+                            leg_quantity = leg.get('quantity', 0)
+                            logger.warning(f"   Leg {leg_index+1}: {instrument} - no entry match, using EXIT qty={leg_quantity}")
+                    else:
+                        # No entry leg_results - use EXIT signal quantity
+                        leg_quantity = leg.get('quantity', 0)
+                        logger.info(f"   Leg {leg_index+1}: {instrument} - using EXIT qty={leg_quantity}")
+
+                    # Normalize to broker precision
+                    precision = precision_service.get_precision(
+                        broker=broker_adapter,
+                        broker_id=account_name,
+                        symbol=instrument,
+                        instrument_type=leg_instrument_type
+                    )
+                    normalized_quantity = precision_service.normalize_quantity(leg_quantity, precision)
+
+                    exit_leg_results.append({
+                        'leg_index': leg_index,
+                        'instrument': instrument,
+                        'instrument_type': leg_instrument_type,
+                        'direction': leg.get('direction'),
+                        'action': leg.get('action'),
+                        'order_type': leg.get('order_type', 'MARKET'),
+                        'quantity': normalized_quantity,
+                        'price_used': leg.get('price', 0)
+                    })
+                    logger.info(f"   EXIT Leg {leg_index+1}: {instrument} {leg.get('action')} qty={normalized_quantity}")
+
+                # Use primary leg quantity for decision (backward compatibility)
+                exact_quantity = exit_leg_results[0]['quantity'] if exit_leg_results else entry_quantity_filled
+            else:
+                # Single-leg EXIT - use the entry's filled quantity
+                exact_quantity = entry_quantity_filled
 
             # Create new decision with exact quantity (no margin calculator)
+            exit_metadata = {
+                **decision_obj.metadata,
+                'signal_type_info': signal_type_info,
+                'entry_signal_id': str(entry_signal['_id']),
+                'entry_signal_ref': entry_signal['signal_id'],
+                'entry_quantity': entry_quantity_filled,
+                'exit_type': 'FULL_EXIT' if signal_type == 'EXIT' else 'PARTIAL_EXIT',
+                'is_multi_leg': is_multi_leg,
+                'leg_count': len(legs) if is_multi_leg else 1
+            }
+
+            # Add leg_results for multi-leg EXIT
+            if exit_leg_results:
+                exit_metadata['leg_results'] = exit_leg_results
+
             decision_obj = SignalDecision(
                 action="APPROVE",
                 quantity=exact_quantity,
-                reason=f"EXIT: Closing position from entry signal {entry_signal['signal_id']}",
+                reason=f"EXIT: Closing position from entry signal {entry_signal['signal_id']}" + (f" ({len(legs)} legs)" if is_multi_leg else ""),
                 allocated_capital=0,
                 margin_required=0,
-                metadata={
-                    **decision_obj.metadata,
-                    'signal_type_info': signal_type_info,
-                    'entry_signal_id': str(entry_signal['_id']),
-                    'entry_signal_ref': entry_signal['signal_id'],
-                    'entry_quantity': exact_quantity,
-                    'exit_type': 'FULL_EXIT' if signal_type == 'EXIT' else 'PARTIAL_EXIT'
-                }
+                metadata=exit_metadata
             )
 
             # Skip margin calculator - jump to decision logging
@@ -1398,64 +1487,121 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 }
             )
         else:
-            # NEW MARGIN CALCULATION SYSTEM
-            # Use MarginCalculatorFactory to get real-time pricing and margin requirements
+            # MULTI-LEG MARGIN CALCULATION SYSTEM
+            # Calculate margin for each leg, sum total, accept/reject based on total
+            # Scale all legs uniformly if resize needed (maintains hedge ratio)
 
             try:
-                # Step 1: Validate instrument_type exists
-                if 'instrument_type' not in signal:
-                    raise ValueError(
-                        "Signal missing required field 'instrument_type'. "
-                        "Valid values: STOCK, ETF, FOREX, OPTION, FUTURE, CRYPTO"
+                # Step 1: Calculate margin for each leg
+                leg_results = []
+                total_margin_required = 0.0
+                total_notional = 0.0
+
+                for leg_index, leg in enumerate(legs):
+                    # Validate instrument_type exists for this leg
+                    leg_instrument_type = leg.get('instrument_type', 'STOCK')
+                    if not leg_instrument_type:
+                        raise ValueError(
+                            f"Leg {leg_index+1} missing required field 'instrument_type'. "
+                            "Valid values: STOCK, ETF, FOREX, OPTION, FUTURE, CRYPTO"
+                        )
+
+                    # Create signal dict for this leg (merge with parent signal metadata)
+                    leg_signal = {
+                        **signal,  # Inherit strategy_id, signal_id, etc.
+                        'instrument': leg.get('instrument'),
+                        'instrument_type': leg_instrument_type,
+                        'direction': leg.get('direction'),
+                        'action': leg.get('action'),
+                        'order_type': leg.get('order_type', 'MARKET'),
+                        'price': leg.get('price', 0),
+                        'quantity': leg.get('quantity', 0),
+                        'signal_price': leg.get('price', 0)
+                    }
+
+                    # Create appropriate margin calculator for this leg
+                    calculator = MarginCalculatorFactory.create_calculator(leg_signal, broker_adapter)
+
+                    # Calculate position size and margin for this leg
+                    # For multi-leg, we allocate capital proportionally based on notional value
+                    # First pass: calculate with full position_capital to get proportions
+                    leg_result = calculator.calculate_position_size(
+                        signal=leg_signal,
+                        account_equity=account_state.get('total_equity', 0),
+                        position_capital=position_capital / len(legs)  # Split capital evenly initially
                     )
 
-                # Step 2: Create appropriate margin calculator
-                calculator = MarginCalculatorFactory.create_calculator(signal, broker_adapter)
+                    # Normalize quantity to broker precision
+                    precision = precision_service.get_precision(
+                        broker=broker_adapter,
+                        broker_id=account_name,
+                        symbol=leg.get('instrument'),
+                        instrument_type=leg_instrument_type
+                    )
+                    normalized_quantity = precision_service.normalize_quantity(leg_result['quantity'], precision)
 
-                # Step 3: Prepare signal with price fallback for broker adapter
-                signal_with_price = {
-                    **signal,
-                    'signal_price': signal.get('price', 0)  # Pass price to adapter
-                }
+                    leg_results.append({
+                        'leg_index': leg_index,
+                        'instrument': leg.get('instrument'),
+                        'instrument_type': leg_instrument_type,
+                        'direction': leg.get('direction'),
+                        'action': leg.get('action'),
+                        'order_type': leg.get('order_type', 'MARKET'),
+                        'quantity_raw': leg_result['quantity'],
+                        'quantity': normalized_quantity,
+                        'precision': precision,
+                        'price_used': leg_result['price_used'],
+                        'initial_margin': leg_result['initial_margin'],
+                        'margin_pct': leg_result['margin_pct'],
+                        'notional_value': leg_result['notional_value'],
+                        'calculation_method': leg_result['calculation_method']
+                    })
 
-                # Step 4: Calculate position size and margin
-                # This fetches price from broker (or uses signal price) and calculates margin
-                position_result = calculator.calculate_position_size(
-                    signal=signal_with_price,
-                    account_equity=account_state.get('total_equity', 0),
-                    position_capital=position_capital
-                )
+                    total_margin_required += leg_result['initial_margin']
+                    total_notional += leg_result['notional_value']
 
-                # Extract results
-                adjusted_shares = position_result['quantity']
-                price_used = position_result['price_used']
-                ibkr_margin_info = {
-                    'estimated_margin': position_result['initial_margin'],
-                    'margin_pct': position_result['margin_pct'],
-                    'calculation_method': position_result['calculation_method'],
-                    'notional_value': position_result['notional_value']
-                }
+                    logger.info(f"✅ Leg {leg_index+1}/{len(legs)}: {leg.get('instrument')} | Qty={normalized_quantity} | Price=${leg_result['price_used']:.2f} | Margin=${leg_result['initial_margin']:,.2f}")
 
-                # Normalize quantity to broker precision
-                # This is the single point where rounding happens - ensures consistency
-                instrument_type = signal.get('instrument_type', 'STOCK')
-                precision = precision_service.get_precision(
-                    broker=broker_adapter,
-                    broker_id=account_name,
-                    symbol=signal.get('instrument'),
-                    instrument_type=instrument_type
-                )
-                adjusted_shares_raw = adjusted_shares
-                adjusted_shares = precision_service.normalize_quantity(adjusted_shares, precision)
-                logger.info(f"📐 Quantity normalized: {adjusted_shares_raw:.4f} → {adjusted_shares} (precision={precision})")
+                # Step 2: Check if total margin exceeds available capital and scale if needed
+                scale_factor = 1.0
+                if total_margin_required > position_capital:
+                    scale_factor = position_capital / total_margin_required
+                    logger.info(f"⚠️ Total margin ${total_margin_required:,.2f} > position capital ${position_capital:,.2f}")
+                    logger.info(f"📉 Scaling all legs by factor {scale_factor:.4f} to maintain hedge ratio")
+
+                    # Apply scale factor to all legs uniformly
+                    for leg_result in leg_results:
+                        scaled_quantity = leg_result['quantity_raw'] * scale_factor
+                        leg_result['quantity'] = precision_service.normalize_quantity(
+                            scaled_quantity,
+                            leg_result['precision']
+                        )
+                        leg_result['initial_margin'] *= scale_factor
+                        leg_result['notional_value'] *= scale_factor
+                        logger.info(f"   Leg {leg_result['leg_index']+1}: {leg_result['instrument']} scaled to {leg_result['quantity']}")
+
+                    # Recalculate totals after scaling
+                    total_margin_required = sum(lr['initial_margin'] for lr in leg_results)
+                    total_notional = sum(lr['notional_value'] for lr in leg_results)
+
+                # Log multi-leg summary
+                if is_multi_leg:
+                    logger.info(f"🔀 Multi-leg summary: {len(legs)} legs | Total Margin: ${total_margin_required:,.2f} | Total Notional: ${total_notional:,.2f}")
 
                 # Calculate backtest margin for comparison
                 backtest_margin = position_capital * median_margin_pct
 
-                logger.info(f"✅ Margin calculation successful for {signal.get('instrument')}")
-                logger.info(f"   Price used: ${price_used:.2f}")
-                logger.info(f"   Quantity: {adjusted_shares}")
-                logger.info(f"   Margin required: ${ibkr_margin_info['estimated_margin']:,.2f}")
+                # For decision object, use primary leg quantity (for backward compatibility)
+                # Actual orders will use leg_results
+                primary_leg_result = leg_results[0]
+                adjusted_shares = primary_leg_result['quantity']
+                price_used = primary_leg_result['price_used']
+                ibkr_margin_info = {
+                    'estimated_margin': total_margin_required,
+                    'margin_pct': (total_margin_required / total_notional * 100) if total_notional > 0 else 0,
+                    'calculation_method': 'multi_leg' if is_multi_leg else primary_leg_result['calculation_method'],
+                    'notional_value': total_notional
+                }
 
             except Exception as e:
                 # Margin calculation failed - REJECT signal
@@ -1504,12 +1650,16 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             decision_obj = SignalDecision(
                 action=decision_obj.action,
                 quantity=adjusted_shares,
-                reason=f"{decision_obj.reason} | {signal_type_info['signal_type']} | Pos-sizing: {estimated_avg_positions:.1f} avg pos",
+                reason=f"{decision_obj.reason} | {signal_type_info['signal_type']} | Pos-sizing: {estimated_avg_positions:.1f} avg pos" + (f" | Multi-leg: {len(legs)}" if is_multi_leg else ""),
                 allocated_capital=position_capital,  # Adjusted to this position's allocation
-                margin_required=ibkr_margin_info['estimated_margin'],  # Use IBKR estimate as primary
+                margin_required=ibkr_margin_info['estimated_margin'],  # Use total margin for all legs
                 metadata={
                     **decision_obj.metadata,
                     'signal_type_info': signal_type_info,
+                    'is_multi_leg': is_multi_leg,
+                    'leg_count': len(legs),
+                    'leg_results': leg_results,  # Store for order creation
+                    'scale_factor': scale_factor,
                     'position_sizing': {
                         'total_strategy_allocation': decision_obj.allocated_capital,
                         'estimated_avg_positions': estimated_avg_positions,
@@ -1530,14 +1680,14 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         'backtest_margin': backtest_margin,
                         'backtest_margin_pct': median_margin_pct * 100,
                         'margin_pct_used': median_margin_pct * 100,  # Keep for backward compatibility
-                        # IBKR estimated margin (realistic)
+                        # Total margin for all legs
                         'ibkr_estimated_margin': ibkr_margin_info['estimated_margin'],
                         'ibkr_margin_pct': ibkr_margin_info['margin_pct'],
                         'ibkr_margin_method': ibkr_margin_info['calculation_method'],
                         'notional_value': ibkr_margin_info['notional_value'],
-                        'shares_calculation': f"${position_capital:,.2f} ÷ ${price_used:,.2f} = {adjusted_shares:.2f} shares",
-                        'price_source': 'broker_adapter',  # Track where price came from
-                        'price_used': price_used  # Store actual price used
+                        'shares_calculation': f"${position_capital:,.2f} total across {len(legs)} legs",
+                        'price_source': 'broker_adapter',
+                        'price_used': price_used
                     }
                 }
             )
@@ -1588,71 +1738,108 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     # Unified signal processing log for decision
     logger.info(f"SIGNAL: {signal_id} | DECISION | Action={decision_obj.action} | OrigQty={signal.get('quantity', 0)} | FinalQty={decision_obj.quantity} | Reason={decision_obj.reason}")
 
-    # Step 6: If approved or resized, create trading order
+    # Step 6: If approved or resized, create trading orders for each leg
     if decision_obj.action in ['APPROVE', 'RESIZE']:
-        # Convert to int for order (quantity was already normalized by precision_service)
-        final_quantity_rounded = int(decision_obj.quantity)
+        # Get leg_results from metadata (for ENTRY signals with multi-leg calculation)
+        # For EXIT signals or single-leg, fall back to creating from primary signal
+        leg_results = decision_obj.metadata.get('leg_results', [])
 
-        if final_quantity_rounded <= 0:
-            logger.warning(f"Rounded quantity is 0, rejecting signal")
-            return
+        if not leg_results:
+            # No leg_results (EXIT signal or legacy) - create single order from primary signal
+            final_quantity_rounded = int(decision_obj.quantity)
+            if final_quantity_rounded <= 0:
+                logger.warning(f"Rounded quantity is 0, rejecting signal")
+                return
 
-        order_id = f"{signal_id}_ORD"
-        trading_order = {
-            "order_id": order_id,
-            "signal_id": signal_id,
-            "mathematricks_signal_id": signal_store_id,  # For execution_service to update signal_store
-            "strategy_id": signal.get('strategy_id'),
-            "account": account_name,
-            "timestamp": datetime.utcnow(),
-            "instrument": signal.get('instrument'),
-            "direction": signal.get('direction'),
-            "action": signal.get('action'),
-            "signal_type": signal.get('signal_type'),  # ENTRY or EXIT (for execution service)
-            "order_type": signal.get('order_type'),
-            "price": signal.get('price'),
-            "quantity": final_quantity_rounded,
-            "stop_loss": signal.get('stop_loss'),
-            "take_profit": signal.get('take_profit'),
-            "expiry": signal.get('expiry'),
-            # Multi-asset support: pass through instrument_type and related fields
-            "instrument_type": signal.get('instrument_type'),  # STOCK, OPTION, FOREX, FUTURE
-            "underlying": signal.get('underlying'),  # For options
-            "legs": signal.get('legs'),  # For multi-leg options
-            "exchange": signal.get('exchange'),  # For futures
-            "cerebro_decision": {
-                "allocated_capital": decision_obj.allocated_capital,
-                "margin_required": decision_obj.margin_required,
-                "position_size_logic": "PortfolioConstructor:MaxCAGR",
-                "risk_metrics": decision_obj.metadata
-            },
-            "environment": signal.get('environment', 'staging'),
-            "status": "PENDING",
-            "created_at": datetime.utcnow()
-        }
+            leg_results = [{
+                'leg_index': 0,
+                'instrument': signal.get('instrument'),
+                'instrument_type': signal.get('instrument_type', 'STOCK'),
+                'direction': signal.get('direction'),
+                'action': signal.get('action'),
+                'order_type': signal.get('order_type', 'MARKET'),
+                'quantity': final_quantity_rounded,
+                'price_used': signal.get('price', 0)
+            }]
 
-        # For EXIT signals, add entry_signal_id reference
-        if decision_obj.metadata.get('entry_signal_id'):
-            trading_order['entry_signal_id'] = decision_obj.metadata['entry_signal_id']
-            trading_order['entry_signal_ref'] = decision_obj.metadata.get('entry_signal_ref')
+        # Create orders for each leg
+        orders_created = []
+        for leg_result in leg_results:
+            leg_index = leg_result.get('leg_index', 0)
+            leg_quantity = int(leg_result.get('quantity', 0))
 
-        # Save to MongoDB
-        trading_orders_collection.insert_one(trading_order)
-        logger.info(f"✅ Trading order created: {order_id} for {final_quantity_rounded} shares")
+            if leg_quantity <= 0:
+                logger.warning(f"Leg {leg_index+1} quantity is 0, skipping")
+                continue
 
-        # Publish to Pub/Sub
-        try:
-            message_data = json.dumps(trading_order, default=str).encode('utf-8')
-            future = publisher.publish(trading_orders_topic, message_data)
-            future.result(timeout=5)
-            logger.info(f"✅ Order published to Pub/Sub topic")
+            # Generate unique order ID for each leg
+            if len(leg_results) > 1:
+                order_id = f"{signal_id}_LEG{leg_index}_ORD"
+            else:
+                order_id = f"{signal_id}_ORD"
 
-            # Unified signal processing log for order creation
-            logger.info(f"SIGNAL: {signal_id} | ORDER_CREATED | OrderID={order_id} | Quantity={final_quantity_rounded} | Instrument={signal.get('instrument')} | Direction={signal.get('direction')}")
-            logger.info("-" * 50)
-        except Exception as e:
-            logger.error(f"Failed to publish order to Pub/Sub: {str(e)}")
-            logger.info("-" * 50)
+            trading_order = {
+                "order_id": order_id,
+                "signal_id": signal_id,
+                "mathematricks_signal_id": signal_store_id,  # For execution_service to update signal_store
+                "strategy_id": signal.get('strategy_id'),
+                "account": account_name,
+                "timestamp": datetime.utcnow(),
+                "instrument": leg_result.get('instrument'),
+                "direction": leg_result.get('direction'),
+                "action": leg_result.get('action'),
+                "signal_type": signal.get('signal_type'),  # ENTRY or EXIT (for execution service)
+                "order_type": leg_result.get('order_type', 'MARKET'),
+                "price": leg_result.get('price_used', 0),
+                "quantity": leg_quantity,
+                "stop_loss": signal.get('stop_loss'),
+                "take_profit": signal.get('take_profit'),
+                "expiry": signal.get('expiry'),
+                # Multi-asset support: pass through instrument_type and related fields
+                "instrument_type": leg_result.get('instrument_type', 'STOCK'),
+                "underlying": signal.get('underlying'),  # For options
+                "exchange": signal.get('exchange'),  # For futures
+                # Multi-leg metadata
+                "leg_index": leg_index,
+                "total_legs": len(leg_results),
+                "is_multi_leg": len(leg_results) > 1,
+                "cerebro_decision": {
+                    "allocated_capital": decision_obj.allocated_capital / len(leg_results),  # Per-leg allocation
+                    "margin_required": leg_result.get('initial_margin', decision_obj.margin_required / len(leg_results)),
+                    "position_size_logic": "PortfolioConstructor:MaxCAGR",
+                    "risk_metrics": {k: v for k, v in decision_obj.metadata.items() if k != 'leg_results'}  # Exclude leg_results to reduce size
+                },
+                "environment": signal.get('environment', 'staging'),
+                "status": "PENDING",
+                "created_at": datetime.utcnow()
+            }
+
+            # For EXIT signals, add entry_signal_id reference
+            if decision_obj.metadata.get('entry_signal_id'):
+                trading_order['entry_signal_id'] = decision_obj.metadata['entry_signal_id']
+                trading_order['entry_signal_ref'] = decision_obj.metadata.get('entry_signal_ref')
+
+            # Save to MongoDB
+            trading_orders_collection.insert_one(trading_order)
+            orders_created.append(order_id)
+            logger.info(f"✅ Trading order created: {order_id} for {leg_quantity} {leg_result.get('instrument')}")
+
+            # Publish to Pub/Sub
+            try:
+                message_data = json.dumps(trading_order, default=str).encode('utf-8')
+                future = publisher.publish(trading_orders_topic, message_data)
+                future.result(timeout=5)
+                logger.info(f"✅ Order published to Pub/Sub topic")
+
+                # Unified signal processing log for order creation
+                logger.info(f"SIGNAL: {signal_id} | ORDER_CREATED | OrderID={order_id} | Quantity={leg_quantity} | Instrument={leg_result.get('instrument')} | Direction={leg_result.get('direction')}")
+            except Exception as e:
+                logger.error(f"Failed to publish order to Pub/Sub: {str(e)}")
+
+        # Summary log for multi-leg
+        if len(orders_created) > 1:
+            logger.info(f"🔀 Multi-leg signal: Created {len(orders_created)} orders")
+        logger.info("-" * 50)
 
 
 # ============================================================================
