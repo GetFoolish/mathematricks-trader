@@ -427,3 +427,33 @@ class MockBroker(AbstractBroker):
         """
         # Simple mock price - could be enhanced to return realistic prices
         return 100.0
+
+    # ========================================================================
+    # QUANTITY PRECISION
+    # ========================================================================
+
+    def get_quantity_precision(self, symbol: str, instrument_type: str) -> int:
+        """
+        Get the number of decimal places allowed for quantity.
+
+        Mock broker uses predefined precision by instrument type.
+
+        Args:
+            symbol: Asset symbol (e.g., "AAPL", "EURUSD")
+            instrument_type: Type of instrument
+
+        Returns:
+            int: Number of decimal places (0 for integers)
+        """
+        precision_map = {
+            'STOCK': 0,      # Integer shares
+            'ETF': 0,        # Integer shares
+            'OPTION': 0,     # Integer contracts
+            'FUTURE': 0,     # Integer contracts
+            'FOREX': 0,      # Units (whole units for mock)
+            'CRYPTO': 8,     # Up to 8 decimal places for crypto
+        }
+
+        precision = precision_map.get(instrument_type.upper(), 0)
+        logger.debug(f"Mock Broker: Precision for {symbol} ({instrument_type}): {precision} decimals")
+        return precision

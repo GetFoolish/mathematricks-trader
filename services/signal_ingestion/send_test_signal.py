@@ -52,8 +52,9 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
 
     # Inject entry_signal_id if this is an EXIT signal and we have a previous ENTRY
     if signal_type == "exit" and previous_entry_id:
-        # Check if payload has $PREVIOUS marker
-        if payload.get("entry_signal_id") == "$PREVIOUS":
+        # Replace any variable reference (starting with $) with the resolved ID
+        entry_ref = payload.get("entry_signal_id", "")
+        if entry_ref.startswith("$"):
             payload["entry_signal_id"] = previous_entry_id
             print(f"✓ Injected entry_signal_id: {previous_entry_id[:12]}...")
 
@@ -321,7 +322,7 @@ See sample files in services/signal_ingestion/sample_signals/
         print("=" * 80)
 
         total_wait_time = 0
-        previous_entry_id = None
+        entry_id_registry = {}  # Maps variable names (e.g., "$ENTRY_1") to signal_store IDs
 
         for i, signal_payload in enumerate(payload, 1):
             # Validate signal
@@ -331,12 +332,32 @@ See sample files in services/signal_ingestion/sample_signals/
             signal_type = signal_payload.get("signal_type", "UNKNOWN").upper()
             print(f"\n{'🔵' if signal_type == 'ENTRY' else '🔴'} Sending signal {i}/{len(payload)} ({signal_type})...")
 
-            # Send signal (pass signal_type lowercase and previous_entry_id)
-            result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=previous_entry_id)
+            # For EXIT signals, resolve variable reference before sending
+            resolved_entry_id = None
+            if signal_type == "EXIT":
+                entry_ref = signal_payload.get("entry_signal_id", "$PREVIOUS")
+                if entry_ref and entry_ref.startswith("$"):
+                    if entry_ref in entry_id_registry:
+                        resolved_entry_id = entry_id_registry[entry_ref]
+                        print(f"✓ Resolved {entry_ref} → {resolved_entry_id[:12]}...")
+                    elif entry_ref != "$PREVIOUS":
+                        print(f"⚠️ WARNING: Variable {entry_ref} not found in registry")
 
-            # Capture ENTRY signal_store ID for next EXIT signal
+            # Send signal (pass signal_type lowercase and resolved_entry_id)
+            result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id)
+
+            # Capture ENTRY signal_store ID and register named variable
             if signal_type == "ENTRY" and result and result.get("signal_store_id"):
-                previous_entry_id = result["signal_store_id"]
+                entry_store_id = result["signal_store_id"]
+
+                # Register named variable if provided (e.g., "$ENTRY_1")
+                entry_name = signal_payload.get("entry_name")
+                if entry_name:
+                    entry_id_registry[entry_name] = entry_store_id
+                    print(f"✓ Registered {entry_name} → {entry_store_id[:12]}...")
+
+                # Always keep $PREVIOUS for backward compatibility
+                entry_id_registry["$PREVIOUS"] = entry_store_id
 
             # Wait if specified
             wait_seconds = signal_payload.get("wait", 0)

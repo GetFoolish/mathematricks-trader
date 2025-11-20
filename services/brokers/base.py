@@ -312,6 +312,27 @@ class AbstractBroker(ABC):
         """
         pass
 
+    # QUANTITY PRECISION
+
+    @abstractmethod
+    def get_quantity_precision(self, symbol: str, instrument_type: str) -> int:
+        """
+        Get the number of decimal places allowed for quantity.
+
+        Different brokers and asset types have different precision requirements:
+        - STOCK: Usually integers (0 decimals)
+        - FOREX: Varies by broker (IBKR uses whole units)
+        - CRYPTO: Up to 8 decimal places
+
+        Args:
+            symbol: Asset symbol (e.g., "AAPL", "EURUSD", "BTC")
+            instrument_type: Type of instrument ("STOCK", "FOREX", "CRYPTO", etc.)
+
+        Returns:
+            int: Number of decimal places allowed (0 for integers)
+        """
+        pass
+
     # UTILITY METHODS
 
     def get_broker_name(self) -> str:

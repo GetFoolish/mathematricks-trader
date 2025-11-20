@@ -291,3 +291,34 @@ class CerebroBrokerAdapter:
                 'margin_pct': 25.0,
                 'method': 'Conservative default (25%)'
             }
+
+    # ========================================================================
+    # QUANTITY PRECISION
+    # ========================================================================
+
+    def get_quantity_precision(self, symbol: str, instrument_type: str) -> int:
+        """
+        Get the number of decimal places allowed for quantity.
+
+        Current: Uses default precision map
+        TODO: Query real broker for actual precision
+
+        Args:
+            symbol: Asset symbol (e.g., "AAPL", "EURUSD")
+            instrument_type: Type of instrument
+
+        Returns:
+            int: Number of decimal places (0 for integers)
+        """
+        precision_map = {
+            'STOCK': 0,      # Integer shares
+            'ETF': 0,        # Integer shares
+            'OPTION': 0,     # Integer contracts
+            'FUTURE': 0,     # Integer contracts
+            'FOREX': 0,      # Units (IBKR uses whole units)
+            'CRYPTO': 8,     # Up to 8 decimal places for crypto
+        }
+
+        precision = precision_map.get(instrument_type.upper(), 0)
+        logger.debug(f"Precision for {symbol} ({instrument_type}): {precision} decimals")
+        return precision

@@ -840,3 +840,113 @@ class IBKRBroker(AbstractBroker):
             raise ValueError(f"Invalid instrument_type: {instrument_type}")
 
         return contracts
+
+    # ========================================================================
+    # QUANTITY PRECISION
+    # ========================================================================
+
+    def get_quantity_precision(self, symbol: str, instrument_type: str) -> int:
+        """
+        Get the number of decimal places allowed for quantity from IBKR.
+
+        Uses reqContractDetails to get the contract's minSize and sizeIncrement
+        to determine precision.
+
+        Args:
+            symbol: Asset symbol (e.g., "AAPL", "EURUSD")
+            instrument_type: Type of instrument
+
+        Returns:
+            int: Number of decimal places (0 for integers)
+        """
+        try:
+            if not self.is_connected():
+                logger.warning("Not connected to IBKR, using default precision")
+                return self._get_default_precision(instrument_type)
+
+            # Create contract for query
+            instrument_type_upper = instrument_type.upper()
+
+            if instrument_type_upper == "STOCK":
+                contract = Stock(symbol=symbol, exchange='SMART', currency='USD')
+            elif instrument_type_upper == "FOREX":
+                # For forex, symbol is like "EURUSD", need to split into pair
+                if len(symbol) == 6:
+                    base = symbol[:3]
+                    quote = symbol[3:]
+                    contract = Forex(pair=f"{base}{quote}")
+                else:
+                    contract = Forex(symbol=symbol)
+            elif instrument_type_upper == "FUTURE":
+                # For futures, we'd need expiry - use default for now
+                logger.debug(f"Futures precision query requires expiry, using default")
+                return 0
+            elif instrument_type_upper == "OPTION":
+                # Options are always integer contracts
+                return 0
+            elif instrument_type_upper == "CRYPTO":
+                # Crypto typically has high precision
+                return 8
+            else:
+                return self._get_default_precision(instrument_type)
+
+            # Qualify the contract first
+            qualified_contracts = self.ib.qualifyContracts(contract)
+            if not qualified_contracts:
+                logger.warning(f"Could not qualify contract for {symbol}, using default precision")
+                return self._get_default_precision(instrument_type)
+
+            qualified_contract = qualified_contracts[0]
+
+            # Get contract details
+            details_list = self.ib.reqContractDetails(qualified_contract)
+            if not details_list:
+                logger.warning(f"No contract details for {symbol}, using default precision")
+                return self._get_default_precision(instrument_type)
+
+            details = details_list[0]
+
+            # Determine precision from minSize/sizeIncrement
+            # For stocks, minSize is typically 1.0, sizeIncrement is 1.0 → precision 0
+            # For forex, minSize might be 1.0 but positions are in units → precision 0
+            # For crypto, could have fractional sizes
+
+            min_size = getattr(details, 'minSize', 1.0)
+            size_increment = getattr(details, 'sizeIncrement', 1.0)
+
+            # Calculate precision from size increment
+            # e.g., size_increment = 0.001 → precision = 3
+            if size_increment >= 1.0:
+                precision = 0
+            else:
+                # Count decimal places in size_increment
+                precision = len(str(size_increment).split('.')[-1].rstrip('0'))
+
+            logger.info(f"IBKR precision for {symbol} ({instrument_type}): {precision} decimals "
+                       f"(minSize={min_size}, sizeIncrement={size_increment})")
+
+            return precision
+
+        except Exception as e:
+            logger.warning(f"Error querying IBKR for precision: {e}")
+            return self._get_default_precision(instrument_type)
+
+    def _get_default_precision(self, instrument_type: str) -> int:
+        """
+        Get default precision when IBKR query fails.
+
+        Args:
+            instrument_type: Type of instrument
+
+        Returns:
+            Default number of decimal places
+        """
+        defaults = {
+            'STOCK': 0,
+            'ETF': 0,
+            'OPTION': 0,
+            'FUTURE': 0,
+            'FOREX': 0,  # IBKR uses whole units for forex
+            'CRYPTO': 8,
+        }
+        return defaults.get(instrument_type.upper(), 0)

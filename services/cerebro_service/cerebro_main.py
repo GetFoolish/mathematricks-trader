@@ -30,6 +30,9 @@ from position_manager import PositionManager
 from margin_calculation import MarginCalculatorFactory
 from broker_adapter import CerebroBrokerAdapter
 
+# Precision service import
+from precision_service import get_precision_service
+
 # Load environment variables
 # Determine project root dynamically
 SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -114,6 +117,9 @@ position_manager = PositionManager(mongo_client, default_account_id=DEFAULT_ACCO
 
 # Initialize Broker Adapter for margin calculations
 broker_adapter = CerebroBrokerAdapter(broker_name="IBKR")
+
+# Initialize Precision Service for quantity normalization
+precision_service = get_precision_service(PROJECT_ROOT)
 
 # Helper function to update signal_store with cerebro decision
 def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict):
@@ -1430,12 +1436,25 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     'notional_value': position_result['notional_value']
                 }
 
+                # Normalize quantity to broker precision
+                # This is the single point where rounding happens - ensures consistency
+                instrument_type = signal.get('instrument_type', 'STOCK')
+                precision = precision_service.get_precision(
+                    broker=broker_adapter,
+                    broker_id=account_name,
+                    symbol=signal.get('instrument'),
+                    instrument_type=instrument_type
+                )
+                adjusted_shares_raw = adjusted_shares
+                adjusted_shares = precision_service.normalize_quantity(adjusted_shares, precision)
+                logger.info(f"📐 Quantity normalized: {adjusted_shares_raw:.4f} → {adjusted_shares} (precision={precision})")
+
                 # Calculate backtest margin for comparison
                 backtest_margin = position_capital * median_margin_pct
 
                 logger.info(f"✅ Margin calculation successful for {signal.get('instrument')}")
                 logger.info(f"   Price used: ${price_used:.2f}")
-                logger.info(f"   Quantity: {adjusted_shares:.2f}")
+                logger.info(f"   Quantity: {adjusted_shares}")
                 logger.info(f"   Margin required: ${ibkr_margin_info['estimated_margin']:,.2f}")
 
             except Exception as e:
@@ -1567,12 +1586,12 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     update_signal_store_with_decision(signal_store_id, decision_doc)
 
     # Unified signal processing log for decision
-    logger.info(f"SIGNAL: {signal_id} | DECISION | Action={decision_obj.action} | OrigQty={signal.get('quantity', 0)} | FinalQty={decision_obj.quantity:.0f} | Reason={decision_obj.reason}")
+    logger.info(f"SIGNAL: {signal_id} | DECISION | Action={decision_obj.action} | OrigQty={signal.get('quantity', 0)} | FinalQty={decision_obj.quantity} | Reason={decision_obj.reason}")
 
     # Step 6: If approved or resized, create trading order
     if decision_obj.action in ['APPROVE', 'RESIZE']:
-        # Round to whole shares for IBKR compatibility
-        final_quantity_rounded = round(decision_obj.quantity)
+        # Convert to int for order (quantity was already normalized by precision_service)
+        final_quantity_rounded = int(decision_obj.quantity)
 
         if final_quantity_rounded <= 0:
             logger.warning(f"Rounded quantity is 0, rejecting signal")
