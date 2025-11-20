@@ -5,6 +5,7 @@ Supports array format with sequential signal sending and wait times
 
 Usage:
     # From file (recommended)
+    python send_test_signal.py --file simple_signal_equity_1.json
     python send_test_signal.py @simple_signal_equity_1.json
 
     # List available strategies
@@ -274,6 +275,11 @@ See sample files in services/signal_ingestion/sample_signals/
         help='JSON string or @filename (e.g., \'{"strategy_name": "Forex", ...}\' or @signal.json)'
     )
     parser.add_argument(
+        "--file", "-f",
+        dest="file_path",
+        help="Path to JSON signal file (alternative to @filename syntax)"
+    )
+    parser.add_argument(
         "--list-strategies",
         action="store_true",
         help="List available strategies from MongoDB"
@@ -286,25 +292,35 @@ See sample files in services/signal_ingestion/sample_signals/
         list_strategies()
         return
 
-    # Require JSON payload
-    if not args.json_payload:
-        parser.error("JSON payload is required (unless using --list-strategies)")
-
-    # Read JSON payload
-    json_str = args.json_payload
-
-    # Handle @filename syntax
-    if json_str.startswith("@"):
-        filename = json_str[1:]
+    # Handle --file option
+    if args.file_path:
         try:
-            with open(filename, 'r') as f:
+            with open(args.file_path, 'r') as f:
                 json_str = f.read()
         except FileNotFoundError:
-            print(f"❌ File not found: {filename}")
+            print(f"❌ File not found: {args.file_path}")
             sys.exit(1)
         except Exception as e:
             print(f"❌ Error reading file: {e}")
             sys.exit(1)
+    elif args.json_payload:
+        # Read JSON payload
+        json_str = args.json_payload
+
+        # Handle @filename syntax
+        if json_str.startswith("@"):
+            filename = json_str[1:]
+            try:
+                with open(filename, 'r') as f:
+                    json_str = f.read()
+            except FileNotFoundError:
+                print(f"❌ File not found: {filename}")
+                sys.exit(1)
+            except Exception as e:
+                print(f"❌ Error reading file: {e}")
+                sys.exit(1)
+    else:
+        parser.error("JSON payload is required (use --file or @filename or pass JSON string)")
 
     # Parse JSON
     try:

@@ -121,6 +121,22 @@ broker_adapter = CerebroBrokerAdapter(broker_name="IBKR")
 # Initialize Precision Service for quantity normalization
 precision_service = get_precision_service(PROJECT_ROOT)
 
+
+def round_quantity_for_instrument(quantity: float, instrument_type: str) -> float:
+    """
+    Round quantity based on instrument type precision.
+
+    Args:
+        quantity: Raw quantity to round
+        instrument_type: Type of instrument (STOCK, CRYPTO, FOREX, etc.)
+
+    Returns:
+        Rounded quantity appropriate for the instrument type
+    """
+    precision = precision_service._get_default_precision(instrument_type)
+    return precision_service.normalize_quantity(quantity, precision)
+
+
 # Helper function to update signal_store with cerebro decision
 def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict):
     """
@@ -1146,7 +1162,7 @@ def log_detailed_calculation_math(signal: Dict[str, Any], context, decision_obj,
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- FINAL DECISION ---")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Decision: {decision_obj.action}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Original Quantity: {signal.get('quantity', 0)}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Final Quantity: {decision_obj.quantity:.0f}")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Final Quantity: {decision_obj.quantity}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Reason: {decision_obj.reason}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | ===== END CALCULATION BREAKDOWN =====")
 
@@ -1746,7 +1762,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
         if not leg_results:
             # No leg_results (EXIT signal or legacy) - create single order from primary signal
-            final_quantity_rounded = int(decision_obj.quantity)
+            instrument_type = signal.get('instrument_type', 'STOCK')
+            final_quantity_rounded = round_quantity_for_instrument(decision_obj.quantity, instrument_type)
             if final_quantity_rounded <= 0:
                 logger.warning(f"Rounded quantity is 0, rejecting signal")
                 return
@@ -1754,7 +1771,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             leg_results = [{
                 'leg_index': 0,
                 'instrument': signal.get('instrument'),
-                'instrument_type': signal.get('instrument_type', 'STOCK'),
+                'instrument_type': instrument_type,
                 'direction': signal.get('direction'),
                 'action': signal.get('action'),
                 'order_type': signal.get('order_type', 'MARKET'),
@@ -1766,7 +1783,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         orders_created = []
         for leg_result in leg_results:
             leg_index = leg_result.get('leg_index', 0)
-            leg_quantity = int(leg_result.get('quantity', 0))
+            leg_instrument_type = leg_result.get('instrument_type', 'STOCK')
+            leg_quantity = round_quantity_for_instrument(leg_result.get('quantity', 0), leg_instrument_type)
 
             if leg_quantity <= 0:
                 logger.warning(f"Leg {leg_index+1} quantity is 0, skipping")

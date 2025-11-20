@@ -1,0 +1,39 @@
+[
+    {
+        "strategy_name": "SPX_1-D_Opt",
+        "passphrase": "test_password_123",
+        "signal_type": "ENTRY",
+        "entry_name": "$ENTRY_1",
+        "signal_legs": [
+            {
+                "instrument": "HG",
+                "instrument_type": "FUTURE",
+                "action": "BUY",
+                "direction": "LONG",
+                "quantity": 3,
+                "order_type": "MARKET",
+                "price": 4.25,
+                "environment": "staging"
+            }
+        ],
+        "wait": 10
+    },
+    {
+        "strategy_name": "SPX_1-D_Opt",
+        "passphrase": "test_password_123",
+        "signal_type": "EXIT",
+        "entry_signal_id": "$ENTRY_1",
+        "signal_legs": [
+            {
+                "instrument": "HG",
+                "instrument_type": "FUTURE",
+                "action": "SELL",
+                "direction": "SHORT",
+                "quantity": 3,
+                "order_type": "MARKET",
+                "price": 4.35,
+                "environment": "staging"
+            }
+        ]
+    }
+]
