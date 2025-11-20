@@ -164,7 +164,7 @@ trading_orders_topic = None
 order_commands_topic = None
 
 # AccountDataService URL
-ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:8002')
+ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:8082')
 
 
 # ============================================================================

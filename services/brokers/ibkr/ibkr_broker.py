@@ -46,7 +46,7 @@ class IBKRBroker(AbstractBroker):
 
         self.host = config.get("host", "127.0.0.1")
         self.port = config.get("port", 7497)
-        self.client_id = config.get("client_id", 1)
+        self.client_id = config.get("client_id", 2)
 
         # Initialize ib_insync connection object
         self.ib = IB()
@@ -64,27 +64,70 @@ class IBKRBroker(AbstractBroker):
         """
         Establish connection to Interactive Brokers TWS/Gateway.
 
+        Automatically retries with different client_ids if the initial one is in use.
+
         Returns:
             True if connection successful, False otherwise
 
         Raises:
-            BrokerConnectionError: If connection fails
+            BrokerConnectionError: If connection fails after all retries
         """
-        try:
-            if self.is_connected():
-                logger.info("Already connected to IBKR")
-                return True
+        import time
 
-            logger.info(f"Connecting to IBKR at {self.host}:{self.port} (client_id={self.client_id})")
-            self.ib.connect(self.host, self.port, clientId=self.client_id)
-
-            logger.info(f"✅ Successfully connected to IBKR")
+        if self.is_connected():
+            logger.info("Already connected to IBKR")
             return True
 
-        except Exception as e:
-            error_msg = f"Failed to connect to IBKR at {self.host}:{self.port}: {str(e)}"
-            logger.error(error_msg)
-            raise BrokerConnectionError(error_msg, broker_name="IBKR", details={"host": self.host, "port": self.port})
+        # Try multiple client_ids if the first one fails (Error 326)
+        max_retries = 5
+        original_client_id = self.client_id
+
+        for attempt in range(max_retries):
+            current_client_id = original_client_id + attempt
+
+            try:
+                logger.info(f"Connecting to IBKR at {self.host}:{self.port} (client_id={current_client_id})")
+                self.ib.connect(self.host, self.port, clientId=current_client_id)
+
+                # Wait briefly to catch Error 326 (client_id already in use)
+                time.sleep(0.5)
+
+                if self.ib.isConnected():
+                    self.client_id = current_client_id  # Update to successful client_id
+                    logger.info(f"✅ Successfully connected to IBKR (client_id={current_client_id})")
+                    return True
+                else:
+                    # Connection was rejected (likely Error 326)
+                    if attempt < max_retries - 1:
+                        logger.warning(f"⚠️ client_id={current_client_id} may be in use, trying next...")
+                        self.ib.disconnect()
+                        time.sleep(0.5)
+                    continue
+
+            except Exception as e:
+                error_str = str(e).lower()
+                # Check if it's a client_id conflict error or timeout (which often follows Error 326)
+                is_client_id_error = "326" in str(e) or "client id" in error_str or "already in use" in error_str
+                is_timeout = isinstance(e, TimeoutError) or "timeout" in error_str
+
+                if (is_client_id_error or is_timeout) and attempt < max_retries - 1:
+                    logger.warning(f"⚠️ client_id={current_client_id} may be in use (Error: {type(e).__name__}), trying {current_client_id + 1}...")
+                    try:
+                        self.ib.disconnect()
+                    except:
+                        pass
+                    time.sleep(0.5)
+                    continue
+
+                # Final failure
+                error_msg = f"Failed to connect to IBKR at {self.host}:{self.port}: {str(e)}"
+                logger.error(error_msg)
+                raise BrokerConnectionError(error_msg, broker_name="IBKR", details={"host": self.host, "port": self.port})
+
+        # All retries exhausted
+        error_msg = f"Failed to connect to IBKR after {max_retries} client_id attempts (tried {original_client_id}-{original_client_id + max_retries - 1})"
+        logger.error(error_msg)
+        raise BrokerConnectionError(error_msg, broker_name="IBKR", details={"host": self.host, "port": self.port})
 
     def disconnect(self) -> bool:
         """

@@ -125,7 +125,7 @@ execution_confirmations_topic = publisher.topic_path(project_id, 'execution-conf
 account_updates_topic = publisher.topic_path(project_id, 'account-updates')
 
 # Account Data Service Configuration
-ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:5001')
+ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:8082')
 
 # IBKR Configuration (fallback for backward compatibility)
 IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
@@ -295,11 +295,17 @@ SIGNAL_ID_EXPIRY_HOURS = 24  # Keep signal IDs for 24 hours
 def connect_all_brokers():
     """
     Connect to all brokers in the broker pool.
+    In mock mode, only connect to Mock broker (skip real brokers like IBKR).
     """
     logger.info(f"Connecting to {len(broker_pool)} broker(s)...")
 
     success_count = 0
     for account_id, broker_instance in broker_pool.items():
+        # In mock mode, skip non-Mock brokers to avoid unnecessary connection attempts
+        if args.use_mock_broker and broker_instance.broker_name != "Mock":
+            logger.info(f"⏭️ Skipping {broker_instance.broker_name} connection for {account_id} (mock mode)")
+            continue
+
         try:
             if not broker_instance.is_connected():
                 logger.info(f"Connecting to {broker_instance.broker_name} for account {account_id}...")
