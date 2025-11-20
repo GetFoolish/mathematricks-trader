@@ -87,6 +87,7 @@ class MockBroker(AbstractBroker):
     def connect(self) -> bool:
         """
         Establish mock connection (always succeeds instantly).
+        Also ensures the account exists in trading_accounts collection with proper schema.
 
         Returns:
             True (always)
@@ -95,9 +96,69 @@ class MockBroker(AbstractBroker):
             logger.info(f"Mock Broker: Already connected to {self.account_id}")
             return True
 
+        # Ensure account exists in database with complete schema
+        self._ensure_account_exists()
+
         self.connected = True
         logger.info(f"Mock Broker: Connected to {self.account_id} (no actual connection needed)")
         return True
+
+    def _ensure_account_exists(self):
+        """
+        Ensure Mock account exists in trading_accounts collection with proper schema.
+        Replaces existing account to ensure fresh state on each connection.
+        """
+        trading_accounts = get_trading_accounts_collection()
+        if trading_accounts is None:
+            logger.warning("Cannot create account document - MongoDB not available")
+            return
+
+        mock_account = {
+            "_id": self.account_id,
+            "account_id": self.account_id,
+            "account_name": f"{self.account_id} Mock Paper Trading",
+            "broker": "Mock",
+            "account_number": f"MOCK_{self.account_id}",
+            "account_type": "Paper",
+            "authentication_details": {
+                "auth_type": "MOCK",
+                "initial_equity": self.initial_equity
+            },
+            "balances": {
+                "equity": self.initial_equity,
+                "cash": self.initial_equity / 2.0,
+                "cash_balance": self.initial_equity / 2.0,
+                "margin_used": 0.0,
+                "margin_available": self.initial_equity / 2.0,
+                "buying_power": self.initial_equity * 2.0,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "last_updated": datetime.utcnow()
+            },
+            "open_positions": [],
+            "status": "ACTIVE",
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+
+        try:
+            # Replace existing account (upsert with replace)
+            result = trading_accounts.replace_one(
+                {"_id": self.account_id},
+                mock_account,
+                upsert=True
+            )
+
+            if result.upserted_id:
+                logger.info(f"✅ Created fresh {self.account_id} account in database")
+            else:
+                logger.info(f"✅ Replaced existing {self.account_id} account with fresh state")
+
+            logger.info(f"   Initial Equity: ${mock_account['balances']['equity']:,.2f}")
+            logger.info(f"   Buying Power: ${mock_account['balances']['buying_power']:,.2f}")
+
+        except Exception as e:
+            logger.error(f"Failed to create/update account document: {e}")
 
     def disconnect(self) -> bool:
         """

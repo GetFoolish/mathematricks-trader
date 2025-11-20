@@ -132,6 +132,36 @@ IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
 IBKR_PORT = int(os.getenv('IBKR_PORT', '7497'))  # 7497 for TWS, 4002 for IB Gateway
 IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', '1'))
 
+
+def log_open_positions(account_id: str, label: str):
+    """
+    Log open positions for an account to help debug position tracking.
+
+    Args:
+        account_id: Account ID to query
+        label: Label for the log message (e.g., "BEFORE ORDER", "AFTER ORDER")
+    """
+    try:
+        account = trading_accounts_collection.find_one({"account_id": account_id})
+        if account:
+            all_positions = account.get('open_positions', [])
+            # Filter to only show OPEN positions (not CLOSED)
+            open_positions = [p for p in all_positions if p.get('status') == 'OPEN']
+            if open_positions:
+                logger.info(f"📊 OPEN POSITIONS [{label}] for {account_id}:")
+                for pos in open_positions:
+                    symbol = pos.get('instrument', '?')
+                    qty = pos.get('quantity', 0)
+                    avg_price = pos.get('avg_entry_price', 0)
+                    strategy = pos.get('strategy_id', '?')
+                    logger.info(f"   - {symbol}: {qty} shares @ ${avg_price:.2f} | Strategy: {strategy}")
+            else:
+                logger.info(f"📊 OPEN POSITIONS [{label}] for {account_id}: (none)")
+        else:
+            logger.warning(f"📊 OPEN POSITIONS [{label}]: Account {account_id} not found in database")
+    except Exception as e:
+        logger.error(f"Error logging open positions: {e}")
+
 # ========================================================================
 # BROKER POOL - Multi-Broker Architecture
 # ========================================================================
@@ -621,15 +651,15 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
                 current_qty = existing_position['quantity']
 
                 if filled_qty >= current_qty:
-                    # Full exit - close position by updating status in array
+                    # Full exit - remove position from open_positions array
                     trading_accounts_collection.update_one(
                         {'account_id': account_id},
-                        {'$set': {
-                            f'open_positions.{position_index}.status': 'CLOSED',
-                            f'open_positions.{position_index}.exit_order_id': order_id,
-                            f'open_positions.{position_index}.avg_exit_price': avg_fill_price,
-                            f'open_positions.{position_index}.closed_at': datetime.utcnow(),
-                            f'open_positions.{position_index}.updated_at': datetime.utcnow()
+                        {'$pull': {
+                            'open_positions': {
+                                'strategy_id': strategy_id,
+                                'instrument': instrument,
+                                'status': 'OPEN'
+                            }
                         }}
                     )
                     logger.info(f"✅ Closed position {strategy_id}/{instrument}: {current_qty} shares @ ${avg_fill_price:.2f}")
@@ -800,6 +830,10 @@ def process_order_from_queue(order_item: Dict[str, Any]):
         logger.info(f"📥 ORDER RECEIVED: {order_data.get('instrument')} | {order_data.get('direction')} | Qty: {order_data.get('quantity')} | OrderID: {order_id}")
         signal_logger.info(f"ORDER: {signal_id} | ORDER_RECEIVED | OrderID={order_id} | Instrument={order_data.get('instrument')} | Direction={order_data.get('direction')} | Quantity={order_data.get('quantity')}")
 
+        # Log open positions BEFORE order execution
+        account_id = order_data.get('account_id', 'Mock_Paper')
+        log_open_positions(account_id, "BEFORE ORDER")
+
         # Submit order to broker (now safe - we're in main thread)
         logger.debug(f"Submitting order {order_id} to broker...")
         result = submit_order_to_broker(order_data)
@@ -843,6 +877,9 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                 # Create or update position in open_positions collection
                 logger.debug(f"Creating/updating position for {order_id}")
                 create_or_update_position(order_data, filled_qty, avg_fill_price)
+
+                # Log open positions AFTER order execution
+                log_open_positions(account_id, "AFTER ORDER")
 
                 # Update signal_store with execution data and calculate PnL
                 execution_data = {
