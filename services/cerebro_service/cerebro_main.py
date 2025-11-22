@@ -134,7 +134,8 @@ def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict):
             {
                 "$set": {
                     "cerebro_decision": decision_doc,
-                    "processing_complete": decision_doc.get("decision") in ["APPROVED", "RESIZE"],
+                    # FIX: consider "APPROVE" (not "APPROVED") as complete
+                    "processing_complete": decision_doc.get("decision") in ["APPROVE", "RESIZE"],
                     "updated_at": datetime.utcnow()
                 }
             }

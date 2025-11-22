@@ -255,7 +255,8 @@ order_queue = queue.Queue()
 command_queue = queue.Queue()  # For cancel commands and other order management
 
 # Track active IBKR orders by order_id for cancellation
-active_ibkr_orders = {}  # {order_id: broker_order_id}
+# FIX: store account_id with broker_order_id so we can cancel using the right broker
+active_ibkr_orders = {}  # {order_id: {"account_id": str, "broker_order_id": any}}
 
 # 🚨 CRITICAL FAILSAFE: Track processed signal IDs to prevent duplicate execution
 processed_signal_ids = set()  # In-memory deduplication
@@ -338,7 +339,11 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
         # Track active orders for cancellation
         order_id = order_data['order_id']
         broker_order_id = result.get('broker_order_id')
-        active_ibkr_orders[order_id] = broker_order_id
+        # FIX: store both broker_order_id and account_id
+        active_ibkr_orders[order_id] = {
+            "account_id": account_id,
+            "broker_order_id": broker_order_id
+        }
 
         logger.debug(f"Order {order_data.get('order_id')} submitted - Broker Order ID: {broker_order_id}, Status: {result.get('status')}")
 
@@ -452,7 +457,6 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
             entry_signal_id = order_data.get('entry_signal_id')
             if not entry_signal_id:
                 logger.warning("⚠️ EXIT signal missing entry_signal_id - cannot calculate PnL")
-                # Still update this exit signal
                 signal_store_collection.update_one(
                     {"_id": ObjectId(mathematricks_signal_id)},
                     {"$set": execution_update}
@@ -474,48 +478,61 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
             commission = execution_data.get('commission', 0)  # TODO: Get actual commissions
             net_pnl = gross_pnl - commission
 
-            entry_cost_basis = entry_signal['execution'].get('total_cost_basis', entry_price * quantity)
-            pnl_percent = (net_pnl / entry_cost_basis) * 100 if entry_cost_basis > 0 else 0
+            entry_filled_qty = entry_signal['execution'].get('quantity_filled', 0)
 
-            holding_period_seconds = (
-                datetime.utcnow() - entry_signal['execution']['filled_at']
-            ).total_seconds()
+            # Sum prior exit quantities linked to this entry (partial-aware)
+            prior_exit_ids = entry_signal.get('exit_signals', [])
+            prior_exited = 0
+            if prior_exit_ids:
+                for x in signal_store_collection.find(
+                    {"_id": {"$in": prior_exit_ids}},
+                    {"execution.quantity_filled": 1}
+                ):
+                    prior_exited += (x.get('execution', {}) or {}).get('quantity_filled', 0)
 
-            # Prepare PnL data
-            pnl_data = {
+            total_exited = prior_exited + quantity
+            remaining_qty = max(entry_filled_qty - total_exited, 0)
+
+            # Update EXIT signal
+            execution_update["pnl"] = {
                 "gross_pnl": gross_pnl,
                 "commission": commission,
                 "net_pnl": net_pnl,
-                "pnl_percent": pnl_percent,
-                "holding_period_seconds": holding_period_seconds
+                "pnl_percent": ((net_pnl / (entry_price * quantity)) * 100) if (entry_price * quantity) > 0 else 0,
+                "holding_period_seconds": (
+                    datetime.utcnow() - entry_signal['execution']['filled_at']
+                ).total_seconds() if entry_signal['execution'].get('filled_at') else None
             }
-
-            execution_update["pnl"] = pnl_data
-
-            # Update EXIT signal
             signal_store_collection.update_one(
                 {"_id": ObjectId(mathematricks_signal_id)},
                 {"$set": execution_update}
             )
 
-            # Update ENTRY signal: add to exit_signals array and set CLOSED
+            # Update ENTRY signal with partial-aware remaining and cumulative PnL
+            cumulative_realized = float(entry_signal.get('pnl_realized', 0) or 0) + float(net_pnl)
+            entry_update = {
+                "$push": {"exit_signals": ObjectId(mathematricks_signal_id)},
+                "$set": {
+                    "quantity_remaining": remaining_qty,
+                    "pnl_realized": cumulative_realized,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+            if remaining_qty <= 0:
+                entry_update["$set"].update({
+                    "position_status": "CLOSED",
+                    "closed_at": datetime.utcnow()
+                })
+            else:
+                # Keep OPEN if there is remaining qty
+                entry_update["$set"]["position_status"] = "OPEN"
+
             signal_store_collection.update_one(
                 {"_id": ObjectId(entry_signal_id)},
-                {
-                    "$push": {"exit_signals": ObjectId(mathematricks_signal_id)},
-                    "$set": {
-                        "position_status": "CLOSED",
-                        "pnl_realized": net_pnl,
-                        "closed_at": datetime.utcnow(),
-                        "updated_at": datetime.utcnow()
-                    }
-                }
+                entry_update
             )
 
-            logger.debug(f"Updated signal_store with EXIT execution and PnL")
-            logger.debug(f"Entry signal: {entry_signal['signal_id']} → position CLOSED")
-            logger.debug(f"Exit signal: {order_data.get('signal_id')}")
-            logger.debug(f"Gross P&L: ${gross_pnl:.2f} | Net P&L: ${net_pnl:.2f} ({pnl_percent:.2f}%)")
+            logger.debug(f"Updated signal_store with EXIT execution (partial-aware). Remaining qty: {remaining_qty}")
 
     except Exception as e:
         logger.error(f"❌ Error updating signal_store with execution: {e}", exc_info=True)
@@ -534,9 +551,10 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
         signal_type = order_data.get('signal_type', '').upper()
         order_id = order_data.get('order_id')
 
-        # For Mock broker, use "Mock_Paper" account
-        # TODO: Get account_id from order_data when multi-account support is added
-        account_id = "Mock_Paper" if args.use_mock_broker else "IBKR_Main"
+        # FIX: Use the order’s account, with mock override to align with broker routing
+        account_id = order_data.get('account')
+        if args.use_mock_broker:
+            account_id = "Mock_Paper"
 
         # Find account document
         account_doc = trading_accounts_collection.find_one({"account_id": account_id})
@@ -563,13 +581,22 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
                 position_index = idx
                 break
 
-        # Determine if this is ENTRY or EXIT using signal_type OR direction+action
-        # signal_type is preferred (set by Cerebro), fallback to direction+action logic
-        is_entry = (
-            signal_type == 'ENTRY' or
-            (not signal_type and direction == 'LONG' and action == 'BUY') or
-            (not signal_type and direction == 'SHORT' and action == 'SELL')
-        )
+        # FIX: ENTRY/EXIT detection robust to missing signal_type
+        is_entry = False
+        signal_type = (order_data.get('signal_type') or '').upper()
+        action = (order_data.get('action') or '').upper()
+
+        if signal_type in ['ENTRY', 'EXIT']:
+            is_entry = (signal_type == 'ENTRY')
+        else:
+            # Fallback to action if signal_type missing
+            if action in ['ENTRY', 'EXIT']:
+                is_entry = (action == 'ENTRY')
+            else:
+                # Final fallback: direction+side for non-standard orders
+                direction = (order_data.get('direction') or 'LONG').upper()
+                side = 'BUY' if direction == 'LONG' else 'SELL'
+                is_entry = (order_data.get('action', '').upper() == side)
 
         if is_entry:
             # ENTRY: Create new position or add to existing
@@ -673,10 +700,17 @@ def cancel_order(order_id: str) -> bool:
             logger.warning(f"⚠️ Cannot cancel order {order_id} - not found in active orders")
             return False
 
-        broker_order_id = active_ibkr_orders[order_id]
-        logger.info(f"🚫 Cancelling order {order_id} (broker order ID: {broker_order_id})...")
+        # FIX: use stored account_id and broker_order_id to cancel with correct broker
+        entry = active_ibkr_orders[order_id]
+        account_id = entry.get('account_id')
+        broker_order_id = entry.get('broker_order_id')
 
-        # Use broker library to cancel order
+        broker = get_broker_for_account(account_id)
+        if not broker:
+            logger.error(f"❌ No broker instance for account {account_id} - cannot cancel order {order_id}")
+            return False
+
+        logger.info(f"🚫 Cancelling order {order_id} (broker order ID: {broker_order_id}) on account {account_id}...")
         success = broker.cancel_order(broker_order_id)
 
         if success:
@@ -817,13 +851,12 @@ def process_order_from_queue(order_item: Dict[str, Any]):
 
             # Only proceed if there was an actual fill
             if status in ['Filled', 'PartiallyFilled'] or filled_qty > 0:
-
-                # Create execution confirmation
                 execution = {
                     "order_id": order_id,
                     "execution_id": result.get('ib_order_id'),
                     "timestamp": datetime.utcnow(),
-                    "account": "IBKR_Main",
+                    # FIX: use the correct account from the order
+                    "account": order_data.get('account'),
                     "instrument": order_data.get('instrument'),
                     "side": "BUY" if order_data.get('direction') == 'LONG' else "SELL",
                     "quantity": filled_qty,
