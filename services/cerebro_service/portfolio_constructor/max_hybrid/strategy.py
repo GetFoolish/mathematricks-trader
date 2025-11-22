@@ -29,15 +29,45 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import logging
 import os
+import sys
 
 from ..base import PortfolioConstructor, PortfolioContext, SignalDecision, Signal
 
 logger = logging.getLogger(__name__)
 
-# Path for dedicated validation log
-VALIDATION_LOG_PATH = '/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/logs/strategy_validation.log'
-# Path for detailed optimization log
-OPTIMIZATION_LOG_PATH = '/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/logs/max_hybrid_optimization.log'
+# Path for dedicated validation log -> use project/logs/strategy_validation.log
+# Compute project root (five levels up from this file)
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(
+        os.path.dirname(
+            os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__))
+            )
+        )
+    )
+)
+VALIDATION_LOG_PATH = os.path.join(PROJECT_ROOT, 'logs', 'strategy_validation.log')
+
+def _get_run_dir():
+    try:
+        # Directory of the process entry-point script
+        return os.path.dirname(os.path.realpath(sys.modules['__main__'].__file__))
+    except Exception:
+        return os.getcwd()
+
+RUN_DIR = _get_run_dir()
+
+# Default optimization dir = same directory as running script (override with env if needed)
+OPTIMIZATION_LOG_DIR = os.getenv("OPTIMIZATION_LOG_DIR", RUN_DIR)
+OPTIMIZATION_LOG_PATH = os.path.join(OPTIMIZATION_LOG_DIR, "max_hybrid_optimization.log")
+
+# Ensure dir exists (fallback to /tmp if needed)
+try:
+    os.makedirs(OPTIMIZATION_LOG_DIR, exist_ok=True)
+except Exception:
+    OPTIMIZATION_LOG_DIR = "/tmp/mathematricks_optimizer"
+    os.makedirs(OPTIMIZATION_LOG_DIR, exist_ok=True)
+    OPTIMIZATION_LOG_PATH = os.path.join(OPTIMIZATION_LOG_DIR, "max_hybrid_optimization.log")
 
 
 def validate_live_vs_backtest(
@@ -246,7 +276,7 @@ class MaxHybridConstructor(PortfolioConstructor):
             Dict of {strategy_id: allocation_pct}
         """
         # Ensure log directory exists
-        os.makedirs(os.path.dirname(OPTIMIZATION_LOG_PATH), exist_ok=True)
+        os.makedirs(OPTIMIZATION_LOG_DIR, exist_ok=True)
 
         # Open optimization log file
         opt_log = open(OPTIMIZATION_LOG_PATH, 'a')

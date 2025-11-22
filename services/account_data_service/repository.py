@@ -17,7 +17,7 @@ class TradingAccountRepository:
 
     def get_account(self, account_id: str) -> Optional[Dict]:
         """Get single account by ID"""
-        return self.collection.find_one({"_id": account_id})
+        return self.collection.find_one({"account_id": account_id})
 
     def list_accounts(self, broker: str = None, status: str = "ACTIVE") -> List[Dict]:
         """

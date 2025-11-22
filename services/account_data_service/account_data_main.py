@@ -301,27 +301,41 @@ def get_account_state_legacy(account_name: str):
     """
     try:
         account = repository.get_account(account_name)
+        print( account)
         if not account:
             raise HTTPException(
                 status_code=404,
                 detail=f"Account {account_name} not found"
             )
 
+        # Normalize both legacy and v2 docs
+        broker_id = account.get('broker') or account.get('broker_id') or 'mock'
+        balances = account.get('balances') or {
+            "equity": account.get('equity', 0),
+            "cash_balance": account.get('cash_balance', 0),
+            "margin_used": account.get('margin_used', 0),
+            "margin_available": account.get('margin_available', 0),
+            "unrealized_pnl": account.get('unrealized_pnl', 0),
+            "realized_pnl": account.get('realized_pnl', 0),
+            "margin_utilization_pct": account.get('margin_utilization_pct', 0),
+            "last_updated": account.get('timestamp', datetime.utcnow()),
+        }
+
         # Transform to old format expected by CerebroService
         state = {
-            "account_id": account['account_id'],
-            "account": account['account_id'],
-            "broker_id": account['broker'],
-            "timestamp": account['balances']['last_updated'],
-            "equity": account['balances']['equity'],
-            "cash_balance": account['balances']['cash_balance'],
-            "margin_used": account['balances']['margin_used'],
-            "margin_available": account['balances']['margin_available'],
-            "unrealized_pnl": account['balances']['unrealized_pnl'],
-            "realized_pnl": account['balances']['realized_pnl'],
-            "open_positions": account['open_positions'],
-            "open_orders": [],  # Not tracking orders in this service
-            "created_at": account['updated_at']
+            "account_id": account.get('account_id') or account_name,
+            "account": account.get('account_id') or account_name,
+            "broker_id": broker_id,
+            "timestamp": balances.get('last_updated', datetime.utcnow()),
+            "equity": balances.get('equity', 0),
+            "cash_balance": balances.get('cash_balance', 0),
+            "margin_used": balances.get('margin_used', 0),
+            "margin_available": balances.get('margin_available', 0),
+            "unrealized_pnl": balances.get('unrealized_pnl', 0),
+            "realized_pnl": balances.get('realized_pnl', 0),
+            "open_positions": account.get('open_positions', []),
+            "open_orders": [],
+            "created_at": account.get('updated_at') or account.get('timestamp') or datetime.utcnow()
         }
 
         return {"state": state}
@@ -347,11 +361,22 @@ def get_account_margin_legacy(account_name: str):
                 detail=f"Account {account_name} not found"
             )
 
+        balances = account.get('balances') or {
+            "equity": account.get('equity', 0),
+            "cash_balance": account.get('cash_balance', 0),
+            "margin_used": account.get('margin_used', 0),
+            "margin_available": account.get('margin_available', 0),
+            "margin_utilization_pct": account.get('margin_utilization_pct', 0),
+        }
+
         return {
-            "margin_available": account['balances']['margin_available'],
-            "margin_used": account['balances']['margin_used'],
-            "margin_utilization_pct": account['balances']['margin_utilization_pct'],
-            "equity": account['balances']['equity']
+            "margin_available": balances.get('margin_available', 0),
+            "margin_used": balances.get('margin_used', 0),
+            "margin_utilization_pct": balances.get('margin_utilization_pct') or (
+                (balances.get('margin_used', 0) / balances.get('equity', 1) * 100)
+                if balances.get('equity') else 0
+            ),
+            "equity": balances.get('equity', 0)
         }
 
     except HTTPException:

@@ -98,6 +98,7 @@ def setup_pubsub_topics():
     """Create Pub/Sub topics and subscriptions"""
     print(f"\n{Colors.YELLOW}Step 2: Creating Pub/Sub topics and subscriptions...{Colors.NC}")
 
+    print("running setup script...")
     setup_script = """
 from google.cloud import pubsub_v1
 import time
@@ -155,6 +156,7 @@ print("✓ All topics and subscriptions ready!")
         [str(VENV_PYTHON), "-c", setup_script],
         env={**os.environ, "PUBSUB_EMULATOR_HOST": "localhost:8085"}
     )
+    print("✓ Pub/Sub topics and subscriptions setup complete")
 
 def start_service(name: str, command: List[str], cwd: Path, env: Dict = None, port: int = None):
     """Start a service as a background process"""
@@ -230,8 +232,8 @@ def print_status(use_mock_broker: bool = False):
     print("  tail -f logs/portfolio_builder.log    # Portfolio optimization")
     print("  tail -f logs/dashboard_creator.log    # Dashboard generation")
     print("\nManagement:")
-    print("  python check_status_mvp_demo.py       # Check service status")
-    print("  python stop_mvp_demo.py               # Stop all services")
+    print("  python mvp_demo_status.py       # Check service status")
+    print("  python mvp_demo_stop.py               # Stop all services")
     print("")
 
 def main():

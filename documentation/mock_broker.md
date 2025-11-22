@@ -71,7 +71,7 @@ self.initial_equity = config.get("initial_equity", 250000.0)  # Change to desire
 ### Step 1: Start Execution Service with Mock Mode Flag
 ```bash
 cd services/execution_service
-python3 main.py --use-mock-broker
+python3 execution_main.py --use-mock-broker
 ```
 
 **Expected logs:**
@@ -94,7 +94,7 @@ python3 main.py --use-mock-broker
 ### Step 2: Start Cerebro Service (in another terminal, normal mode)
 ```bash
 cd services/cerebro_service
-python3 main.py
+python3 cerebro_main.py
 ```
 
 ### Step 3: Send Test Signal
