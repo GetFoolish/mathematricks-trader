@@ -5,7 +5,7 @@ Uses ib_insync for connection and order management
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-from ib_insync import IB, Stock, Option, Forex, Future, MarketOrder, LimitOrder
+from ib_insync import IB, Stock, Option, Forex, Future, Crypto, MarketOrder, LimitOrder
 
 # Import base classes and exceptions
 import sys
@@ -44,9 +44,10 @@ class IBKRBroker(AbstractBroker):
         """Initialize IBKR broker with configuration"""
         super().__init__(config)
 
-        self.host = config.get("host", "127.0.0.1")
-        self.port = config.get("port", 7497)
-        self.client_id = config.get("client_id", 2)
+        # Connection settings come ONLY from environment variables
+        self.host = os.getenv("IBKR_HOST", "127.0.0.1")
+        self.port = int(os.getenv("IBKR_PORT", "4002"))
+        self.client_id = int(os.getenv("IBKR_CLIENT_ID", "1"))
 
         # Initialize ib_insync connection object
         self.ib = IB()
@@ -227,8 +228,8 @@ class IBKRBroker(AbstractBroker):
             # Translate 'direction' to 'side' (LONG→BUY, SHORT→SELL)
             'side': self._translate_direction_to_side(internal_order.get('direction', '')),
 
-            # Convert quantity to integer
-            'quantity': int(internal_order.get('quantity', 0)),
+            # Quantity - pass through as float, precision should be applied before reaching here
+            'quantity': float(internal_order.get('quantity', 0)),
 
             # Pass-through fields
             'order_type': internal_order.get('order_type', 'MARKET'),
@@ -241,6 +242,9 @@ class IBKRBroker(AbstractBroker):
 
         if 'stop_price' in internal_order and internal_order['stop_price']:
             ibkr_order['stop_price'] = internal_order['stop_price']
+
+        if 'price' in internal_order and internal_order['price']:
+            ibkr_order['price'] = internal_order['price']
 
         # Multi-leg support (for options) - pass through
         if 'legs' in internal_order and internal_order['legs']:
@@ -338,7 +342,14 @@ class IBKRBroker(AbstractBroker):
             for contract_item in contracts:
                 contract = contract_item['contract']
                 leg_action = contract_item['action']
-                leg_quantity = int(round(contract_item['quantity']))
+                # Apply broker precision to quantity
+                symbol = order.get('symbol', '')
+                precision = self.get_quantity_precision(symbol, instrument_type)
+                raw_quantity = contract_item['quantity']
+                if precision == 0:
+                    leg_quantity = int(round(raw_quantity))
+                else:
+                    leg_quantity = round(raw_quantity, precision)
 
                 # Qualify contract with IBKR
                 qualified_contracts = self.ib.qualifyContracts(contract)
@@ -354,18 +365,29 @@ class IBKRBroker(AbstractBroker):
 
                 # Create IBKR order
                 if order_type == "MARKET":
-                    ib_order = MarketOrder(leg_action, leg_quantity)
+                    ib_order = MarketOrder(leg_action, 0)  # Set totalQuantity to 0, will set below
                 elif order_type == "LIMIT":
                     limit_price = order.get("limit_price")
                     if not limit_price:
                         raise ValueError("limit_price required for LIMIT orders")
-                    ib_order = LimitOrder(leg_action, leg_quantity, limit_price)
+                    ib_order = LimitOrder(leg_action, 0, limit_price)  # Set totalQuantity to 0
                 else:
                     # Default to market
-                    ib_order = MarketOrder(leg_action, leg_quantity)
+                    ib_order = MarketOrder(leg_action, 0)
 
-                # Place order
-                logger.info(f"📤 Placing order: {leg_action} {leg_quantity} {qualified_contract.symbol}")
+                # For CRYPTO, IBKR requires cashQty (USD amount) instead of totalQuantity
+                if instrument_type == "CRYPTO":
+                    price = order.get("limit_price") or order.get("price", 0)
+                    if price <= 0:
+                        raise ValueError("CRYPTO orders require a price to calculate cash quantity")
+                    cash_amount = round(leg_quantity * price, 2)  # USD amount
+                    ib_order.cashQty = cash_amount
+                    # IBKR crypto requires explicit TIF - use IOC for market, GTC for limit
+                    ib_order.tif = "IOC" if order_type == "MARKET" else "GTC"
+                    logger.info(f"📤 Placing CRYPTO order: {leg_action} ${cash_amount:.2f} USD of {qualified_contract.symbol}")
+                else:
+                    ib_order.totalQuantity = leg_quantity
+                    logger.info(f"📤 Placing order: {leg_action} {leg_quantity} {qualified_contract.symbol}")
                 trade = self.ib.placeOrder(qualified_contract, ib_order)
                 trades.append(trade)
 
@@ -396,14 +418,47 @@ class IBKRBroker(AbstractBroker):
             broker_order_id = str(trades[0].order.orderId)
             self.active_trades[broker_order_id] = trades
 
+            # Get IBKR permanent confirmation ID (permId)
+            # This is the broker's permanent order ID that persists across sessions
+            perm_ids = [str(t.order.permId) for t in trades if t.order.permId]
+            broker_confirmation_id = perm_ids[0] if perm_ids else None
+
+            # Extract fill data from trades
+            total_filled = sum(t.orderStatus.filled for t in trades)
+            total_remaining = sum(t.orderStatus.remaining for t in trades)
+
+            # Calculate average fill price (weighted by filled quantity)
+            if total_filled > 0:
+                weighted_sum = sum(t.orderStatus.avgFillPrice * t.orderStatus.filled for t in trades)
+                avg_fill_price = weighted_sum / total_filled
+            else:
+                avg_fill_price = 0.0
+
+            # Collect fills information
+            fills = []
+            for trade in trades:
+                if trade.orderStatus.filled > 0:
+                    fills.append({
+                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                        "quantity": trade.orderStatus.filled,
+                        "price": trade.orderStatus.avgFillPrice
+                    })
+
             logger.info(f"✅ Order submitted successfully: {broker_order_id} ({len(trades)} legs)")
+            logger.info(f"   IBKR Confirmation ID (permId): {broker_confirmation_id}")
+            logger.info(f"   Fill data: {total_filled} filled @ ${avg_fill_price:.4f}, {total_remaining} remaining")
 
             return {
                 "broker_order_id": broker_order_id,
+                "broker_confirmation_id": broker_confirmation_id,
                 "status": overall_status,
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "message": f"Order submitted successfully ({len(trades)} legs)",
-                "num_legs": len(trades)
+                "num_legs": len(trades),
+                "filled": total_filled,
+                "remaining": total_remaining,
+                "avg_fill_price": avg_fill_price,
+                "fills": fills
             }
 
         except (BrokerConnectionError, OrderRejectedError, InvalidSymbolError):
@@ -879,6 +934,16 @@ class IBKRBroker(AbstractBroker):
                 'quantity': order.get("quantity", 0)
             })
 
+        elif instrument_type == "CRYPTO":
+            symbol = order["symbol"]
+            # IBKR uses PAXOS exchange for crypto trading
+            contract = Crypto(symbol=symbol, exchange='PAXOS', currency='USD')
+            contracts.append({
+                'contract': contract,
+                'action': order.get("side", "BUY").upper(),
+                'quantity': order.get("quantity", 0)
+            })
+
         else:
             raise ValueError(f"Invalid instrument_type: {instrument_type}")
 
@@ -993,3 +1058,128 @@ class IBKRBroker(AbstractBroker):
             'CRYPTO': 8,
         }
         return defaults.get(instrument_type.upper(), 0)
+
+    # ========================================================================
+    # MARGIN PREVIEW (whatIfOrder)
+    # ========================================================================
+
+    def get_order_margin_impact(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Get margin impact for a hypothetical order using IBKR's whatIfOrder API.
+
+        This queries IBKR for the actual margin requirements before placing an order.
+
+        Args:
+            order: Order details in internal standard format
+                {
+                    "instrument": "GC",
+                    "direction": "LONG" | "SHORT",
+                    "quantity": 2,
+                    "order_type": "MARKET" | "LIMIT",
+                    "instrument_type": "FUTURE",
+                    "expiry": "20250224",
+                    "exchange": "COMEX"
+                }
+
+        Returns:
+            {
+                "init_margin_change": 22000.00,    # Additional initial margin required
+                "maint_margin_change": 20000.00,   # Additional maintenance margin required
+                "init_margin_after": 122000.00,    # Total initial margin after trade
+                "maint_margin_after": 110000.00,   # Total maintenance margin after trade
+                "equity_with_loan": 250000.00,     # Equity with loan value
+                "commission": 5.00,                # Estimated commission
+                "success": True
+            }
+
+        Raises:
+            BrokerConnectionError: If not connected
+            BrokerAPIError: For API errors
+        """
+        try:
+            # Ensure connected
+            if not self.is_connected():
+                raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+
+            # Translate order to IBKR format
+            ibkr_order = self._translate_order(order)
+            logger.info(f"Getting margin impact for: {ibkr_order.get('symbol')} {ibkr_order.get('side')} {ibkr_order.get('quantity')}")
+
+            # Create contract
+            contracts = self._create_contracts(ibkr_order)
+            if not contracts:
+                raise ValueError("Failed to create contract for margin query")
+
+            contract_item = contracts[0]
+            contract = contract_item['contract']
+            leg_action = contract_item['action']
+            leg_quantity = int(round(contract_item['quantity']))
+
+            # Qualify contract with IBKR
+            qualified_contracts = self.ib.qualifyContracts(contract)
+            if not qualified_contracts:
+                raise InvalidSymbolError(
+                    f"Failed to qualify contract for margin query: {contract}",
+                    broker_name="IBKR",
+                    symbol=str(contract)
+                )
+
+            qualified_contract = qualified_contracts[0]
+            logger.debug(f"Qualified contract for margin query: {qualified_contract}")
+
+            # Create order object for whatIfOrder
+            order_type = ibkr_order.get("order_type", "MARKET").upper()
+            if order_type == "MARKET":
+                ib_order = MarketOrder(leg_action, leg_quantity)
+            elif order_type == "LIMIT":
+                limit_price = ibkr_order.get("limit_price", 0)
+                if not limit_price:
+                    # For limit orders without price, use market order for margin calc
+                    ib_order = MarketOrder(leg_action, leg_quantity)
+                else:
+                    ib_order = LimitOrder(leg_action, leg_quantity, limit_price)
+            else:
+                ib_order = MarketOrder(leg_action, leg_quantity)
+
+            # Call whatIfOrder to get margin impact
+            logger.info(f"📊 Querying IBKR whatIfOrder for margin impact...")
+            what_if_result = self.ib.whatIfOrder(qualified_contract, ib_order)
+
+            # Wait briefly for result
+            self.ib.sleep(1)
+
+            if not what_if_result:
+                raise BrokerAPIError(
+                    "whatIfOrder returned empty result",
+                    broker_name="IBKR"
+                )
+
+            # Extract margin data from result
+            # whatIfOrder returns an OrderState object with margin fields
+            init_margin_change = float(what_if_result.initMarginChange or 0)
+            maint_margin_change = float(what_if_result.maintMarginChange or 0)
+            init_margin_after = float(what_if_result.initMarginAfter or 0)
+            maint_margin_after = float(what_if_result.maintMarginAfter or 0)
+            equity_with_loan = float(what_if_result.equityWithLoanAfter or 0)
+            commission = float(what_if_result.commission or 0)
+
+            logger.info(f"✅ Margin impact retrieved:")
+            logger.info(f"   Initial Margin Change: ${init_margin_change:,.2f}")
+            logger.info(f"   Maintenance Margin Change: ${maint_margin_change:,.2f}")
+            logger.info(f"   Commission: ${commission:,.2f}")
+
+            return {
+                "init_margin_change": init_margin_change,
+                "maint_margin_change": maint_margin_change,
+                "init_margin_after": init_margin_after,
+                "maint_margin_after": maint_margin_after,
+                "equity_with_loan": equity_with_loan,
+                "commission": commission,
+                "success": True
+            }
+
+        except (BrokerConnectionError, InvalidSymbolError):
+            raise
+        except Exception as e:
+            logger.error(f"Error getting margin impact: {e}", exc_info=True)
+            raise BrokerAPIError(f"Failed to get margin impact: {str(e)}", broker_name="IBKR")
