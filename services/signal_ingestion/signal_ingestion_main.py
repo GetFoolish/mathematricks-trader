@@ -49,7 +49,7 @@ console_handler.setFormatter(custom_formatter)
 
 # Configure root logger
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG for diagnostics
     handlers=[file_handler, console_handler]
 )
 logger = logging.getLogger('signal_ingestion')

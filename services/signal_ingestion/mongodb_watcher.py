@@ -30,6 +30,10 @@ class MongoDBWatcher:
         self.last_signal_timestamp = None
         self.signal_callback = None
 
+        # DEBUG: Log the MongoDB URL being used
+        logger.debug(f"🔧 Initializing MongoDBWatcher with URL: {mongodb_url}")
+        logger.debug(f"🔧 Environment: {environment}")
+
         # Connect to MongoDB
         self.connect()
 
@@ -155,6 +159,7 @@ class MongoDBWatcher:
                         'signal': raw_signal_doc.get('signal', {}),
                         'signal_type': raw_signal_doc.get('signal_type'),
                         'entry_signal_id': raw_signal_doc.get('entry_signal_id'),  # For EXIT signals
+                        'account_equity': raw_signal_doc.get('account_equity'),  # For ratio-based position sizing
                         'environment': raw_signal_doc.get('environment', 'production'),
                         'mathematricks_signal_id': str(mathematricks_signal_id)
                     }
@@ -213,8 +218,12 @@ class MongoDBWatcher:
             # Open change stream
             with self.mongodb_collection.watch([], **watch_options) as stream:
                 logger.info(f"✅ Change Stream connected - waiting for {self.environment} signals only...")
+                logger.debug(f"🔗 MongoDB URL: {self.mongodb_url}")
+                logger.debug(f"📊 Watching: {self.mongodb_collection.database.name}.{self.mongodb_collection.name}")
+                logger.debug(f"🎯 Environment filter: {self.environment}")
 
                 for change in stream:
+                    logger.debug(f"🔔 Change stream event received! Type: {change.get('operationType')}")
                     try:
                         # Update resume token for reconnection resilience
                         self.resume_token = stream.resume_token
@@ -231,18 +240,19 @@ class MongoDBWatcher:
 
                         # Skip if already processed (has mathematricks_signal_id)
                         if 'mathematricks_signal_id' in raw_signal_doc:
-                            logger.debug("⏭️ Skipping already processed signal")
+                            logger.info(f"⏭️ Skipping already processed signal: {raw_signal_doc.get('signalID')}")
                             continue
 
                         # Filter by environment
                         document_environment = raw_signal_doc.get('environment', 'unknown')
                         if document_environment != self.environment:
                             # Ignore signals from other environments
+                            logger.info(f"⏭️ Skipping signal from {document_environment} environment (expecting {self.environment})")
                             continue
 
                         # Must have signalID (valid signal)
                         if 'signalID' not in raw_signal_doc:
-                            logger.debug("⏭️ Skipping document without signalID")
+                            logger.info("⏭️ Skipping document without signalID")
                             continue
 
                         # Get signal array (new format)
@@ -306,6 +316,7 @@ class MongoDBWatcher:
                             'signal': raw_signal_doc.get('signal', {}),
                             'signal_type': raw_signal_doc.get('signal_type'),
                             'entry_signal_id': raw_signal_doc.get('entry_signal_id'),  # For EXIT signals
+                            'account_equity': raw_signal_doc.get('account_equity'),  # For ratio-based position sizing
                             'environment': raw_signal_doc.get('environment', 'production'),
                             'mathematricks_signal_id': str(mathematricks_signal_id)  # Pass to signal_ingestion
                         }
