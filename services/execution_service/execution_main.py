@@ -626,13 +626,22 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
                         {'account_id': account_id},
                         {'$set': {
                             f'open_positions.{position_index}.status': 'CLOSED',
+                            f'open_positions.{position_index}.quantity': 0,
                             f'open_positions.{position_index}.exit_order_id': order_id,
                             f'open_positions.{position_index}.avg_exit_price': avg_fill_price,
                             f'open_positions.{position_index}.closed_at': datetime.utcnow(),
-                            f'open_positions.{position_index}.updated_at': datetime.utcnow()
+                            f'open_positions.{position_index}.updated_at': datetime.utcnow(),
+                            'positions_last_updated': datetime.utcnow(),
+                            'updated_at': datetime.utcnow()
                         }}
                     )
                     logger.info(f"✅ Closed position {strategy_id}/{instrument}: {current_qty} shares @ ${avg_fill_price:.2f}")
+                    try:
+                        updated_account = trading_accounts_collection.find_one({'account_id': account_id})
+                        if updated_account:
+                            publish_account_update(updated_account)
+                    except Exception:
+                        logger.debug("Could not publish account update after closing position", exc_info=True)
                 else:
                     # Partial exit - reduce position quantity in array
                     new_qty = current_qty - filled_qty
@@ -641,12 +650,26 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
                         {'$set': {
                             f'open_positions.{position_index}.quantity': new_qty,
                             f'open_positions.{position_index}.updated_at': datetime.utcnow(),
-                            f'open_positions.{position_index}.last_order_id': order_id
+                            f'open_positions.{position_index}.last_order_id': order_id,
+                            'positions_last_updated': datetime.utcnow(),
+                            'updated_at': datetime.utcnow()
                         }}
                     )
                     logger.info(f"✅ Reduced position {strategy_id}/{instrument}: {current_qty} → {new_qty} shares")
+                    try:
+                        updated_account = trading_accounts_collection.find_one({'account_id': account_id})
+                        if updated_account:
+                            publish_account_update(updated_account)
+                    except Exception:
+                        logger.debug("Could not publish account update after reducing position", exc_info=True)
             else:
                 logger.warning(f"⚠️ EXIT order {order_id} filled but no open position found for {strategy_id}/{instrument}")
+                try:
+                    updated_account = trading_accounts_collection.find_one({'account_id': account_id})
+                    if updated_account:
+                        publish_account_update(updated_account)
+                except Exception:
+                    logger.debug("Could not publish account update after failed position lookup", exc_info=True)
 
     except Exception as e:
         logger.error(f"❌ Error creating/updating position: {e}", exc_info=True)

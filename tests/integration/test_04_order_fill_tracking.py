@@ -250,6 +250,7 @@ def test_position_full_exit_closes_position(
 
     assert closed_position is not None
     assert closed_position['status'] == 'CLOSED'
+    assert closed_position['quantity'] == 0
     assert closed_position['avg_exit_price'] == 145.00
     assert 'closed_at' in closed_position
 
