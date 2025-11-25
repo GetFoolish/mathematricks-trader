@@ -71,7 +71,8 @@ class BaseMarginCalculator(ABC):
         self,
         ticker: str,
         quantity: float,
-        price: float
+        price: float,
+        signal_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Fetch margin requirement from broker
@@ -80,6 +81,7 @@ class BaseMarginCalculator(ABC):
             ticker: Instrument ticker/symbol
             quantity: Number of units/shares/contracts
             price: Price for margin calculation
+            signal_data: Optional signal data (expiry, exchange, direction for futures)
 
         Returns:
             Dict with margin information:
@@ -180,7 +182,8 @@ class BaseMarginCalculator(ABC):
             broker_margin = self.fetch_margin_requirement(
                 ticker,
                 estimated_quantity,
-                price_for_margin
+                price_for_margin,
+                signal_data=signal
             )
             initial_margin = broker_margin['initial_margin']
             self.logger.info(f"✅ Margin requirement: ${initial_margin:.2f}")

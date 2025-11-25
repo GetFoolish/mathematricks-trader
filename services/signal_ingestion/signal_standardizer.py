@@ -111,6 +111,9 @@ class SignalStandardizer:
             # Handle MongoDB ObjectId or other types
             entry_signal_id = str(entry_signal_id)
 
+        # Extract account_equity for ratio-based position sizing
+        account_equity = signal_data.get('account_equity')
+
         # Build standardized signal
         standardized_signal = {
             "signal_id": signal_id,
@@ -118,6 +121,7 @@ class SignalStandardizer:
             "timestamp": timestamp,
             "signal_type": signal_type,  # ENTRY, EXIT, etc. (empty string if not provided)
             "entry_signal_id": entry_signal_id,  # MongoDB ObjectId of entry signal (for EXIT signals)
+            "account_equity": account_equity,  # For ratio-based position sizing
             "instrument": signal_payload.get('instrument') or signal_payload.get('ticker', ''),
             "direction": signal_payload.get('direction', 'LONG').upper(),
             "action": signal_payload.get('action', 'ENTRY').upper(),

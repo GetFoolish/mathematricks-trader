@@ -1,0 +1,40 @@
+[
+    {
+        "strategy_name": "Forex",
+        "passphrase": "test_password_123",
+        "signal_type": "ENTRY",
+        "account_equity": 500000,
+        "signal_legs": [
+            {
+                "instrument": "AUDCAD",
+                "instrument_type": "FOREX",
+                "action": "BUY",
+                "direction": "LONG",
+                "quantity": 100000,
+                "order_type": "MARKET",
+                "price": 0.9123,
+                "environment": "staging"
+            }
+        ],
+        "wait": 60
+    },
+    {
+        "strategy_name": "Forex",
+        "passphrase": "test_password_123",
+        "signal_type": "EXIT",
+        "entry_signal_id": "$PREVIOUS",
+        "account_equity": 500000,
+        "signal_legs": [
+            {
+                "instrument": "AUDCAD",
+                "instrument_type": "FOREX",
+                "action": "SELL",
+                "direction": "SHORT",
+                "quantity": 100000,
+                "order_type": "MARKET",
+                "price": 0.9145,
+                "environment": "staging"
+            }
+        ]
+    }
+]

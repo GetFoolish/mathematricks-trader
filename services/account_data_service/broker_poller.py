@@ -6,7 +6,8 @@ Also watches MongoDB for position changes (event-driven polling)
 import threading
 import time
 import logging
-from typing import Dict, Callable, Optional
+import math
+from typing import Dict, Callable, Optional, List
 import sys
 import os
 from pymongo import MongoClient
@@ -419,11 +420,8 @@ class BrokerPoller:
 
         # Add authentication details based on broker type
         if account['broker'] == "IBKR":
-            config.update({
-                "host": auth.get('host', '127.0.0.1'),
-                "port": auth.get('port', 7497),
-                "client_id": auth.get('client_id', 100)
-            })
+            # IBKR connection settings come from environment variables (IBKR_HOST, IBKR_PORT, IBKR_CLIENT_ID)
+            pass
         elif account['broker'] == "Zerodha":
             config.update({
                 "api_key": auth.get('api_key'),
@@ -434,19 +432,16 @@ class BrokerPoller:
         # For IBKR, we need to ensure we have an event loop
         # Run in a new thread if called from FastAPI context
         if account['broker'] == "IBKR":
-            try:
-                asyncio.get_event_loop()
-            except RuntimeError:
-                # No event loop in current thread - run in separate thread
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(self._poll_account_sync, account_id, config, auth)
-                    try:
-                        future.result(timeout=30)
-                    except Exception as e:
-                        # Re-raise to be caught by poll_all_accounts
-                        raise e
-                return
+            # Always use separate thread for IBKR to avoid event loop issues
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(self._poll_account_sync, account_id, config, auth)
+                try:
+                    future.result(timeout=30)
+                except Exception as e:
+                    # Re-raise to be caught by poll_all_accounts
+                    raise e
+            return
 
         # Get or create broker instance
         broker = self._get_broker(account_id, config)
@@ -522,9 +517,10 @@ class BrokerPoller:
             }
             self.repository.update_balances(account_id, balances)
 
-            # Fetch positions
+            # Fetch positions and sanitize for JSON compliance
             positions = broker.get_open_positions()
-            self.repository.update_positions(account_id, positions)
+            positions = self._sanitize_positions(positions)
+            self.repository.update_broker_positions_snapshot(account_id, positions)
 
             # Update connection status
             self.repository.update_connection_status(account_id, "CONNECTED", True)
@@ -577,6 +573,53 @@ class BrokerPoller:
         if equity > 0:
             return (margin_used / equity) * 100
         return 0.0
+
+    @staticmethod
+    def _sanitize_float(value, default=0.0):
+        """
+        Sanitize float value to be JSON-compliant
+
+        Args:
+            value: Value to sanitize
+            default: Default value if value is NaN/Inf/None
+
+        Returns:
+            JSON-compliant float value
+        """
+        if value is None:
+            return default
+        try:
+            float_val = float(value)
+            if math.isnan(float_val) or math.isinf(float_val):
+                return default
+            return float_val
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _sanitize_positions(positions: List[Dict]) -> List[Dict]:
+        """
+        Sanitize all positions to ensure JSON compliance
+
+        Replaces NaN/Inf values with 0 for fields like unrealized_pnl, avg_price, etc.
+
+        Args:
+            positions: List of position dicts from broker
+
+        Returns:
+            Sanitized list of positions safe for JSON serialization
+        """
+        sanitized = []
+        for pos in positions:
+            sanitized_pos = pos.copy()
+            # Sanitize numeric fields that commonly have NaN issues
+            numeric_fields = ['unrealized_pnl', 'realized_pnl', 'avg_price', 'market_price',
+                            'market_value', 'cost_basis', 'quantity']
+            for field in numeric_fields:
+                if field in sanitized_pos:
+                    sanitized_pos[field] = BrokerPoller._sanitize_float(sanitized_pos[field])
+            sanitized.append(sanitized_pos)
+        return sanitized
 
     @staticmethod
     def _hash_positions(positions: list) -> str:

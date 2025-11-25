@@ -151,14 +151,36 @@ def check_mongodb():
 
     print("")
 
-def check_tws():
-    """Check IBKR TWS/Gateway status"""
-    print("📋 IBKR TWS/Gateway")
-    if is_port_listening(7497):
-        print(f"   Port 7497: {Colors.GREEN}✅ Listening{Colors.NC}")
+def check_ibkr_gateway():
+    """Check IBKR Gateway Docker status"""
+    print("📋 IBKR Gateway (Docker)")
+
+    # Check if Docker container is running
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", "name=ib-gateway", "--format", "{{.Status}}"],
+            capture_output=True,
+            text=True
+        )
+        if result.stdout.strip():
+            print(f"   Container: {Colors.GREEN}✅ Running{Colors.NC} ({result.stdout.strip()})")
+        else:
+            print(f"   Container: {Colors.RED}❌ Not running{Colors.NC}")
+            print("   (Run: bash legacy_code/tools/setup_docker.sh)")
+            print("")
+            return
+    except:
+        print(f"   Container: {Colors.YELLOW}⚠️  Cannot check Docker{Colors.NC}")
+
+    # Check API port
+    if is_port_listening(4002):
+        print(f"   Port 4002: {Colors.GREEN}✅ Listening{Colors.NC} (Paper Trading)")
     else:
-        print(f"   Port 7497: {Colors.RED}❌ Not listening{Colors.NC}")
-        print("   (Start TWS or IB Gateway on port 7497)")
+        print(f"   Port 4002: {Colors.RED}❌ Not listening{Colors.NC}")
+
+    if is_port_listening(4001):
+        print(f"   Port 4001: {Colors.GREEN}✅ Listening{Colors.NC} (Live Trading)")
+
     print("")
 
 def check_pubsub():
@@ -248,7 +270,7 @@ def main():
     print("\n3️⃣  INFRASTRUCTURE")
     print("=" * 80)
     check_mongodb()
-    check_tws()
+    check_ibkr_gateway()
     check_pubsub()
 
     # Show recent logs

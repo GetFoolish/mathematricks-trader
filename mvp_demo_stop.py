@@ -4,9 +4,13 @@ Stop all MVP services gracefully
 """
 import os
 import signal
+import subprocess
 import time
 from pathlib import Path
 from typing import List
+
+# IB Gateway Docker settings
+IBKR_CONTAINER_NAME = "ib-gateway"
 
 PROJECT_ROOT = Path(__file__).parent.absolute()
 LOG_DIR = PROJECT_ROOT / "logs"
@@ -77,8 +81,6 @@ def stop_service(service_name: str, timeout: int = 10):
 
 def kill_by_pattern(pattern: str, service_name: str):
     """Kill processes matching a pattern using pgrep"""
-    import subprocess
-
     try:
         # Use pgrep to find processes
         result = subprocess.run(
@@ -100,10 +102,33 @@ def kill_by_pattern(pattern: str, service_name: str):
     except:
         pass
 
+def stop_ibkr_gateway():
+    """Stop IB Gateway Docker container"""
+    print("\nStopping IB Gateway Docker...")
+
+    # Check if container is running
+    result = subprocess.run(
+        ["docker", "ps", "--filter", f"name={IBKR_CONTAINER_NAME}", "--format", "{{.Names}}"],
+        capture_output=True, text=True
+    )
+
+    if IBKR_CONTAINER_NAME not in result.stdout:
+        print(f"  IB Gateway container not running")
+        return
+
+    # Stop the container
+    result = subprocess.run(
+        ["docker", "stop", IBKR_CONTAINER_NAME],
+        capture_output=True, text=True, timeout=30
+    )
+
+    if result.returncode == 0:
+        print(f"✓ {IBKR_CONTAINER_NAME} stopped")
+    else:
+        print(f"✗ Failed to stop {IBKR_CONTAINER_NAME}: {result.stderr}")
+
 def kill_port(port: int, service_name: str):
     """Kill process listening on a port"""
-    import subprocess
-
     try:
         # Use lsof to find process on port
         result = subprocess.run(
@@ -142,6 +167,9 @@ def main():
 
     for service in services:
         stop_service(service)
+
+    # Stop IB Gateway Docker
+    stop_ibkr_gateway()
 
     # Cleanup orphaned processes
     print("\nChecking for orphaned processes...")

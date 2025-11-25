@@ -290,3 +290,8 @@ mongosh "mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.b
 ```bash
 ./stop_mvp_demo.sh
 ```
+
+
+
+
+

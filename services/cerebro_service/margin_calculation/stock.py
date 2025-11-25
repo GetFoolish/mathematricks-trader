@@ -91,7 +91,8 @@ class StockMarginCalculator(BaseMarginCalculator):
         self,
         ticker: str,
         quantity: float,
-        price: float
+        price: float,
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Fetch margin requirement for stock from broker

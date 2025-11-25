@@ -2,15 +2,18 @@
 Broker Adapter for Cerebro Service
 
 Provides broker-like interface for margin calculations.
-Currently uses signal data and fallback calculations.
-TODO: Integrate with real broker APIs for live pricing.
+Uses AccountDataService to fetch real margin data from IBKR for futures.
 """
 
 import logging
+import requests
 from typing import Dict, Any, Optional
 from datetime import datetime
 
 logger = logging.getLogger('cerebro.broker_adapter')
+
+# AccountDataService URL
+ACCOUNT_DATA_SERVICE_URL = "http://localhost:8082"
 
 
 class CerebroBrokerAdapter:
@@ -28,15 +31,20 @@ class CerebroBrokerAdapter:
     - Get actual margin requirements from broker
     """
 
-    def __init__(self, broker_name: str = "IBKR"):
+    def __init__(self, broker_name: str = "IBKR", account_id: str = "IBKR_PAPER", use_mock: bool = False):
         """
         Initialize broker adapter
 
         Args:
             broker_name: Name of broker (for logging)
+            account_id: Account ID for margin queries
+            use_mock: If True, use mock data instead of real broker connections
         """
         self.broker_name = broker_name
-        logger.info(f"Initialized CerebroBrokerAdapter for {broker_name}")
+        self.account_id = account_id
+        self.use_mock = use_mock
+        mode_str = "MOCK MODE" if use_mock else "LIVE MODE"
+        logger.info(f"Initialized CerebroBrokerAdapter for {broker_name} (account: {account_id}) - {mode_str}")
 
     # ========================================================================
     # STOCK/ETF PRICING
@@ -217,19 +225,21 @@ class CerebroBrokerAdapter:
         ticker: str,
         quantity: float,
         price: float,
-        instrument_type: str
+        instrument_type: str,
+        signal_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Get margin requirement for a trade.
 
-        Current: Returns fallback calculations
-        TODO: Fetch actual margin from broker
+        For futures, queries AccountDataService which uses IBKR's whatIfOrder API.
+        For other instruments, uses fallback calculations.
 
         Args:
             ticker: Instrument symbol
             quantity: Trade quantity
             price: Trade price
             instrument_type: STOCK, FOREX, OPTION, FUTURE, CRYPTO
+            signal_data: Additional signal data (expiry, exchange, direction)
 
         Returns:
             Dict with margin info
@@ -269,11 +279,20 @@ class CerebroBrokerAdapter:
             }
 
         elif instrument_type == 'FUTURE':
-            # Cannot provide fallback for futures - too variable
-            raise ValueError(
-                f"Cannot calculate futures margin without broker data. "
-                f"Margin varies by contract and must be fetched from broker."
-            )
+            # In mock mode, use estimated margin; otherwise query IBKR
+            if self.use_mock:
+                # Use 10% initial margin estimate for mock mode (typical for Gold/Copper futures)
+                margin = notional_value * 0.10
+                logger.info(f"📋 MOCK MODE: Using estimated futures margin for {ticker}: ${margin:,.2f}")
+                return {
+                    'initial_margin': margin,
+                    'maintenance_margin': margin * 0.75,
+                    'margin_pct': 10.0,
+                    'method': 'Futures Mock Margin (10% estimate)'
+                }
+            else:
+                # Query actual margin from IBKR via AccountDataService
+                return self._get_futures_margin_from_broker(ticker, quantity, signal_data)
 
         elif instrument_type == 'OPTION':
             # Cannot provide fallback for options - too complex
@@ -291,6 +310,98 @@ class CerebroBrokerAdapter:
                 'margin_pct': 25.0,
                 'method': 'Conservative default (25%)'
             }
+
+    def _get_futures_margin_from_broker(
+        self,
+        ticker: str,
+        quantity: float,
+        signal_data: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Get actual futures margin from IBKR via AccountDataService.
+
+        Args:
+            ticker: Futures symbol (e.g., 'GC')
+            quantity: Number of contracts
+            signal_data: Signal data with expiry, exchange, direction
+
+        Returns:
+            Dict with margin info from broker
+
+        Raises:
+            ValueError: If margin cannot be fetched from broker
+        """
+        if not signal_data:
+            raise ValueError(
+                f"Cannot calculate futures margin without signal data. "
+                f"Signal must include expiry and exchange fields."
+            )
+
+        expiry = signal_data.get('expiry')
+        exchange = signal_data.get('exchange')
+        direction = signal_data.get('direction', 'LONG')
+
+        if not expiry:
+            raise ValueError(
+                f"Cannot calculate futures margin without expiry. "
+                f"Signal must include 'expiry' field (e.g., '20250224')."
+            )
+
+        if not exchange:
+            raise ValueError(
+                f"Cannot calculate futures margin without exchange. "
+                f"Signal must include 'exchange' field (e.g., 'COMEX')."
+            )
+
+        # Build margin preview request
+        payload = {
+            "instrument": ticker,
+            "direction": direction,
+            "quantity": quantity,
+            "order_type": "MARKET",
+            "instrument_type": "FUTURE",
+            "expiry": expiry,
+            "exchange": exchange
+        }
+
+        try:
+            logger.info(f"Querying IBKR for futures margin: {ticker} {direction} {quantity} contracts")
+            url = f"{ACCOUNT_DATA_SERVICE_URL}/api/v1/account/{self.account_id}/margin-preview"
+
+            response = requests.post(url, json=payload, timeout=35)
+
+            if response.status_code == 200:
+                result = response.json()
+                margin_impact = result.get('margin_impact', {})
+
+                init_margin = margin_impact.get('init_margin_change', 0)
+                maint_margin = margin_impact.get('maint_margin_change', 0)
+
+                logger.info(f"✅ Futures margin from IBKR: Initial=${init_margin:,.2f}, Maintenance=${maint_margin:,.2f}")
+
+                return {
+                    'initial_margin': init_margin,
+                    'maintenance_margin': maint_margin,
+                    'margin_pct': 0,  # Not percentage-based for futures
+                    'method': 'IBKR whatIfOrder (actual margin)',
+                    'commission': margin_impact.get('commission', 0)
+                }
+            else:
+                error_detail = response.json().get('detail', response.text)
+                raise ValueError(f"Failed to get futures margin from IBKR: {error_detail}")
+
+        except requests.exceptions.Timeout:
+            raise ValueError(
+                f"Timeout waiting for futures margin from IBKR. "
+                f"Ensure TWS/Gateway is running and AccountDataService is available."
+            )
+        except requests.exceptions.ConnectionError:
+            raise ValueError(
+                f"Cannot connect to AccountDataService at {ACCOUNT_DATA_SERVICE_URL}. "
+                f"Ensure the service is running."
+            )
+        except Exception as e:
+            raise ValueError(f"Failed to get futures margin for {ticker}: {str(e)}")
 
     # ========================================================================
     # QUANTITY PRECISION

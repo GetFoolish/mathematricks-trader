@@ -30,7 +30,7 @@ if [[ "$OSTYPE" != "darwin"* ]]; then
     exit 1
 fi
 
-echo -e "${BLUE}[1/7] Checking system prerequisites...${NC}"
+echo -e "${BLUE}[1/8] Checking system prerequisites...${NC}"
 echo ""
 
 # Check for Homebrew
@@ -61,7 +61,7 @@ fi
 
 # Check for MongoDB
 echo ""
-echo -e "${BLUE}[2/7] Checking MongoDB installation...${NC}"
+echo -e "${BLUE}[2/8] Checking MongoDB installation...${NC}"
 echo ""
 
 if ! command -v mongod &> /dev/null; then
@@ -81,7 +81,7 @@ fi
 
 # Check if MongoDB is running
 echo ""
-echo -e "${BLUE}[3/7] Checking MongoDB service...${NC}"
+echo -e "${BLUE}[3/8] Checking MongoDB service...${NC}"
 echo ""
 
 if pgrep -x "mongod" > /dev/null; then
@@ -113,7 +113,7 @@ fi
 
 # Create Python virtual environment
 echo ""
-echo -e "${BLUE}[4/7] Setting up Python virtual environment...${NC}"
+echo -e "${BLUE}[4/8] Setting up Python virtual environment...${NC}"
 echo ""
 
 if [ -d "$VENV_DIR" ]; then
@@ -142,7 +142,7 @@ pip install --upgrade pip > /dev/null 2>&1
 
 # Install requirements
 echo ""
-echo -e "${BLUE}[5/7] Installing Python dependencies...${NC}"
+echo -e "${BLUE}[5/8] Installing Python dependencies...${NC}"
 echo ""
 
 if [ -f "requirements.txt" ]; then
@@ -157,7 +157,7 @@ fi
 
 # Import MongoDB collections
 echo ""
-echo -e "${BLUE}[6/7] Importing MongoDB collections...${NC}"
+echo -e "${BLUE}[6/8] Importing MongoDB collections...${NC}"
 echo ""
 
 if [ -d "$COLLECTIONS_DIR" ]; then
@@ -201,9 +201,33 @@ else
     echo "You'll need to set up MongoDB collections manually."
 fi
 
+# Setup IB Gateway Docker (optional)
+echo ""
+echo -e "${BLUE}[7/8] Setting up IB Gateway Docker (optional)...${NC}"
+echo ""
+
+TOOLS_DIR="$(dirname "$0")/../tools"
+
+if [ -f "${TOOLS_DIR}/setup_docker.sh" ]; then
+    echo "IB Gateway Docker provides IBKR API connectivity."
+    echo "Skip this if you're using mock broker for testing."
+    echo ""
+    read -p "Setup IB Gateway Docker now? (y/n): " -n 1 -r
+    echo ""
+
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        bash "${TOOLS_DIR}/setup_docker.sh"
+    else
+        echo -e "${BLUE}ℹ️  Skipping IB Gateway Docker setup${NC}"
+        echo "   You can run it later: bash ${TOOLS_DIR}/setup_docker.sh"
+    fi
+else
+    echo -e "${YELLOW}⚠️  setup_docker.sh not found in ${TOOLS_DIR}${NC}"
+fi
+
 # Create .env file if it doesn't exist
 echo ""
-echo -e "${BLUE}[7/7] Checking configuration files...${NC}"
+echo -e "${BLUE}[8/8] Checking configuration files...${NC}"
 echo ""
 
 if [ ! -f ".env" ]; then

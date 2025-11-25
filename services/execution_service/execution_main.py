@@ -374,14 +374,20 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
         # Track active orders for cancellation
         order_id = order_data['order_id']
         broker_order_id = result.get('broker_order_id')
+        broker_confirmation_id = result.get('broker_confirmation_id')
         active_ibkr_orders[order_id] = broker_order_id
 
-        logger.debug(f"Order {order_data.get('order_id')} submitted - Broker Order ID: {broker_order_id}, Status: {result.get('status')}")
+        # Log confirmation ID prominently
+        logger.info(f"📋 Order {order_id} submitted to broker")
+        logger.info(f"   Broker Order ID: {broker_order_id}")
+        logger.info(f"   IBKR Confirmation ID: {broker_confirmation_id}")
+        logger.info(f"   Status: {result.get('status')}")
 
         # Return result with fill data from broker (Mock broker fills instantly, real broker updates later)
         return {
             "order_id": order_data['order_id'],
             "ib_order_id": broker_order_id,
+            "broker_confirmation_id": broker_confirmation_id,
             "status": result.get('status'),
             "filled": result.get('filled', 0),
             "remaining": result.get('remaining', order_data.get('quantity', 0)),
@@ -571,9 +577,9 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
         signal_type = order_data.get('signal_type', '').upper()
         order_id = order_data.get('order_id')
 
-        # For Mock broker, use "Mock_Paper" account
-        # TODO: Get account_id from order_data when multi-account support is added
-        account_id = "Mock_Paper" if args.use_mock_broker else "IBKR_Main"
+        # Get account_id from order_data, with fallback based on broker mode
+        default_account = "Mock_Paper" if args.use_mock_broker else "IBKR_Main"
+        account_id = order_data.get('account_id', default_account)
 
         # Find account document
         account_doc = trading_accounts_collection.find_one({"account_id": account_id})
@@ -706,19 +712,42 @@ def cancel_order(order_id: str) -> bool:
     Returns True if successfully cancelled, False otherwise
     """
     try:
-        if order_id not in active_ibkr_orders:
-            logger.warning(f"⚠️ Cannot cancel order {order_id} - not found in active orders")
+        # Look up the order in MongoDB to get account and broker_order_id
+        order_doc = trading_orders_collection.find_one({'order_id': order_id})
+        if not order_doc:
+            logger.error(f"❌ Cannot cancel order {order_id} - not found in trading_orders")
             return False
 
-        broker_order_id = active_ibkr_orders[order_id]
-        logger.info(f"🚫 Cancelling order {order_id} (broker order ID: {broker_order_id})...")
+        account_id = order_doc.get('account')
+        if not account_id:
+            logger.error(f"❌ Cannot cancel order {order_id} - no account specified")
+            return False
+
+        # Get broker_order_id from in-memory tracking or MongoDB
+        if order_id in active_ibkr_orders:
+            broker_order_id = active_ibkr_orders[order_id]
+            logger.info(f"🚫 Cancelling order {order_id} (broker order ID: {broker_order_id} from memory)...")
+        else:
+            # Fall back to MongoDB for orders from previous sessions
+            broker_order_id = order_doc.get('broker_order_id') or order_doc.get('ib_order_id')
+            if not broker_order_id:
+                logger.error(f"❌ Cannot cancel order {order_id} - no broker_order_id found in MongoDB")
+                return False
+            logger.info(f"🚫 Cancelling order {order_id} (broker order ID: {broker_order_id} from MongoDB)...")
+
+        # Get broker from pool
+        broker = get_broker_for_account(account_id)
+        if not broker:
+            logger.error(f"❌ Cannot cancel order {order_id} - broker not found for account {account_id}")
+            return False
 
         # Use broker library to cancel order
         success = broker.cancel_order(broker_order_id)
 
         if success:
-            # Remove from tracking
-            del active_ibkr_orders[order_id]
+            # Remove from tracking if present
+            if order_id in active_ibkr_orders:
+                del active_ibkr_orders[order_id]
             logger.info(f"✅ Order {order_id} cancelled successfully")
             return True
         else:
@@ -838,7 +867,8 @@ def process_order_from_queue(order_item: Dict[str, Any]):
         signal_logger.info(f"ORDER: {signal_id} | ORDER_RECEIVED | OrderID={order_id} | Instrument={order_data.get('instrument')} | Direction={order_data.get('direction')} | Quantity={order_data.get('quantity')}")
 
         # Log open positions BEFORE order execution
-        account_id = order_data.get('account_id', 'Mock_Paper')
+        default_account = "Mock_Paper" if args.use_mock_broker else "IBKR_Main"
+        account_id = order_data.get('account_id', default_account)
         log_open_positions(account_id, "BEFORE ORDER")
 
         # Submit order to broker (now safe - we're in main thread)

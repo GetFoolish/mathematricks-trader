@@ -6,12 +6,45 @@ Single responsibility: Account state management only
 import os
 import sys
 import logging
+import math
+import json
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 import uvicorn
+
+
+class NaNSafeJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles NaN and Inf values"""
+    def encode(self, o):
+        return super().encode(self._sanitize(o))
+
+    def _sanitize(self, obj):
+        if isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return 0.0
+            return obj
+        elif isinstance(obj, dict):
+            return {k: self._sanitize(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._sanitize(item) for item in obj]
+        return obj
+
+
+def sanitize_response(data: Any) -> Any:
+    """Recursively sanitize data to replace NaN/Inf with 0"""
+    if isinstance(data, float):
+        if math.isnan(data) or math.isinf(data):
+            return 0.0
+        return data
+    elif isinstance(data, dict):
+        return {k: sanitize_response(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_response(item) for item in data]
+    return data
 
 # Add parent directory to path for imports
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -26,7 +59,8 @@ from services.account_data_service.config import (
 )
 from services.account_data_service.repository import TradingAccountRepository
 from services.account_data_service.broker_poller import BrokerPoller
-from services.account_data_service.models import CreateAccountRequest
+from services.account_data_service.models import CreateAccountRequest, MarginPreviewRequest
+from brokers import BrokerFactory
 
 # Configure logging
 LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
@@ -196,10 +230,12 @@ def list_accounts(broker: Optional[str] = None, status: str = "ACTIVE"):
     """
     try:
         accounts = repository.list_accounts(broker=broker, status=status)
-        return {
+        # Sanitize response to handle NaN/Inf values from MongoDB
+        response_data = {
             "accounts": accounts,
             "count": len(accounts)
         }
+        return sanitize_response(response_data)
     except Exception as e:
         logger.error(f"Error listing accounts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -215,7 +251,7 @@ def get_account(account_id: str):
                 status_code=404,
                 detail=f"Account {account_id} not found"
             )
-        return {"account": account}
+        return sanitize_response({"account": account})
     except HTTPException:
         raise
     except Exception as e:
@@ -370,6 +406,118 @@ def sync_account_legacy(account_name: str):
     return sync_account(account_name)
 
 
+@app.post("/api/v1/account/{account_name}/margin-preview")
+def get_margin_preview(account_name: str, request: MarginPreviewRequest):
+    """
+    Get margin requirements for a hypothetical order using IBKR's whatIfOrder API.
+
+    This queries the actual broker for real margin requirements before placing an order.
+    Currently only supports IBKR accounts.
+
+    Example request body:
+    {
+        "instrument": "GC",
+        "direction": "LONG",
+        "quantity": 2,
+        "order_type": "MARKET",
+        "instrument_type": "FUTURE",
+        "expiry": "20250224",
+        "exchange": "COMEX"
+    }
+
+    Returns margin impact data from broker.
+    """
+    import concurrent.futures
+    import asyncio
+
+    try:
+        account = repository.get_account(account_name)
+        if not account:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Account {account_name} not found"
+            )
+
+        # Currently only IBKR supports whatIfOrder
+        if account['broker'] != 'IBKR':
+            raise HTTPException(
+                status_code=400,
+                detail=f"Margin preview only supported for IBKR accounts, not {account['broker']}"
+            )
+
+        # Build broker config
+        # IBKR connection settings come from environment variables (IBKR_HOST, IBKR_PORT, IBKR_CLIENT_ID)
+        config = {
+            "broker": "IBKR",
+            "account_id": account_name,
+        }
+
+        # Build order for margin query
+        order = {
+            "instrument": request.instrument,
+            "direction": request.direction,
+            "quantity": request.quantity,
+            "order_type": request.order_type,
+            "instrument_type": request.instrument_type,
+        }
+
+        # Add optional fields
+        if request.expiry:
+            order["expiry"] = request.expiry
+        if request.exchange:
+            order["exchange"] = request.exchange
+        if request.limit_price:
+            order["limit_price"] = request.limit_price
+
+        logger.info(f"Getting margin preview for {account_name}: {request.instrument} {request.direction} {request.quantity}")
+
+        # Run margin query in separate thread (IBKR needs its own event loop)
+        def query_margin():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                broker = BrokerFactory.create_broker(config)
+
+                if not broker.is_connected():
+                    if not broker.connect():
+                        raise Exception("Failed to connect to IBKR")
+
+                # Query margin impact
+                result = broker.get_order_margin_impact(order)
+
+                # Disconnect
+                broker.disconnect()
+
+                return result
+            finally:
+                loop.close()
+
+        # Execute in thread pool with timeout
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(query_margin)
+            try:
+                result = future.result(timeout=30)
+            except concurrent.futures.TimeoutError:
+                raise HTTPException(
+                    status_code=504,
+                    detail="Timeout waiting for margin data from IBKR"
+                )
+
+        return {
+            "account_id": account_name,
+            "instrument": request.instrument,
+            "quantity": request.quantity,
+            "direction": request.direction,
+            "margin_impact": result
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting margin preview: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================================================
 # FUND-LEVEL AGGREGATION
 # ============================================================================
@@ -412,7 +560,7 @@ def get_fund_state():
             broker_breakdown[broker]['num_accounts'] += 1
             broker_breakdown[broker]['accounts'].append(acc['account_id'])
 
-        return {
+        response_data = {
             "fund_state": {
                 "timestamp": datetime.utcnow(),
                 "total_equity": total_equity,
@@ -426,6 +574,7 @@ def get_fund_state():
                 "broker_breakdown": list(broker_breakdown.values())
             }
         }
+        return sanitize_response(response_data)
 
     except Exception as e:
         logger.error(f"Error calculating fund state: {e}")

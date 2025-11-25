@@ -4,15 +4,16 @@
         "passphrase": "test_password_123",
         "signal_type": "ENTRY",
         "entry_name": "$ENTRY_1",
+        "account_equity": 500000,
         "signal_legs": [
             {
-                "instrument": "BTC",
-                "instrument_type": "CRYPTO",
+                "instrument": "EURUSD",
+                "instrument_type": "FOREX",
                 "action": "BUY",
                 "direction": "LONG",
-                "quantity": 0.25,
+                "quantity": 20000,
                 "order_type": "MARKET",
-                "price": 94000.00,
+                "price": 1.0850,
                 "environment": "staging"
             }
         ],
@@ -23,15 +24,16 @@
         "passphrase": "test_password_123",
         "signal_type": "ENTRY",
         "entry_name": "$ENTRY_2",
+        "account_equity": 500000,
         "signal_legs": [
             {
-                "instrument": "BTC",
-                "instrument_type": "CRYPTO",
+                "instrument": "EURUSD",
+                "instrument_type": "FOREX",
                 "action": "BUY",
                 "direction": "LONG",
-                "quantity": 0.35,
+                "quantity": 15000,
                 "order_type": "MARKET",
-                "price": 93500.00,
+                "price": 1.0860,
                 "environment": "staging"
             }
         ],
@@ -42,15 +44,16 @@
         "passphrase": "test_password_123",
         "signal_type": "ENTRY",
         "entry_name": "$ENTRY_3",
+        "account_equity": 500000,
         "signal_legs": [
             {
-                "instrument": "BTC",
-                "instrument_type": "CRYPTO",
+                "instrument": "EURUSD",
+                "instrument_type": "FOREX",
                 "action": "BUY",
                 "direction": "LONG",
-                "quantity": 0.40,
+                "quantity": 25000,
                 "order_type": "MARKET",
-                "price": 93000.00,
+                "price": 1.0870,
                 "environment": "staging"
             }
         ],
@@ -61,15 +64,16 @@
         "passphrase": "test_password_123",
         "signal_type": "EXIT",
         "entry_signal_id": "$ENTRY_1",
+        "account_equity": 500000,
         "signal_legs": [
             {
-                "instrument": "BTC",
-                "instrument_type": "CRYPTO",
+                "instrument": "EURUSD",
+                "instrument_type": "FOREX",
                 "action": "SELL",
                 "direction": "SHORT",
-                "quantity": 0.25,
+                "quantity": 20000,
                 "order_type": "MARKET",
-                "price": 96000.00,
+                "price": 1.0900,
                 "environment": "staging"
             }
         ],
@@ -80,15 +84,16 @@
         "passphrase": "test_password_123",
         "signal_type": "EXIT",
         "entry_signal_id": "$ENTRY_2",
+        "account_equity": 500000,
         "signal_legs": [
             {
-                "instrument": "BTC",
-                "instrument_type": "CRYPTO",
+                "instrument": "EURUSD",
+                "instrument_type": "FOREX",
                 "action": "SELL",
                 "direction": "SHORT",
-                "quantity": 0.35,
+                "quantity": 15000,
                 "order_type": "MARKET",
-                "price": 96500.00,
+                "price": 1.0910,
                 "environment": "staging"
             }
         ],
@@ -99,15 +104,16 @@
         "passphrase": "test_password_123",
         "signal_type": "EXIT",
         "entry_signal_id": "$ENTRY_3",
+        "account_equity": 500000,
         "signal_legs": [
             {
-                "instrument": "BTC",
-                "instrument_type": "CRYPTO",
+                "instrument": "EURUSD",
+                "instrument_type": "FOREX",
                 "action": "SELL",
                 "direction": "SHORT",
-                "quantity": 0.40,
+                "quantity": 25000,
                 "order_type": "MARKET",
-                "price": 97000.00,
+                "price": 1.0920,
                 "environment": "staging"
             }
         ]

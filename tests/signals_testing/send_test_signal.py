@@ -86,16 +86,11 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
         signal_doc["signal_sent_EPOCH"] = int(now_utc.timestamp())
 
     if "signalID" not in signal_doc:
-        strategy = signal_doc.get("strategy_name", "unknown")
-        # Handle signal_legs (new) or signal (legacy) as array or dict
-        signal_raw = signal_doc.get("signal_legs") or signal_doc.get("signal", {})
-        if isinstance(signal_raw, list):
-            instrument = signal_raw[0].get("instrument") or signal_raw[0].get("ticker", "unknown") if len(signal_raw) > 0 else "unknown"
-        else:
-            instrument = signal_raw.get("instrument") or signal_raw.get("ticker", "unknown")
+        # Simple auto-generated ID: just timestamp_random
+        # User can provide their own signalID in the signal file for custom IDs
         timestamp = signal_doc["signal_sent_EPOCH"]
-        random_id = random.randint(0, 100000)
-        signal_doc["signalID"] = f"test_{strategy}_{instrument}_{timestamp}_{random_id}"
+        random_id = random.randint(1000, 9999)
+        signal_doc["signalID"] = f"sig_{timestamp}_{random_id}"
 
     # Insert into trading_signals_raw collection
     try:
@@ -150,7 +145,12 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
             # Poll signal_store for up to 10 seconds
             for i in range(20):  # 20 attempts, 0.5s each = 10s total
                 time.sleep(0.5)
-                signal_store_doc = db.signal_store.find_one({"signal_id": signal_id})
+                # Sort by _id descending to get the NEWEST entry with this signal_id
+                # (avoids picking up stale entries from previous test runs)
+                signal_store_doc = db.signal_store.find_one(
+                    {"signal_id": signal_id},
+                    sort=[("_id", -1)]
+                )
                 if signal_store_doc:
                     entry_store_id = str(signal_store_doc['_id'])
                     print(f"✓ ENTRY signal processed - signal_store ID: {entry_store_id[:12]}...")

@@ -70,3 +70,15 @@ class CreateAccountRequest(BaseModel):
     broker: str
     account_number: Optional[str] = None
     authentication_details: AuthenticationDetails
+
+
+class MarginPreviewRequest(BaseModel):
+    """Request to preview margin requirements for a hypothetical order"""
+    instrument: str
+    direction: str  # "LONG" or "SHORT"
+    quantity: float
+    order_type: str = "MARKET"  # "MARKET" or "LIMIT"
+    instrument_type: str  # "STOCK", "FOREX", "FUTURE", "OPTION"
+    expiry: Optional[str] = None  # Required for futures
+    exchange: Optional[str] = None  # Exchange for futures
+    limit_price: Optional[float] = None  # For LIMIT orders

@@ -25,8 +25,126 @@ VENV_PYTHON = PROJECT_ROOT / "venv" / "bin" / "python"
 LOG_DIR = PROJECT_ROOT / "logs"
 PID_DIR = LOG_DIR / "pids"
 
+# IB Gateway Docker settings
+IBKR_CONTAINER_NAME = "ib-gateway"
+IBKR_IMAGE = "ghcr.io/gnzsnz/ib-gateway:latest"
+
 # Global process registry
 PROCESSES: Dict[str, subprocess.Popen] = {}
+
+def load_env_file():
+    """Load environment variables from .env file"""
+    env_file = PROJECT_ROOT / ".env"
+    env_vars = {}
+    if env_file.exists():
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    # Remove quotes from value
+                    value = value.strip().strip('"').strip("'")
+                    env_vars[key] = value
+    return env_vars
+
+def start_ibkr_gateway(use_live: bool = False):
+    """Start IB Gateway Docker container"""
+    print(f"\n{Colors.YELLOW}Starting IB Gateway Docker...{Colors.NC}")
+
+    # Check if Docker is available
+    try:
+        result = subprocess.run(["docker", "info"], capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"{Colors.RED}✗ Docker daemon is not running{Colors.NC}")
+            print("  Please start Docker Desktop and try again")
+            sys.exit(1)
+    except FileNotFoundError:
+        print(f"{Colors.RED}✗ Docker is not installed{Colors.NC}")
+        sys.exit(1)
+
+    # Check if container already exists and is running
+    result = subprocess.run(
+        ["docker", "ps", "--filter", f"name={IBKR_CONTAINER_NAME}", "--format", "{{.Names}}"],
+        capture_output=True, text=True
+    )
+    if IBKR_CONTAINER_NAME in result.stdout:
+        print(f"✓ IB Gateway container already running")
+        return
+
+    # Check if container exists but is stopped
+    result = subprocess.run(
+        ["docker", "ps", "-a", "--filter", f"name={IBKR_CONTAINER_NAME}", "--format", "{{.Names}}"],
+        capture_output=True, text=True
+    )
+    if IBKR_CONTAINER_NAME in result.stdout:
+        # Start existing container
+        print("Starting existing IB Gateway container...")
+        subprocess.run(["docker", "start", IBKR_CONTAINER_NAME], capture_output=True)
+        print(f"✓ IB Gateway container started")
+    else:
+        # Create and start new container
+        print("Creating new IB Gateway container...")
+
+        # Load credentials from .env
+        env_vars = load_env_file()
+
+        if use_live:
+            username = env_vars.get("IBKR_LIVE_USERNAME", "")
+            password = env_vars.get("IBKR_LIVE_PASSWORD", "")
+            trading_mode = "live"
+        else:
+            username = env_vars.get("IBKR_PAPER_USERNAME", "")
+            password = env_vars.get("IBKR_PAPER_PASSWORD", "")
+            trading_mode = "paper"
+
+        if not username or not password:
+            print(f"{Colors.RED}✗ IBKR credentials not found in .env file{Colors.NC}")
+            print(f"  Please set IBKR_{'LIVE' if use_live else 'PAPER'}_USERNAME and IBKR_{'LIVE' if use_live else 'PAPER'}_PASSWORD")
+            sys.exit(1)
+
+        # Build docker command
+        # gnzsnz/ib-gateway uses internal ports 4003 (live) and 4004 (paper)
+        docker_cmd = [
+            "docker", "run", "-d",
+            "--name", IBKR_CONTAINER_NAME,
+            "-p", "4001:4003",  # Live trading
+            "-p", "4002:4004",  # Paper trading
+            "-p", "5900:5900",  # VNC
+            "-e", f"TWS_USERID={username}",
+            "-e", f"TWS_PASSWORD={password}",
+            "-e", f"TRADING_MODE={trading_mode}",
+            "-e", "TWOFA_TIMEOUT_ACTION=restart",
+            "-e", "READ_ONLY_API=no",
+            "-e", "IBC_AcceptIncomingConnectionAction=accept",
+            "-e", "VNC_SERVER_PASSWORD=ibgateway",  # Enable VNC with password
+            IBKR_IMAGE
+        ]
+
+        result = subprocess.run(docker_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"{Colors.RED}✗ Failed to start IB Gateway container{Colors.NC}")
+            print(f"  Error: {result.stderr}")
+            sys.exit(1)
+
+        print(f"✓ IB Gateway container created ({trading_mode} trading)")
+        print(f"  {Colors.YELLOW}Note: First login requires 2FA approval on your IBKR mobile app{Colors.NC}")
+
+    # Wait for API port to be ready
+    port = 4001 if use_live else 4002
+    print(f"Waiting for IB Gateway API (port {port})...")
+
+    for i in range(30):  # Wait up to 30 seconds
+        result = subprocess.run(
+            ["lsof", "-i", f":{port}"],
+            capture_output=True, text=True
+        )
+        if "LISTEN" in result.stdout:
+            print(f"✓ IB Gateway API ready on port {port}")
+            return
+        time.sleep(1)
+
+    print(f"{Colors.YELLOW}⚠️  IB Gateway API not ready yet (may need 2FA approval){Colors.NC}")
+    print(f"  Check: docker logs {IBKR_CONTAINER_NAME}")
 
 def cleanup_on_exit(signum=None, frame=None):
     """Cleanup handler for graceful shutdown"""
@@ -37,6 +155,18 @@ def cleanup_on_exit(signum=None, frame=None):
             print(f"✓ Terminated {name}")
         except:
             pass
+
+    # Stop IB Gateway Docker container
+    try:
+        result = subprocess.run(
+            ["docker", "stop", IBKR_CONTAINER_NAME],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            print(f"✓ Stopped {IBKR_CONTAINER_NAME}")
+    except:
+        pass
+
     sys.exit(0)
 
 # Register signal handlers
@@ -199,12 +329,15 @@ def check_service_health(name: str, check_func, timeout: int = 10):
         time.sleep(1)
     return False
 
-def print_status(use_mock_broker: bool = False):
+def print_status(use_mock_broker: bool = False, use_live: bool = False):
     """Print final status of all services"""
     print("\n" + "=" * 70)
     print(f"{Colors.GREEN}✓ ALL SERVICES STARTED!{Colors.NC}")
     print("=" * 70)
     print("\nServices:")
+    trading_mode = "Live" if use_live else "Paper"
+    port = 4001 if use_live else 4002
+    print(f"  • IB Gateway Docker: localhost:{port} ({trading_mode} Trading)")
     print("  • Pub/Sub Emulator: localhost:8085")
     print("  • AccountDataService: http://localhost:8082")
     print("  • PortfolioBuilderService: http://localhost:8003")
@@ -240,6 +373,8 @@ def main():
     parser = argparse.ArgumentParser(description='Mathematricks MVP Demo - Start all services')
     parser.add_argument('--use-mock-broker', action='store_true',
                         help='Use Mock broker for all orders (testing mode, overrides strategy account routing)')
+    parser.add_argument('--live', action='store_true',
+                        help='Use live trading mode (default: paper trading)')
     args = parser.parse_args()
 
     print("=" * 70)
@@ -254,6 +389,14 @@ def main():
         print("=" * 70)
         print(f"{Colors.NC}")
 
+    # Show live trading warning if enabled
+    if args.live:
+        print(f"{Colors.RED}")
+        print("=" * 70)
+        print("⚠️  LIVE TRADING MODE: Real money will be used!")
+        print("=" * 70)
+        print(f"{Colors.NC}")
+
     print("")
 
     # Check prerequisites
@@ -264,6 +407,9 @@ def main():
     PID_DIR.mkdir(exist_ok=True)
 
     try:
+        # Start IB Gateway Docker
+        start_ibkr_gateway(use_live=args.live)
+
         # Start Pub/Sub emulator
         start_pubsub_emulator()
 
@@ -299,7 +445,10 @@ def main():
             "cerebro_service",
             [str(VENV_PYTHON), "cerebro_main.py"],
             PROJECT_ROOT / "services" / "cerebro_service",
-            env={"ACCOUNT_DATA_SERVICE_URL": "http://localhost:8082"}
+            env={
+                "ACCOUNT_DATA_SERVICE_URL": "http://localhost:8082",
+                "USE_MOCK_BROKER": "true" if args.use_mock_broker else "false"
+            }
         )
         time.sleep(2)
 
@@ -343,7 +492,7 @@ def main():
         PROCESSES["frontend"] = proc
 
         # Print status
-        print_status(use_mock_broker=args.use_mock_broker)
+        print_status(use_mock_broker=args.use_mock_broker, use_live=args.live)
 
         # Keep main process alive
         print(f"{Colors.YELLOW}Services running. Press Ctrl+C to stop all services.{Colors.NC}\n")

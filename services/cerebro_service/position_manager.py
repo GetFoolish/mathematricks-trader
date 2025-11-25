@@ -190,7 +190,7 @@ class PositionManager:
 
             explicit_type = (nested_signal.get('signal_type') or '').upper()
 
-        if explicit_type in ['ENTRY', 'EXIT', 'SCALE_IN', 'SCALE_OUT']:
+        if explicit_type in ['ENTRY', 'EXIT', 'SCALE_IN', 'SCALE_OUT', 'CANCEL']:
             return {
                 'signal_type': explicit_type,
                 'method': 'explicit',

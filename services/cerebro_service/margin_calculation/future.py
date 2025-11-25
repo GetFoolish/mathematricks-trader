@@ -93,7 +93,8 @@ class FutureMarginCalculator(BaseMarginCalculator):
         self,
         ticker: str,
         quantity: float,
-        price: float
+        price: float,
+        signal_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Fetch margin requirement for futures from broker
@@ -109,6 +110,7 @@ class FutureMarginCalculator(BaseMarginCalculator):
             ticker: Futures symbol
             quantity: Number of contracts
             price: Price per contract
+            signal_data: Signal data with expiry, exchange, direction (required for IBKR margin query)
 
         Returns:
             Dict with margin information:
@@ -129,7 +131,8 @@ class FutureMarginCalculator(BaseMarginCalculator):
                     ticker=ticker,
                     quantity=quantity,
                     price=price,
-                    instrument_type='FUTURE'
+                    instrument_type='FUTURE',
+                    signal_data=signal_data
                 )
 
                 # Futures margin is per-contract based

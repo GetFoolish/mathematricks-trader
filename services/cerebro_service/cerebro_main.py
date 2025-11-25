@@ -116,7 +116,9 @@ DEFAULT_ACCOUNT_ID = os.getenv('DEFAULT_ACCOUNT_ID', 'Mock_Paper')
 position_manager = PositionManager(mongo_client, default_account_id=DEFAULT_ACCOUNT_ID)
 
 # Initialize Broker Adapter for margin calculations
-broker_adapter = CerebroBrokerAdapter(broker_name="IBKR")
+# Check if we're in mock broker mode
+USE_MOCK_BROKER = os.getenv('USE_MOCK_BROKER', 'false').lower() == 'true'
+broker_adapter = CerebroBrokerAdapter(broker_name="IBKR", use_mock=USE_MOCK_BROKER)
 
 # Initialize Precision Service for quantity normalization
 precision_service = get_precision_service(PROJECT_ROOT)
@@ -201,37 +203,6 @@ ALLOCATIONS_LOCK = threading.Lock()
 # Global: Portfolio Constructor instance
 PORTFOLIO_CONSTRUCTOR = None
 CONSTRUCTOR_LOCK = threading.Lock()
-
-
-# ============================================================================
-# LEGACY FUNCTIONS (for backward compatibility with tests)
-# ============================================================================
-
-def calculate_position_size(signal: Dict[str, Any], account_state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Calculate position size based on portfolio allocation and risk limits.
-
-    LEGACY FUNCTION - Kept for backwards compatibility with tests.
-    New code should use process_signal_with_constructor() instead.
-
-    This wrapper function uses global ACTIVE_ALLOCATIONS and calls the pure function
-    from position_sizing.py module.
-    """
-    from position_sizing import calculate_position_size_legacy
-
-    strategy_id = signal.get('strategy_id')
-
-    # Get strategy allocation from global ACTIVE_ALLOCATIONS
-    with ALLOCATIONS_LOCK:
-        strategy_allocation_pct = ACTIVE_ALLOCATIONS.get(strategy_id, 0)
-
-    # Call pure function with explicit parameters
-    return calculate_position_size_legacy(
-        signal=signal,
-        account_state=account_state,
-        strategy_allocation_pct=strategy_allocation_pct,
-        mvp_config=MVP_CONFIG
-    )
 
 
 # ============================================================================
@@ -434,36 +405,28 @@ def load_strategy_histories_from_mongodb() -> Dict[str, Any]:
 
 def get_strategy_metadata(strategy_id: str) -> Dict[str, Any]:
     """
-    Get strategy metadata including position sizing and margin data.
+    Get strategy metadata for backtest margin comparison.
 
     Returns:
         dict with:
-            - estimated_avg_positions
-            - median_margin_pct
-            - estimated_position_margin
+            - median_margin_pct (decimal, e.g., 0.5 for 50%)
     """
     try:
         strategy = strategies_collection.find_one({"strategy_id": strategy_id})
         if not strategy:
             logger.warning(f"Strategy {strategy_id} not found in MongoDB")
             return {
-                "estimated_avg_positions": 3.0,  # Default
-                "median_margin_pct": 0.5,  # 50% default
-                "estimated_position_margin": 10000.0
+                "median_margin_pct": 0.5  # 50% default
             }
 
         position_sizing = strategy.get('position_sizing', {})
         return {
-            "estimated_avg_positions": position_sizing.get('estimated_avg_positions', 3.0),
-            "median_margin_pct": position_sizing.get('median_margin_pct', 50.0) / 100.0,  # Convert % to decimal
-            "estimated_position_margin": position_sizing.get('estimated_position_margin', 10000.0)
+            "median_margin_pct": position_sizing.get('median_margin_pct', 50.0) / 100.0  # Convert % to decimal
         }
     except Exception as e:
         logger.error(f"Error getting strategy metadata for {strategy_id}: {e}")
         return {
-            "estimated_avg_positions": 3.0,
-            "median_margin_pct": 0.5,
-            "estimated_position_margin": 10000.0
+            "median_margin_pct": 0.5
         }
 
 
@@ -1035,8 +998,9 @@ def log_detailed_calculation_math(signal: Dict[str, Any], context, decision_obj,
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Instrument: {signal.get('instrument')}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Direction: {signal.get('direction')}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Action: {signal.get('action')}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Requested Quantity: {signal.get('quantity', 0)}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Price: ${signal.get('price', 0):,.2f}")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Quantity: {signal.get('quantity', 0)}")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Price: ${signal.get('price', 0):,.2f}")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Account Equity: ${signal.get('account_equity', 0):,.2f}")
 
     # Signal type detection
     if decision_obj.metadata and 'signal_type_info' in decision_obj.metadata:
@@ -1069,31 +1033,42 @@ def log_detailed_calculation_math(signal: Dict[str, Any], context, decision_obj,
 
     # Strategy allocation
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- ALLOCATION CALCULATION ---")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Account Equity: ${context.account_equity:,.2f}")
     if decision_obj.metadata and 'allocation_pct' in decision_obj.metadata:
         allocation_pct = decision_obj.metadata.get('allocation_pct', 0)
         log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Strategy Allocation: {allocation_pct:.2f}%")
 
-        # Show correct calculation: account_equity × allocation_pct = total_strategy_allocation
+        # Show calculation
         if decision_obj.metadata and 'position_sizing' in decision_obj.metadata:
-            total_allocation = decision_obj.metadata['position_sizing'].get('total_strategy_allocation', 0)
-            if total_allocation is not None:
-                log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Calculation: {context.account_equity:,.2f} × {allocation_pct:.2f}% = ${total_allocation:,.2f}")
+            allocated = decision_obj.metadata['position_sizing'].get('allocated_capital', decision_obj.allocated_capital)
+            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital: ${context.account_equity:,.2f} × {allocation_pct/100:.4f} = ${allocated:,.2f}")
         else:
-            # Fallback to allocated_capital if position_sizing not available
             allocated_cap = decision_obj.allocated_capital if decision_obj.allocated_capital is not None else 0
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Calculation: {context.account_equity:,.2f} × {allocation_pct:.2f}% = ${allocated_cap:,.2f}")
+            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital: ${context.account_equity:,.2f} × {allocation_pct/100:.4f} = ${allocated_cap:,.2f}")
 
     # Position sizing details (if available)
     if decision_obj.metadata and 'position_sizing' in decision_obj.metadata:
         ps = decision_obj.metadata['position_sizing']
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- SMART POSITION SIZING ---")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Total Strategy Allocation: ${ps['total_strategy_allocation']:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Estimated Avg Positions: {ps['estimated_avg_positions']:.1f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Per-Position Capital: ${ps['per_position_capital']:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Calculation: ${ps['total_strategy_allocation']:,.2f} ÷ {ps['estimated_avg_positions']:.1f} = ${ps['per_position_capital']:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Deployed Capital: ${ps['deployed_capital']:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Remaining Capital: ${ps['remaining_capital']:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | This Position Capital: ${ps['this_position_capital']:,.2f}")
+
+        # Deployed capital section
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- DEPLOYED CAPITAL ---")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Open Positions: {ps.get('position_count', 0)}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Deployed Capital: ${ps.get('deployed_capital', 0):,.2f}")
+        allocated = ps.get('allocated_capital', 0)
+        deployed = ps.get('deployed_capital', 0)
+        available = ps.get('allocated_capital_available', allocated - deployed)
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital Available: ${allocated:,.2f} - ${deployed:,.2f} = ${available:,.2f}")
+
+        # Ratio-based quantity section
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- RATIO-BASED QUANTITY ---")
+        signal_qty = signal.get('quantity', 0)
+        signal_equity = ps.get('signal_account_equity', 0)
+        scaling_ratio = ps.get('scaling_ratio', 0)
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal: {signal_qty} units with ${signal_equity:,.2f} equity")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Scaling Ratio: ${available:,.2f} / ${signal_equity:,.2f} = {scaling_ratio:.5f}")
+        calculated_qty = signal_qty * scaling_ratio
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Calculated Quantity: {signal_qty} × {scaling_ratio:.5f} = {calculated_qty:.4f}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Normalized Quantity: {decision_obj.quantity}")
 
         # Show current open positions for this strategy
         if ps.get('position_count', 0) > 0:
@@ -1101,62 +1076,34 @@ def log_detailed_calculation_math(signal: Dict[str, Any], context, decision_obj,
             for idx, pos_summary in enumerate(ps.get('open_positions_summary', []), 1):
                 cost_basis = pos_summary.get('cost_basis') or 0
                 log_lines.append(
-                    f"SIGNAL: {signal_id} | DETAILED_MATH | Position {idx}: {pos_summary.get('quantity', 0)} shares "
+                    f"SIGNAL: {signal_id} | DETAILED_MATH | Position {idx}: {pos_summary.get('quantity', 0)} units "
                     f"{pos_summary.get('instrument', 'N/A')} {pos_summary.get('direction', 'N/A')} (cost: ${cost_basis:,.2f})"
                 )
+
+    # Margin validation section
+    if decision_obj.metadata and 'position_sizing' in decision_obj.metadata:
+        ps = decision_obj.metadata['position_sizing']
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- MARGIN VALIDATION ---")
+
+        margin_required = ps.get('margin_required', decision_obj.margin_required)
+        available = ps.get('allocated_capital_available', 0)
+        notional = ps.get('notional_value', 0)
+        margin_method = ps.get('margin_method', 'Broker query')
+
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Required: ${margin_required:,.2f}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital Available: ${available:,.2f}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Notional Value: ${notional:,.2f}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Method: {margin_method}")
+
+        # Show margin check result
+        if margin_required > available:
+            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Check: ${margin_required:,.2f} > ${available:,.2f} = EXCEEDS")
         else:
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- CURRENT OPEN POSITIONS (0) ---")
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | No open positions for this strategy")
-
-    # Margin calculation - Show BOTH backtest and IBKR estimates
-    if decision_obj.margin_required or (decision_obj.metadata and 'position_sizing' in decision_obj.metadata):
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- MARGIN CALCULATION ---")
-
-        if decision_obj.metadata and 'position_sizing' in decision_obj.metadata:
-            ps = decision_obj.metadata['position_sizing']
-
-            # Backtest margin (historical reference)
-            backtest_margin_pct = ps.get('backtest_margin_pct', ps.get('margin_pct_used', 0))
-            backtest_margin = ps.get('backtest_margin', 0)
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | 📊 Backtest Margin %: {backtest_margin_pct:.2f}% (historical median)")
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | 📊 Backtest Margin: ${backtest_margin:,.2f}")
-            if decision_obj.allocated_capital > 0:
-                log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | 📊 Calculation: ${decision_obj.allocated_capital:,.2f} × {backtest_margin_pct:.2f}% = ${backtest_margin:,.2f}")
-
-            # IBKR estimated margin (realistic requirement)
-            ibkr_margin = ps.get('ibkr_estimated_margin', decision_obj.margin_required)
-            ibkr_margin_pct = ps.get('ibkr_margin_pct', 0)
-            ibkr_method = ps.get('ibkr_margin_method', 'Standard calculation')
-            notional = ps.get('notional_value', 0)
-
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | 💰 IBKR Estimated Margin: ${ibkr_margin:,.2f}")
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | 💰 IBKR Margin %: {ibkr_margin_pct:.2f}%")
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | 💰 Method: {ibkr_method}")
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | 💰 Notional Value: ${notional:,.2f}")
-
-            # Show warning if estimates differ significantly
-            if backtest_margin > 0:
-                ratio = ibkr_margin / backtest_margin
-                if ratio > 2 or ratio < 0.5:
-                    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | ⚠️ WARNING: IBKR estimate is {ratio:.1f}x backtest margin")
-        else:
-            # Fallback if metadata not available
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital: ${decision_obj.allocated_capital:,.2f}")
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Required: ${decision_obj.margin_required:,.2f}")
-
-    # Position sizing
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- POSITION SIZING ---")
-    if decision_obj.allocated_capital and signal.get('price', 0) > 0:
-        calculated_shares = decision_obj.allocated_capital / signal.get('price', 1)
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Shares (before rounding): {calculated_shares:.4f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Calculation: ${decision_obj.allocated_capital:,.2f} ÷ ${signal.get('price', 0):,.2f} = {calculated_shares:.4f} shares")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Final Shares (rounded): {decision_obj.quantity:.0f}")
-
-    # Notional value
-    if decision_obj.quantity > 0 and signal.get('price', 0) > 0:
-        notional_value = decision_obj.quantity * signal.get('price', 0)
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Final Notional Value: ${notional_value:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Calculation: {decision_obj.quantity:.0f} shares × ${signal.get('price', 0):,.2f} = ${notional_value:,.2f}")
+            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Check: ${margin_required:,.2f} < ${available:,.2f} = OK")
+    elif decision_obj.margin_required:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- MARGIN VALIDATION ---")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital: ${decision_obj.allocated_capital:,.2f}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Required: ${decision_obj.margin_required:,.2f}")
 
     # Final decision
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- FINAL DECISION ---")
@@ -1302,12 +1249,90 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     # Step 4a: Determine Signal Type (ENTRY/EXIT/SCALE)
     signal_type_info = position_manager.determine_signal_type(signal)
 
-    # Step 4a.1: Check for pending ENTRY orders if this is an EXIT signal
+    # Step 4a.1: CANCEL SIGNAL HANDLING - Cancel pending orders
+    signal_type = signal_type_info.get('signal_type')
+    if signal_type == 'CANCEL':
+        logger.info(f"🚫 CANCEL signal received - cancelling pending orders")
+
+        strategy_id = signal.get('strategy_id')
+        instrument = signal.get('instrument')
+        entry_signal_id = signal.get('entry_signal_id')
+
+        # Query trading_orders collection for pending orders to cancel
+        # Look for orders that are PENDING, SUBMITTED, or PRESUBMITTED (not yet filled)
+        query = {
+            'strategy_id': strategy_id,
+            'instrument': instrument,
+            'status': {'$in': ['PENDING', 'SUBMITTED', 'PRESUBMITTED', 'PreSubmitted']}
+        }
+
+        pending_orders = list(trading_orders_collection.find(query).sort('created_at', -1).limit(10))
+
+        if not pending_orders:
+            logger.warning(f"⚠️ No pending orders found to cancel for {strategy_id}/{instrument}")
+            # Update signal store with CANCEL status
+            if signal_store_id:
+                from bson import ObjectId
+                signal_store_collection.update_one(
+                    {'_id': ObjectId(signal_store_id)},
+                    {'$set': {
+                        'cerebro_decision': {
+                            'action': 'CANCEL_NO_TARGET',
+                            'timestamp': datetime.utcnow(),
+                            'message': f'No pending orders found to cancel for {instrument}'
+                        },
+                        'status': 'processed'
+                    }}
+                )
+            return
+
+        # Cancel all matching pending orders
+        cancelled_count = 0
+        for order in pending_orders:
+            order_id = order.get('order_id')
+            logger.info(f"🚫 Cancelling order: {order_id}")
+
+            success = publish_cancel_command(
+                order_id,
+                reason=f"CANCEL signal received for {instrument}"
+            )
+
+            if success:
+                cancelled_count += 1
+                # Update order status in MongoDB to 'CANCEL_REQUESTED'
+                trading_orders_collection.update_one(
+                    {'order_id': order_id},
+                    {'$set': {
+                        'status': 'CANCEL_REQUESTED',
+                        'cancel_requested_at': datetime.utcnow(),
+                        'cancel_reason': 'CANCEL signal received'
+                    }}
+                )
+
+        # Update signal store with CANCEL result
+        if signal_store_id:
+            from bson import ObjectId
+            signal_store_collection.update_one(
+                {'_id': ObjectId(signal_store_id)},
+                {'$set': {
+                    'cerebro_decision': {
+                        'action': 'CANCEL_SENT',
+                        'timestamp': datetime.utcnow(),
+                        'cancelled_orders': cancelled_count,
+                        'message': f'Sent cancel commands for {cancelled_count} pending order(s)'
+                    },
+                    'status': 'processed'
+                }}
+            )
+
+        logger.info(f"✅ CANCEL signal processed - cancelled {cancelled_count} order(s)")
+        return  # Don't process CANCEL signal as a new order
+
+    # Step 4a.2: Check for pending ENTRY orders if this is an EXIT signal
     # DISABLED: We now use retry logic to wait for entry fills instead of canceling
     # check_and_cancel_pending_entry(signal, signal_type_info)
 
-    # Step 4a.2: EXIT SIGNAL HANDLING - Query signal_store for exact entry quantity
-    signal_type = signal_type_info.get('signal_type')
+    # Step 4a.3: EXIT SIGNAL HANDLING - Query signal_store for exact entry quantity
     if signal_type in ['EXIT', 'SCALE_OUT'] and decision_obj.action in ['APPROVE', 'RESIZE']:
         logger.info(f"🔴 EXIT signal detected - querying signal_store for entry quantity")
 
@@ -1466,49 +1491,147 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     elif decision_obj.action in ['APPROVE', 'RESIZE']:
         strategy_id = signal.get('strategy_id')
 
-        # Get strategy metadata (avg positions, margin %)
+        # Get strategy metadata for backtest margin comparison
         strategy_meta = get_strategy_metadata(strategy_id)
-        estimated_avg_positions = strategy_meta['estimated_avg_positions']
         median_margin_pct = strategy_meta['median_margin_pct']
 
-        # Calculate per-position allocation
-        per_position_capital = decision_obj.allocated_capital / estimated_avg_positions
+        # RATIO-BASED POSITION SIZING
+        # Calculate position capital based on signal's sizing intent
+        signal_account_equity = signal.get('account_equity')
 
-        # Get currently deployed capital and position state
-        deployment_info = get_deployed_capital(strategy_id)
-        deployed_capital = deployment_info['deployed_capital']
-        open_positions = deployment_info['open_positions']
-        position_count = deployment_info['position_count']
-        remaining_capital = decision_obj.allocated_capital - deployed_capital
+        # Calculate signal's position value from first leg
+        if legs and len(legs) > 0:
+            signal_price = legs[0].get('price', 0)
+            signal_quantity = legs[0].get('quantity', 1)
+        else:
+            signal_price = signal.get('price', 0)
+            signal_quantity = signal.get('quantity', 1)
+        signal_position_value = signal_price * signal_quantity
 
-        # Determine this position's capital (min of per-position and remaining)
-        position_capital = min(per_position_capital, remaining_capital)
-
-        # Check if we have capital available
-        if position_capital <= 0:
-            # No capital left - reject signal
+        # Validate required fields for ratio-based sizing
+        if not signal_account_equity or signal_account_equity <= 0:
+            logger.error(f"❌ Missing or invalid account_equity in signal: {signal_account_equity}")
             decision_obj = SignalDecision(
                 action="REJECTED",
                 quantity=0,
-                reason=f"No capital remaining (deployed ${deployed_capital:,.2f} of ${decision_obj.allocated_capital:,.2f})",
+                reason=f"Missing required field 'account_equity' for position sizing",
                 allocated_capital=decision_obj.allocated_capital,
                 margin_required=0.0,
                 metadata={
                     **decision_obj.metadata,
                     'signal_type_info': signal_type_info,
+                    'rejection_reason': 'missing_account_equity'
+                }
+            )
+            # Log and update signal store for rejected signal
+            log_detailed_calculation_math(signal, context, decision_obj, account_state)
+            logger.info(f"\n{'='*70}")
+            logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {signal.get('instrument')}")
+            logger.info(f"{'='*70}")
+            logger.info(f"Strategy: {signal.get('strategy_id')}")
+            logger.info(f"Action: {decision_obj.action}")
+            logger.info(f"Reason: {decision_obj.reason}")
+            logger.info(f"{'='*70}\n")
+            update_signal_store_with_decision(signal_store_id, {
+                "signal_id": signal_id,
+                "strategy_id": signal.get('strategy_id'),
+                "decision": decision_obj.action,
+                "timestamp": datetime.utcnow(),
+                "reason": decision_obj.reason,
+                "original_quantity": signal.get('quantity', 0),
+                "final_quantity": 0,
+                "environment": signal.get('environment', 'staging'),
+                "risk_assessment": {
+                    "allocated_capital": decision_obj.allocated_capital,
+                    "margin_required": 0,
+                    "metadata": decision_obj.metadata
+                },
+                "created_at": datetime.utcnow()
+            })
+            return  # Exit early
+
+        if signal_position_value <= 0:
+            logger.error(f"❌ Invalid signal position value: price={signal_price}, qty={signal_quantity}")
+            decision_obj = SignalDecision(
+                action="REJECTED",
+                quantity=0,
+                reason=f"Invalid signal position value (price={signal_price}, quantity={signal_quantity})",
+                allocated_capital=decision_obj.allocated_capital,
+                margin_required=0.0,
+                metadata={
+                    **decision_obj.metadata,
+                    'signal_type_info': signal_type_info,
+                    'rejection_reason': 'invalid_position_value'
+                }
+            )
+            # Log and update signal store for rejected signal
+            log_detailed_calculation_math(signal, context, decision_obj, account_state)
+            logger.info(f"\n{'='*70}")
+            logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {signal.get('instrument')}")
+            logger.info(f"{'='*70}")
+            logger.info(f"Strategy: {signal.get('strategy_id')}")
+            logger.info(f"Action: {decision_obj.action}")
+            logger.info(f"Reason: {decision_obj.reason}")
+            logger.info(f"{'='*70}\n")
+            update_signal_store_with_decision(signal_store_id, {
+                "signal_id": signal_id,
+                "strategy_id": signal.get('strategy_id'),
+                "decision": decision_obj.action,
+                "timestamp": datetime.utcnow(),
+                "reason": decision_obj.reason,
+                "original_quantity": signal.get('quantity', 0),
+                "final_quantity": 0,
+                "environment": signal.get('environment', 'staging'),
+                "risk_assessment": {
+                    "allocated_capital": decision_obj.allocated_capital,
+                    "margin_required": 0,
+                    "metadata": decision_obj.metadata
+                },
+                "created_at": datetime.utcnow()
+            })
+            return  # Exit early
+
+        # Get allocated capital and deployed capital
+        allocated_capital = decision_obj.allocated_capital
+        deployment_info = get_deployed_capital(strategy_id)
+        deployed_capital = deployment_info['deployed_capital']
+        open_positions = deployment_info['open_positions']
+        position_count = deployment_info['position_count']
+
+        # Calculate available capital
+        allocated_capital_available = allocated_capital - deployed_capital
+
+        # Calculate scaling ratio for quantity
+        scaling_ratio = allocated_capital_available / signal_account_equity
+
+        logger.info(f"📊 Allocation: ${allocated_capital:,.2f} - ${deployed_capital:,.2f} deployed = ${allocated_capital_available:,.2f} available")
+        logger.info(f"📊 Scaling ratio: ${allocated_capital_available:,.2f} / ${signal_account_equity:,.2f} = {scaling_ratio:.5f}")
+
+        # Check if we have capital available
+        if allocated_capital_available <= 0:
+            # No capital left - reject signal
+            decision_obj = SignalDecision(
+                action="REJECTED",
+                quantity=0,
+                reason=f"No capital available (deployed ${deployed_capital:,.2f} of ${allocated_capital:,.2f})",
+                allocated_capital=allocated_capital,
+                margin_required=0.0,
+                metadata={
+                    **decision_obj.metadata,
+                    'signal_type_info': signal_type_info,
+                    'allocated_capital': allocated_capital,
                     'deployed_capital': deployed_capital,
-                    'remaining_capital': remaining_capital,
+                    'allocated_capital_available': allocated_capital_available,
                     'position_count': position_count,
                     'rejection_reason': 'fully_deployed'
                 }
             )
         else:
-            # MULTI-LEG MARGIN CALCULATION SYSTEM
-            # Calculate margin for each leg, sum total, accept/reject based on total
-            # Scale all legs uniformly if resize needed (maintains hedge ratio)
+            # RATIO-BASED POSITION SIZING WITH MARGIN VALIDATION
+            # Calculate quantity from signal's ratio, then validate margin fits
 
             try:
-                # Step 1: Calculate margin for each leg
+                # Step 1: Calculate ratio-based quantity for each leg and fetch margin
                 leg_results = []
                 total_margin_required = 0.0
                 total_notional = 0.0
@@ -1521,6 +1644,17 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                             f"Leg {leg_index+1} missing required field 'instrument_type'. "
                             "Valid values: STOCK, ETF, FOREX, OPTION, FUTURE, CRYPTO"
                         )
+
+                    # SIMPLE RATIO SCALING
+                    # quantity = signal_qty × scaling_ratio
+                    signal_leg_quantity = leg.get('quantity', 0)
+                    if signal_leg_quantity <= 0:
+                        raise ValueError(f"Leg {leg_index+1} has invalid quantity: {signal_leg_quantity}")
+
+                    # Calculate quantity using simple scaling ratio
+                    ratio_based_quantity = signal_leg_quantity * scaling_ratio
+
+                    logger.info(f"📊 Leg {leg_index+1} quantity: {signal_leg_quantity} × {scaling_ratio:.5f} = {ratio_based_quantity:.4f}")
 
                     # Create signal dict for this leg (merge with parent signal metadata)
                     leg_signal = {
@@ -1538,14 +1672,9 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     # Create appropriate margin calculator for this leg
                     calculator = MarginCalculatorFactory.create_calculator(leg_signal, broker_adapter)
 
-                    # Calculate position size and margin for this leg
-                    # For multi-leg, we allocate capital proportionally based on notional value
-                    # First pass: calculate with full position_capital to get proportions
-                    leg_result = calculator.calculate_position_size(
-                        signal=leg_signal,
-                        account_equity=account_state.get('total_equity', 0),
-                        position_capital=position_capital / len(legs)  # Split capital evenly initially
-                    )
+                    # Fetch current price from broker
+                    price_data = calculator.fetch_current_price(leg.get('instrument'), signal=leg_signal)
+                    price_used = price_data['price']
 
                     # Normalize quantity to broker precision
                     precision = precision_service.get_precision(
@@ -1554,7 +1683,18 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         symbol=leg.get('instrument'),
                         instrument_type=leg_instrument_type
                     )
-                    normalized_quantity = precision_service.normalize_quantity(leg_result['quantity'], precision)
+                    normalized_quantity = precision_service.normalize_quantity(ratio_based_quantity, precision)
+
+                    # Fetch margin requirement for this exact quantity
+                    margin_data = calculator.fetch_margin_requirement(
+                        ticker=leg.get('instrument'),
+                        quantity=normalized_quantity,
+                        price=price_used,
+                        signal_data=leg_signal
+                    )
+
+                    # Calculate notional value
+                    notional_value = normalized_quantity * price_used
 
                     leg_results.append({
                         'leg_index': leg_index,
@@ -1563,49 +1703,77 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         'direction': leg.get('direction'),
                         'action': leg.get('action'),
                         'order_type': leg.get('order_type', 'MARKET'),
-                        'quantity_raw': leg_result['quantity'],
+                        'quantity_raw': ratio_based_quantity,
                         'quantity': normalized_quantity,
                         'precision': precision,
-                        'price_used': leg_result['price_used'],
-                        'initial_margin': leg_result['initial_margin'],
-                        'margin_pct': leg_result['margin_pct'],
-                        'notional_value': leg_result['notional_value'],
-                        'calculation_method': leg_result['calculation_method']
+                        'price_used': price_used,
+                        'initial_margin': margin_data['initial_margin'],
+                        'margin_pct': margin_data.get('margin_pct', 0),
+                        'notional_value': notional_value,
+                        'calculation_method': margin_data.get('calculation_method', 'Ratio-based with broker margin')
                     })
 
-                    total_margin_required += leg_result['initial_margin']
-                    total_notional += leg_result['notional_value']
+                    total_margin_required += margin_data['initial_margin']
+                    total_notional += notional_value
 
-                    logger.info(f"✅ Leg {leg_index+1}/{len(legs)}: {leg.get('instrument')} | Qty={normalized_quantity} | Price=${leg_result['price_used']:.2f} | Margin=${leg_result['initial_margin']:,.2f}")
+                    logger.info(f"✅ Leg {leg_index+1}/{len(legs)}: {leg.get('instrument')} | Qty={normalized_quantity} | Price=${price_used:.2f} | Margin=${margin_data['initial_margin']:,.2f}")
 
-                # Step 2: Check if total margin exceeds available capital and scale if needed
-                scale_factor = 1.0
-                if total_margin_required > position_capital:
-                    scale_factor = position_capital / total_margin_required
-                    logger.info(f"⚠️ Total margin ${total_margin_required:,.2f} > position capital ${position_capital:,.2f}")
-                    logger.info(f"📉 Scaling all legs by factor {scale_factor:.4f} to maintain hedge ratio")
+                # Step 2: Check if total margin exceeds available capital - REJECT if so
+                if total_margin_required > allocated_capital_available:
+                    logger.error(f"❌ Total margin ${total_margin_required:,.2f} > allocated capital available ${allocated_capital_available:,.2f}")
+                    logger.error(f"❌ Rejecting signal - margin exceeds available capital")
 
-                    # Apply scale factor to all legs uniformly
-                    for leg_result in leg_results:
-                        scaled_quantity = leg_result['quantity_raw'] * scale_factor
-                        leg_result['quantity'] = precision_service.normalize_quantity(
-                            scaled_quantity,
-                            leg_result['precision']
-                        )
-                        leg_result['initial_margin'] *= scale_factor
-                        leg_result['notional_value'] *= scale_factor
-                        logger.info(f"   Leg {leg_result['leg_index']+1}: {leg_result['instrument']} scaled to {leg_result['quantity']}")
-
-                    # Recalculate totals after scaling
-                    total_margin_required = sum(lr['initial_margin'] for lr in leg_results)
-                    total_notional = sum(lr['notional_value'] for lr in leg_results)
+                    decision_obj = SignalDecision(
+                        action="REJECTED",
+                        quantity=0,
+                        reason=f"Margin ${total_margin_required:,.2f} exceeds allocated capital available ${allocated_capital_available:,.2f}",
+                        allocated_capital=allocated_capital,
+                        margin_required=total_margin_required,
+                        metadata={
+                            **decision_obj.metadata,
+                            'signal_type_info': signal_type_info,
+                            'rejection_reason': 'margin_exceeds_capital',
+                            'allocated_capital': allocated_capital,
+                            'deployed_capital': deployed_capital,
+                            'allocated_capital_available': allocated_capital_available,
+                            'margin_required': total_margin_required,
+                            'calculated_quantities': [lr['quantity'] for lr in leg_results]
+                        }
+                    )
+                    # Log and update signal store for rejected signal
+                    log_detailed_calculation_math(signal, context, decision_obj, account_state)
+                    logger.info(f"\n{'='*70}")
+                    logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {signal.get('instrument')}")
+                    logger.info(f"{'='*70}")
+                    logger.info(f"Strategy: {signal.get('strategy_id')}")
+                    logger.info(f"Action: {decision_obj.action}")
+                    logger.info(f"Reason: {decision_obj.reason}")
+                    logger.info(f"{'='*70}\n")
+                    update_signal_store_with_decision(signal_store_id, {
+                        "signal_id": signal_id,
+                        "strategy_id": signal.get('strategy_id'),
+                        "decision": decision_obj.action,
+                        "timestamp": datetime.utcnow(),
+                        "reason": decision_obj.reason,
+                        "original_quantity": signal.get('quantity', 0),
+                        "final_quantity": 0,
+                        "environment": signal.get('environment', 'staging'),
+                        "risk_assessment": {
+                            "allocated_capital": allocated_capital,
+                            "allocated_capital_available": allocated_capital_available,
+                            "margin_required": total_margin_required,
+                            "metadata": decision_obj.metadata
+                        },
+                        "created_at": datetime.utcnow()
+                    })
+                    return  # Exit early
 
                 # Log multi-leg summary
                 if is_multi_leg:
                     logger.info(f"🔀 Multi-leg summary: {len(legs)} legs | Total Margin: ${total_margin_required:,.2f} | Total Notional: ${total_notional:,.2f}")
 
                 # Calculate backtest margin for comparison
-                backtest_margin = position_capital * median_margin_pct
+                backtest_margin = allocated_capital_available * median_margin_pct
 
                 # For decision object, use primary leg quantity (for backward compatibility)
                 # Actual orders will use leg_results
@@ -1618,6 +1786,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     'calculation_method': 'multi_leg' if is_multi_leg else primary_leg_result['calculation_method'],
                     'notional_value': total_notional
                 }
+
+                logger.info(f"✅ Margin ${total_margin_required:,.2f} < allocated capital available ${allocated_capital_available:,.2f} - APPROVED")
 
             except Exception as e:
                 # Margin calculation failed - REJECT signal
@@ -1666,23 +1836,21 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             decision_obj = SignalDecision(
                 action=decision_obj.action,
                 quantity=adjusted_shares,
-                reason=f"{decision_obj.reason} | {signal_type_info['signal_type']} | Pos-sizing: {estimated_avg_positions:.1f} avg pos" + (f" | Multi-leg: {len(legs)}" if is_multi_leg else ""),
-                allocated_capital=position_capital,  # Adjusted to this position's allocation
-                margin_required=ibkr_margin_info['estimated_margin'],  # Use total margin for all legs
+                reason=f"{decision_obj.reason} | {signal_type_info['signal_type']} | Scaling: {scaling_ratio:.5f}" + (f" | Multi-leg: {len(legs)}" if is_multi_leg else ""),
+                allocated_capital=allocated_capital_available,
+                margin_required=ibkr_margin_info['estimated_margin'],
                 metadata={
                     **decision_obj.metadata,
                     'signal_type_info': signal_type_info,
                     'is_multi_leg': is_multi_leg,
                     'leg_count': len(legs),
-                    'leg_results': leg_results,  # Store for order creation
-                    'scale_factor': scale_factor,
+                    'leg_results': leg_results,
                     'position_sizing': {
-                        'total_strategy_allocation': decision_obj.allocated_capital,
-                        'estimated_avg_positions': estimated_avg_positions,
-                        'per_position_capital': per_position_capital,
+                        'allocated_capital': allocated_capital,
                         'deployed_capital': deployed_capital,
-                        'remaining_capital': remaining_capital,
-                        'this_position_capital': position_capital,
+                        'allocated_capital_available': allocated_capital_available,
+                        'signal_account_equity': signal_account_equity,
+                        'scaling_ratio': scaling_ratio,
                         'position_count': position_count,
                         'open_positions_summary': [
                             {
@@ -1695,14 +1863,11 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         # Backtest margin (historical)
                         'backtest_margin': backtest_margin,
                         'backtest_margin_pct': median_margin_pct * 100,
-                        'margin_pct_used': median_margin_pct * 100,  # Keep for backward compatibility
-                        # Total margin for all legs
-                        'ibkr_estimated_margin': ibkr_margin_info['estimated_margin'],
-                        'ibkr_margin_pct': ibkr_margin_info['margin_pct'],
-                        'ibkr_margin_method': ibkr_margin_info['calculation_method'],
+                        # Broker margin
+                        'margin_required': ibkr_margin_info['estimated_margin'],
+                        'margin_pct': ibkr_margin_info['margin_pct'],
+                        'margin_method': ibkr_margin_info['calculation_method'],
                         'notional_value': ibkr_margin_info['notional_value'],
-                        'shares_calculation': f"${position_capital:,.2f} total across {len(legs)} legs",
-                        'price_source': 'broker_adapter',
                         'price_used': price_used
                     }
                 }
