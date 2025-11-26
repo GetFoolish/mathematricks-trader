@@ -20,7 +20,7 @@ The Dashboard Creator Service generates pre-computed dashboard JSONs for clients
 
 ## Main Files
 
-### main.py
+### dashboard_creator_main.py
 - FastAPI service entry point
 - API endpoints
 - Service lifecycle management
@@ -42,11 +42,6 @@ The Dashboard Creator Service generates pre-computed dashboard JSONs for clients
 - APScheduler job definitions
 - Dashboard refresh scheduling
 - Periodic update management
-
-### api/strategy_developer_api.py
-- Strategy developer specific endpoints
-- Signal history queries
-- Performance reports
 
 ## REST API Endpoints
 

@@ -178,7 +178,7 @@ def main():
     kill_by_pattern("signal_ingestion/main.py", "signal_ingestion")
     kill_by_pattern("services/cerebro_service/main.py", "cerebro_service")
     kill_by_pattern("services/execution_service/main.py", "execution_service")
-    kill_by_pattern("services/dashboard_creator/main.py", "dashboard_creator")
+    kill_by_pattern("services/dashboard_creator/dashboard_creator_main.py", "dashboard_creator")
     kill_by_pattern("services/account_data_service/main.py", "account_data_service")
     kill_by_pattern("services/portfolio_builder/main.py", "portfolio_builder")
 

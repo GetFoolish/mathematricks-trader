@@ -262,7 +262,7 @@ def main():
     ))
     services_status.append(check_service(
         "dashboard_creator",
-        "python.*dashboard_creator/main.py",
+        "python.*dashboard_creator/dashboard_creator_main.py",
         port=8004
     ))
 

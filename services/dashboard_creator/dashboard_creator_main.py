@@ -22,20 +22,26 @@ from generators.signal_sender_dashboard import generate_signal_sender_dashboard
 # Import scheduler
 from schedulers.background_jobs import start_scheduler, stop_scheduler
 
-# Import API router
-from api.strategy_developer_api import router as strategy_dev_router, set_mongo_client
+# Strategy Developer API has been migrated to mathematricks-website/netlify/functions/
 
 # Load environment variables
 load_dotenv()
 
 # Logging setup
+custom_formatter = logging.Formatter('|%(levelname)s|%(message)s|%(asctime)s|file:%(filename)s:line No.%(lineno)d')
+
+# File handler
+file_handler = logging.FileHandler('../../logs/dashboard_creator.log')
+file_handler.setFormatter(custom_formatter)
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(custom_formatter)
+
+# Configure root logger
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('../../logs/dashboard_creator.log'),
-        logging.StreamHandler()
-    ]
+    handlers=[file_handler, console_handler]
 )
 logger = logging.getLogger(__name__)
 
@@ -56,9 +62,6 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting DashboardCreatorService on port 8004")
     logger.info(f"MongoDB connected: {MONGODB_URI[:50]}...")
-
-    # Set MongoDB client for API module
-    set_mongo_client(mongo_client)
 
     # Generate initial dashboards
     logger.info("Generating initial dashboards...")
@@ -221,20 +224,12 @@ async def regenerate_dashboards():
 
 
 # ============================================================================
-# STRATEGY DEVELOPER API
-# ============================================================================
-
-# Include strategy developer API routes
-app.include_router(strategy_dev_router)
-
-
-# ============================================================================
 # MAIN ENTRY POINT
 # ============================================================================
 
 if __name__ == "__main__":
     uvicorn.run(
-        "main:app",
+        "dashboard_creator_main:app",
         host="0.0.0.0",
         port=8004,
         reload=False,

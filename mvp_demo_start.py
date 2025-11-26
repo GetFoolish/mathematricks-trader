@@ -435,7 +435,7 @@ def main():
 
         start_service(
             "dashboard_creator",
-            [str(VENV_PYTHON), "main.py"],
+            [str(VENV_PYTHON), "dashboard_creator_main.py"],
             PROJECT_ROOT / "services" / "dashboard_creator",
             port=8004
         )

@@ -281,7 +281,7 @@ class SignalIngestionService:
 
         # Send Telegram notification
         try:
-            from telegram.notifier import TelegramNotifier
+            from services.telegram.notifier import TelegramNotifier
             signal_environment = signal_data.get('environment', 'production')
             notifier = TelegramNotifier(environment=signal_environment)
             notifier.notify_signal_received(signal_data, lag_seconds=delay, sent_timestamp=timestamp, received_timestamp=received_time)
