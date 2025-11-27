@@ -10,6 +10,8 @@ import json
 import subprocess
 import signal
 import argparse
+import shutil
+import platform
 from pathlib import Path
 from typing import Dict, List
 
@@ -74,14 +76,47 @@ def start_pubsub_emulator():
     # Start emulator
     print("Starting emulator in background...")
     emulator_jar = PROJECT_ROOT / "google-cloud-sdk" / "platform" / "pubsub-emulator" / "lib" / "cloud-pubsub-emulator-0.8.6.jar"
-    java_path = "/opt/homebrew/opt/openjdk@11/bin/java"
+    
+    # OS-specific Java detection
+    java_path = None
+    env = os.environ.copy()
+    
+    if platform.system() == "Darwin":
+        # macOS: Prefer the Homebrew path as originally configured
+        possible_path = "/opt/homebrew/opt/openjdk@11/bin/java"
+        if os.path.exists(possible_path):
+            java_path = possible_path
+            # Update PATH for macOS to include this Java
+            env["PATH"] = f"/opt/homebrew/opt/openjdk@11/bin:{env.get('PATH', '')}"
+        else:
+            # Fallback if specific path doesn't exist
+            java_path = shutil.which("java")
+            
+    else:
+        # Linux/Other: Dynamic detection
+        java_path = shutil.which("java")
+        if not java_path:
+            java_home = os.environ.get("JAVA_HOME")
+            if java_home:
+                java_path = str(Path(java_home) / "bin" / "java")
+
+    if not java_path:
+        print(f"{Colors.RED}✗ Java not found. Please install Java 11+.{Colors.NC}")
+        return None
 
     log_file = open(LOG_DIR / "pubsub_emulator.log", "w")
+    
+    # If we found a java path dynamically (not the hardcoded one which already set PATH), 
+    # ensure it's in PATH for the subprocess
+    if java_path and "/opt/homebrew" not in java_path:
+        java_dir = str(Path(java_path).parent)
+        env["PATH"] = f"{java_dir}:{env.get('PATH', '')}"
+
     proc = subprocess.Popen(
         [java_path, "-jar", str(emulator_jar), "--host=localhost", "--port=8085"],
         stdout=log_file,
         stderr=log_file,
-        env={**os.environ, "PATH": "/opt/homebrew/opt/openjdk@11/bin:" + os.environ.get("PATH", "")}
+        env=env
     )
 
     # Save PID

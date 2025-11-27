@@ -50,9 +50,31 @@ if curl -s $PUBSUB_EMULATOR_HOST > /dev/null 2>&1; then
     echo "✓ Pub/Sub emulator already running"
 else
     echo "Starting emulator in background..."
-    # Use full Java path to ensure emulator starts correctly
-    export PATH="/opt/homebrew/opt/openjdk@11/bin:$PATH"
-    /opt/homebrew/opt/openjdk@11/bin/java -jar "$PROJECT_ROOT/google-cloud-sdk/platform/pubsub-emulator/lib/cloud-pubsub-emulator-0.8.6.jar" --host=localhost --port=8085 > "$LOG_DIR/pubsub_emulator.log" 2>&1 &
+    echo "Starting emulator in background..."
+    
+    # OS-specific Java detection
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS: Prefer Homebrew path
+        if [ -f "/opt/homebrew/opt/openjdk@11/bin/java" ]; then
+            JAVA_CMD="/opt/homebrew/opt/openjdk@11/bin/java"
+            export PATH="/opt/homebrew/opt/openjdk@11/bin:$PATH"
+        else
+            # Fallback
+            JAVA_CMD="java"
+        fi
+    else
+        # Linux/Other: Dynamic detection
+        if [ -n "$JAVA_HOME" ]; then
+            JAVA_CMD="$JAVA_HOME/bin/java"
+        elif command -v java >/dev/null 2>&1; then
+            JAVA_CMD="java"
+        else
+            echo "✗ Java not found. Please install Java 11+."
+            exit 1
+        fi
+    fi
+
+    $JAVA_CMD -jar "$PROJECT_ROOT/google-cloud-sdk/platform/pubsub-emulator/lib/cloud-pubsub-emulator-0.8.6.jar" --host=localhost --port=8085 > "$LOG_DIR/pubsub_emulator.log" 2>&1 &
     PUBSUB_PID=$!
     echo $PUBSUB_PID >> "$PID_DIR/pubsub.pid"
     sleep 5
