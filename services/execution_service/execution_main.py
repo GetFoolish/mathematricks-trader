@@ -525,6 +525,8 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
     """
     Create or update position in trading_accounts.{account_id}.open_positions after order fill
     Handles both ENTRY (create/increase) and EXIT (decrease/close) actions
+    
+    PERMANENT FIX: Closed positions are REMOVED from open_positions array and archived
     """
     try:
         strategy_id = order_data.get('strategy_id')
@@ -533,6 +535,14 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
         action = order_data.get('action', 'ENTRY').upper()
         signal_type = order_data.get('signal_type', '').upper()
         order_id = order_data.get('order_id')
+
+        # Validation: Ensure required fields are present
+        if not strategy_id:
+            logger.error(f"❌ Cannot create position: missing strategy_id in order {order_id}")
+            return
+        if not instrument:
+            logger.error(f"❌ Cannot create position: missing instrument in order {order_id}")
+            return
 
         # For Mock broker, use "Mock_Paper" account
         # TODO: Get account_id from order_data when multi-account support is added
@@ -595,15 +605,16 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
                 logger.info(f"✅ Updated position {strategy_id}/{instrument}: {current_qty} → {new_qty} shares @ ${new_avg_price:.2f}")
             else:
                 # Create new position and add to array
+                # VALIDATION: Ensure all required fields are present
                 position = {
-                    'strategy_id': strategy_id,
-                    'instrument': instrument,
-                    'direction': direction,
+                    'strategy_id': strategy_id,  # REQUIRED
+                    'instrument': instrument,    # REQUIRED
+                    'direction': direction,      # REQUIRED
                     'quantity': filled_qty,
                     'avg_entry_price': avg_fill_price,
                     'current_price': avg_fill_price,
                     'unrealized_pnl': 0.0,
-                    'status': 'OPEN',
+                    'status': 'OPEN',           # REQUIRED - always set
                     'entry_order_id': order_id,
                     'last_order_id': order_id,
                     'created_at': datetime.utcnow(),
@@ -621,18 +632,47 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
                 current_qty = existing_position['quantity']
 
                 if filled_qty >= current_qty:
-                    # Full exit - close position by updating status in array
+                    # Full exit - REMOVE position from array and archive it
+                    
+                    # Calculate PnL for archival
+                    entry_price = existing_position.get('avg_entry_price', 0)
+                    gross_pnl = (avg_fill_price - entry_price) * current_qty
+                    holding_period = (datetime.utcnow() - existing_position.get('created_at', datetime.utcnow())).total_seconds()
+                    
+                    # Create archive document with all position data
+                    closed_position = {
+                        **existing_position,  # Copy all fields from original position
+                        'exit_order_id': order_id,
+                        'avg_exit_price': avg_fill_price,
+                        'closed_at': datetime.utcnow(),
+                        'gross_pnl': gross_pnl,
+                        'holding_period_seconds': holding_period,
+                        'account_id': account_id  # Add account reference
+                    }
+                    
+                    # Archive to closed_positions collection
+                    db = trading_accounts_collection.database
+                    closed_positions_collection = db['closed_positions']
+                    closed_positions_collection.insert_one(closed_position)
+                    logger.info(f"📦 Archived closed position to closed_positions collection")
+                    
+                    # REMOVE position from open_positions array using $pull
                     trading_accounts_collection.update_one(
                         {'account_id': account_id},
-                        {'$set': {
-                            f'open_positions.{position_index}.status': 'CLOSED',
-                            f'open_positions.{position_index}.exit_order_id': order_id,
-                            f'open_positions.{position_index}.avg_exit_price': avg_fill_price,
-                            f'open_positions.{position_index}.closed_at': datetime.utcnow(),
-                            f'open_positions.{position_index}.updated_at': datetime.utcnow()
-                        }}
+                        {
+                            '$pull': {
+                                'open_positions': {
+                                    'strategy_id': strategy_id,
+                                    'instrument': instrument,
+                                    'status': 'OPEN'
+                                }
+                            },
+                            '$set': {
+                                'updated_at': datetime.utcnow()
+                            }
+                        }
                     )
-                    logger.info(f"✅ Closed position {strategy_id}/{instrument}: {current_qty} shares @ ${avg_fill_price:.2f}")
+                    logger.info(f"✅ Closed and removed position {strategy_id}/{instrument}: {current_qty} shares @ ${avg_fill_price:.2f} | PnL: ${gross_pnl:.2f}")
                 else:
                     # Partial exit - reduce position quantity in array
                     new_qty = current_qty - filled_qty
@@ -650,6 +690,7 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
 
     except Exception as e:
         logger.error(f"❌ Error creating/updating position: {e}", exc_info=True)
+
 
 
 def get_account_state() -> Dict[str, Any]:

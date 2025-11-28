@@ -94,13 +94,15 @@ class PositionManager:
     def get_positions_by_strategy(self, strategy_id: str, account_id: str = None) -> List[Dict[str, Any]]:
         """
         Get all open positions for a strategy from trading_accounts collection.
+        
+        DEFENSIVE: Filters out positions with missing required fields.
 
         Args:
             strategy_id: Strategy identifier
             account_id: Account ID (defaults to self.default_account_id)
 
         Returns:
-            List of position documents
+            List of position documents (only valid positions)
         """
         if account_id is None:
             account_id = self.default_account_id
@@ -109,11 +111,34 @@ class PositionManager:
         query = {} if account_id == "ALL" else {"account_id": account_id}
 
         all_positions = []
+        orphaned_count = 0
+        
         for account_doc in self.trading_accounts.find(query):
             open_positions = account_doc.get('open_positions', [])
             for pos in open_positions:
-                if pos.get('strategy_id') == strategy_id and pos.get('status') == 'OPEN':
+                # DEFENSIVE: Check for required fields
+                status = pos.get('status')
+                pos_strategy_id = pos.get('strategy_id')
+                pos_instrument = pos.get('instrument')
+                
+                # Skip positions with missing required fields
+                if not status or not pos_strategy_id or not pos_instrument:
+                    orphaned_count += 1
+                    logger.warning(
+                        f"⚠️ Skipping orphaned position: status={status}, "
+                        f"strategy={pos_strategy_id}, instrument={pos_instrument}"
+                    )
+                    continue
+                
+                # Only include OPEN positions for the requested strategy
+                if pos_strategy_id == strategy_id and status == 'OPEN':
                     all_positions.append(pos)
+        
+        if orphaned_count > 0:
+            logger.warning(
+                f"⚠️ Found {orphaned_count} orphaned position(s) with missing fields. "
+                f"Run cleanup_orphaned_positions() to remove them."
+            )
 
         return all_positions
 
@@ -243,5 +268,69 @@ class PositionManager:
             'current_position': current_position,
             'opposite_position': opposite_position,
             'reasoning': reasoning
+        }
+
+    def cleanup_orphaned_positions(self, account_id: str = None) -> Dict[str, Any]:
+        """
+        Remove orphaned positions with missing required fields from all accounts.
+        
+        Args:
+            account_id: Specific account to clean, or None for all accounts
+            
+        Returns:
+            Dict with cleanup statistics
+        """
+        if account_id is None:
+            account_id = self.default_account_id
+            
+        query = {} if account_id == "ALL" else {"account_id": account_id}
+        
+        total_removed = 0
+        accounts_cleaned = 0
+        
+        for account_doc in self.trading_accounts.find(query):
+            acc_id = account_doc.get('account_id')
+            open_positions = account_doc.get('open_positions', [])
+            
+            # Filter out orphaned positions
+            valid_positions = []
+            removed_positions = []
+            
+            for pos in open_positions:
+                status = pos.get('status')
+                strategy_id = pos.get('strategy_id')
+                instrument = pos.get('instrument')
+                
+                # Keep only positions with all required fields
+                if status and strategy_id and instrument:
+                    valid_positions.append(pos)
+                else:
+                    removed_positions.append(pos)
+                    logger.info(
+                        f"🗑️ Removing orphaned position: status={status}, "
+                        f"strategy={strategy_id}, instrument={instrument}, "
+                        f"qty={pos.get('quantity', 'N/A')}"
+                    )
+            
+            # Update account if any positions were removed
+            if removed_positions:
+                self.trading_accounts.update_one(
+                    {'account_id': acc_id},
+                    {
+                        '$set': {
+                            'open_positions': valid_positions,
+                            'updated_at': datetime.utcnow()
+                        }
+                    }
+                )
+                total_removed += len(removed_positions)
+                accounts_cleaned += 1
+                logger.info(
+                    f"✅ Cleaned {acc_id}: removed {len(removed_positions)} orphaned position(s)"
+                )
+        
+        return {
+            'total_removed': total_removed,
+            'accounts_cleaned': accounts_cleaned
         }
 
