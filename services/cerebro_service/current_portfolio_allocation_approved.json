@@ -1,0 +1,20 @@
+{
+  "_comment": "Current approved portfolio allocation (downloaded from MongoDB)",
+  "_source": "MongoDB current_allocation collection",
+  "_metadata": {
+    "approved_at": "2025-11-28T01:06:55.195000",
+    "num_strategies": 6
+  },
+  "allocations": {
+    "Com3-Mkt": 32.259732202864086,
+    "SPX_1-D_Opt": 29.876441089799926,
+    "Com1-Met": 22.276792638163677,
+    "Forex": 6.839683606472626,
+    "Com2-Ag": 5.366282376053353,
+    "SPY": 3.381068086646332
+  },
+  "total_allocation_pct": 99.99999999999999,
+  "mode": "approved_downloaded_from_mongo",
+  "last_updated": "2025-11-28T01:44:33.507695",
+  "update_action": "cerebro_restart"
+}

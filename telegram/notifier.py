@@ -7,10 +7,12 @@ Sends notifications for signals, trades, and position updates
 import os
 import requests
 from typing import Dict, List, Optional
-from datetime import datetime
-from src.utils.logger import setup_logger
+from datetime import datetime, timezone
+import logging
 
-logger = setup_logger('telegram', 'telegram.log')
+# Setup logger
+logger = logging.getLogger('telegram')
+logger.setLevel(logging.INFO)
 
 
 class TelegramNotifier:
@@ -18,17 +20,27 @@ class TelegramNotifier:
     Send notifications to Telegram
     """
 
-    def __init__(self, bot_token: str = None, chat_id: str = None, enabled: bool = True):
+    def __init__(self, bot_token: str = None, chat_id: str = None, enabled: bool = True, environment: str = 'production'):
         """
         Initialize Telegram notifier
 
         Args:
             bot_token: Telegram bot token
-            chat_id: Telegram chat ID
+            chat_id: Telegram chat ID (overrides environment-based selection)
             enabled: Whether notifications are enabled
+            environment: 'production' or 'staging' - determines which channel to use
         """
         self.bot_token = bot_token or os.getenv('TELEGRAM_BOT_TOKEN')
-        self.chat_id = chat_id or os.getenv('TELEGRAM_CHAT_ID')
+        self.environment = environment.lower()
+
+        # If chat_id is explicitly provided, use it. Otherwise, select based on environment
+        if chat_id:
+            self.chat_id = chat_id
+        elif self.environment == 'staging':
+            self.chat_id = os.getenv('TELEGRAM_STAGING_CHAT_ID')
+        else:
+            self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
         self.enabled = enabled and os.getenv('TELEGRAM_ENABLED', 'false').lower() == 'true'
 
         if self.enabled and (not self.bot_token or not self.chat_id):
@@ -36,8 +48,7 @@ class TelegramNotifier:
             self.enabled = False
 
         if self.enabled:
-            # logger.info("Telegram notifications enabled")c
-            pass
+            logger.info(f"Telegram notifications enabled for {self.environment.upper()} environment (chat_id: {self.chat_id})")
         else:
             logger.info("Telegram notifications disabled")
 
@@ -77,36 +88,60 @@ class TelegramNotifier:
             logger.error(f"Failed to send Telegram message: {e}")
             return False
 
-    def notify_signal_received(self, signal_data: Dict) -> bool:
+    def notify_signal_received(self, signal_data: Dict, lag_seconds: float = None, sent_timestamp: str = None, received_timestamp: datetime = None) -> bool:
         """
         Notify when a new signal is received
 
         Args:
             signal_data: Signal data dictionary
+            lag_seconds: Time lag between signal sent and received (optional)
+            sent_timestamp: ISO timestamp when signal was sent (optional)
+            received_timestamp: datetime when signal was received (optional)
 
         Returns:
             True if sent successfully
         """
         try:
-            signal_id = signal_data.get('signalID', 'Unknown')
+            signal_id = signal_data.get('signalID') or signal_data.get('signal_id', 'Unknown')
             strategy = signal_data.get('strategy_name', 'Unknown')
-            timestamp = signal_data.get('timestamp', datetime.now().isoformat())
             signal = signal_data.get('signal', {})
 
             # Format signal details
             signal_details = self._format_signal_details(signal)
 
-            message = f"""
-🔔 <b>NEW SIGNAL RECEIVED</b>
+            # Build message with strategy, signal ID, and lag
+            message = f"""🔔 <b>NEW SIGNAL</b>
 
 📊 <b>Strategy:</b> {strategy}
-🆔 <b>Signal ID:</b> {signal_id}
-🕐 <b>Time:</b> {timestamp}
+🆔 <b>Signal ID:</b> {signal_id}"""
 
-{signal_details}
+            # Add lag - always show it if available (even if 0)
+            if lag_seconds is not None:
+                if sent_timestamp and received_timestamp:
+                    from dateutil import parser as dt_parser
+                    # Parse sent timestamp and ensure it's UTC
+                    sent_dt = dt_parser.parse(sent_timestamp) if sent_timestamp else None
+                    if sent_dt:
+                        # Convert to UTC if it has timezone info, otherwise assume UTC
+                        if sent_dt.tzinfo is not None:
+                            sent_dt = sent_dt.astimezone(timezone.utc)
+                        sent_dt_str = sent_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+                    else:
+                        sent_dt_str = 'Unknown'
 
-⏳ <i>Processing signal...</i>
-"""
+                    # Ensure received_timestamp is UTC
+                    if received_timestamp.tzinfo is not None:
+                        recd_dt = received_timestamp.astimezone(timezone.utc)
+                    else:
+                        # Assume it's already UTC if no timezone
+                        recd_dt = received_timestamp
+                    recd_dt_str = recd_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+
+                    message += f"\n⚡ <b>Lag:</b> {lag_seconds:.3f}s [Sent: {sent_dt_str}, Recd: {recd_dt_str}]"
+                else:
+                    message += f"\n⚡ <b>Lag:</b> {lag_seconds:.3f}s"
+
+            message += f"\n\n{signal_details}\n\n⏳ <i>Processing signal...</i>"
 
             return self.send_message(message)
 
@@ -343,31 +378,25 @@ class TelegramNotifier:
             return False
 
     def _format_signal_details(self, signal: Dict) -> str:
-        """Format signal details for display"""
+        """Format signal details dynamically - shows all fields"""
         if isinstance(signal, list):
             # Multi-leg order
-            legs = []
-            for leg in signal:
-                legs.append(f"  • {leg.get('ticker', 'N/A')}: {leg.get('action', 'N/A')} {leg.get('qty', 0)}")
-            return "<b>📋 Multi-leg Order:</b>\n" + "\n".join(legs)
+            legs_text = []
+            for i, leg in enumerate(signal, 1):
+                leg_details = []
+                for key, value in leg.items():
+                    if value is not None and value != '':
+                        leg_details.append(f"    • {key}: {value}")
+                legs_text.append(f"  <b>Leg {i}:</b>\n" + "\n".join(leg_details))
+            return "<b>📋 Signal Details:</b>\n" + "\n".join(legs_text)
 
-        elif signal.get('type') == 'options':
-            # Options signal
-            return f"""<b>📋 Options Signal:</b>
-  • Ticker: {signal.get('ticker', 'N/A')}
-  • Action: {signal.get('action', 'N/A')}
-  • Strike: ${signal.get('strike', 'N/A')}
-  • Expiry: {signal.get('expiry', 'N/A')}"""
+        # Single-leg signal - show all fields dynamically
+        signal_details = []
+        for key, value in signal.items():
+            if value is not None and value != '':
+                signal_details.append(f"  • {key}: {value}")
 
-        elif signal.get('stop_loss'):
-            # Stop-loss signal
-            return f"""<b>🛑 Stop-Loss Signal:</b>
-  • Trigger: {signal.get('trigger', 'N/A')}
-  • Action: {signal.get('action', 'N/A')}"""
-
+        if signal_details:
+            return "<b>📋 Signal Details:</b>\n" + "\n".join(signal_details)
         else:
-            # Stock signal
-            return f"""<b>📋 Stock Signal:</b>
-  • Ticker: {signal.get('ticker', 'N/A')}
-  • Action: {signal.get('action', 'N/A')}
-  • Price: ${signal.get('price', 'N/A')}"""
+            return "<b>📋 Signal Details:</b>\n  • No signal data"

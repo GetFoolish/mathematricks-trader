@@ -43,9 +43,18 @@ tmp/
 logs/
 *.log
 output/
+outputs/
+
+# Portfolio constructor outputs (keep folders but not contents)
+services/cerebro_service/portfolio_constructor/*/outputs/*
+!services/cerebro_service/portfolio_constructor/*/outputs/.gitkeep
 
 # Portfolio combiner data folders (keep folders but not contents)
 dev/portfolio_combiner/outputs/*
 !dev/portfolio_combiner/outputs/.gitkeep
 dev/portfolio_combiner/real_strategy_data/*
 !dev/portfolio_combiner/real_strategy_data/.gitkeep
+
+# Google Cloud SDK (downloaded, not needed in repo)
+google-cloud-cli-*.tar.gz
+google-cloud-sdk/

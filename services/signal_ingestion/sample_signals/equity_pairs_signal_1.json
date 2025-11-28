@@ -1,0 +1,58 @@
+[
+    {
+        "strategy_name": "Pairs_Trading",
+        "passphrase": "test_password_123",
+        "signal_type": "ENTRY",
+        "signal_legs": [
+            {
+                "instrument": "AAPL",
+                "instrument_type": "STOCK",
+                "action": "BUY",
+                "direction": "LONG",
+                "quantity": 10,
+                "order_type": "MARKET",
+                "price": 150.00,
+                "environment": "staging"
+            },
+            {
+                "instrument": "NVDA",
+                "instrument_type": "STOCK",
+                "action": "SELL",
+                "direction": "SHORT",
+                "quantity": 10,
+                "order_type": "MARKET",
+                "price": 500.00,
+                "environment": "staging"
+            }
+        ],
+        "wait": 10
+    },
+    {
+        "strategy_name": "Pairs_Trading",
+        "passphrase": "test_password_123",
+        "signal_type": "EXIT",
+        "entry_signal_id": "$PREVIOUS",
+        "signal_legs": [
+            {
+                "instrument": "AAPL",
+                "instrument_type": "STOCK",
+                "action": "SELL",
+                "direction": "SHORT",
+                "quantity": 10,
+                "order_type": "MARKET",
+                "price": 152.00,
+                "environment": "staging"
+            },
+            {
+                "instrument": "NVDA",
+                "instrument_type": "STOCK",
+                "action": "BUY",
+                "direction": "LONG",
+                "quantity": 10,
+                "order_type": "MARKET",
+                "price": 505.00,
+                "environment": "staging"
+            }
+        ]
+    }
+]

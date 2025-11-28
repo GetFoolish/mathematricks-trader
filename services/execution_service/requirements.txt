@@ -1,0 +1,7 @@
+google-cloud-pubsub==2.18.4
+pymongo==4.6.0
+python-dotenv==1.0.0
+
+# Broker library dependencies
+ib-insync==0.9.86
+kiteconnect==4.2.0

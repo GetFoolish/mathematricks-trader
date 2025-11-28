@@ -1,0 +1,10 @@
+# Shared Broker Library Dependencies
+
+# Interactive Brokers
+ib-insync==0.9.86
+
+# Zerodha Kite Connect
+kiteconnect==4.2.0
+
+# Note: Each service using this library should also include these dependencies
+# in their own requirements.txt file
