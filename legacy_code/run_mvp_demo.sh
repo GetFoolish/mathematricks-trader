@@ -74,7 +74,7 @@ else
         fi
     fi
 
-    $JAVA_CMD -jar "$PROJECT_ROOT/google-cloud-sdk/platform/pubsub-emulator/lib/cloud-pubsub-emulator-0.8.6.jar" --host=localhost --port=8085 > "$LOG_DIR/pubsub_emulator.log" 2>&1 &
+    $JAVA_CMD -jar $(ls $PROJECT_ROOT/google-cloud-sdk/platform/pubsub-emulator/lib/cloud-pubsub-emulator-*.jar | head -n 1) --host=localhost --port=8085 > "$LOG_DIR/pubsub_emulator.log" 2>&1 &
     PUBSUB_PID=$!
     echo $PUBSUB_PID >> "$PID_DIR/pubsub.pid"
     sleep 5

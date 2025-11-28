@@ -101,6 +101,31 @@ else
     echo -e "${GREEN}✅ MongoDB installed: ${MONGO_VER}${NC}"
 fi
 
+# Configure MongoDB Replica Set
+echo ""
+echo -e "${BLUE}[2.5/7] Configuring MongoDB Replica Set...${NC}"
+echo ""
+
+if grep -q "#replication:" /etc/mongod.conf; then
+    echo "Enabling replication in /etc/mongod.conf..."
+    # Backup config
+    sudo cp /etc/mongod.conf /etc/mongod.conf.bak
+    
+    # Uncomment replication and add replSetName
+    sudo sed -i 's/#replication:/replication:\n  replSetName: rs0/' /etc/mongod.conf
+    
+    echo -e "${GREEN}✅ Replication enabled in config${NC}"
+    
+    # Restart MongoDB to apply changes
+    echo "Restarting MongoDB..."
+    sudo systemctl restart mongod
+    sleep 5
+elif grep -q "replSetName: rs0" /etc/mongod.conf; then
+    echo -e "${GREEN}✅ Replication already configured${NC}"
+else
+    echo -e "${YELLOW}⚠️  Replication configuration not detected or custom. Skipping config update.${NC}"
+fi
+
 # Check if MongoDB is running
 echo ""
 echo -e "${BLUE}[3/7] Checking MongoDB service...${NC}"
@@ -126,6 +151,24 @@ else
     fi
 fi
 
+# Initialize Replica Set
+echo "Initializing Replica Set..."
+# Check if already initialized (rs.status() returns ok: 1 if member of set)
+if mongosh --quiet --eval "try { rs.status().ok } catch(e) { 0 }" | grep -q "1"; then
+     echo -e "${GREEN}✅ Replica Set already initialized${NC}"
+else
+     # Initialize
+     echo "Running rs.initiate()..."
+     mongosh --quiet --eval "rs.initiate()"
+     sleep 2
+     if mongosh --quiet --eval "try { rs.status().ok } catch(e) { 0 }" | grep -q "1"; then
+         echo -e "${GREEN}✅ Replica Set initialized${NC}"
+     else
+         echo -e "${RED}❌ Failed to initialize Replica Set. You may need to do it manually.${NC}"
+         echo "   Run: mongosh --eval 'rs.initiate()'"
+     fi
+fi
+
 # Check MongoDB connection
 if mongosh --quiet --eval "db.version()" &> /dev/null; then
     echo -e "${GREEN}✅ MongoDB connection successful${NC}"
@@ -134,9 +177,44 @@ else
     exit 1
 fi
 
+# Check for Google Cloud SDK (Pub/Sub Emulator)
+echo ""
+echo -e "${BLUE}[4/7] Checking Google Cloud SDK...${NC}"
+echo ""
+
+if [ ! -d "google-cloud-sdk" ]; then
+    echo -e "${YELLOW}⚠️  Google Cloud SDK not found. Installing...${NC}"
+    
+    # Download SDK
+    echo "Downloading Google Cloud SDK..."
+    curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz
+    
+    # Extract
+    echo "Extracting..."
+    tar -xf google-cloud-cli-linux-x86_64.tar.gz
+    rm google-cloud-cli-linux-x86_64.tar.gz
+    
+    # Install Pub/Sub emulator component
+    echo "Installing Pub/Sub emulator component..."
+    # We use --quiet to avoid prompts and --path-update=false to avoid modifying shell profile
+    ./google-cloud-sdk/install.sh --quiet --path-update=false --usage-reporting=false
+    ./google-cloud-sdk/bin/gcloud components install pubsub-emulator --quiet
+    
+    echo -e "${GREEN}✅ Google Cloud SDK installed${NC}"
+else
+    echo -e "${GREEN}✅ Google Cloud SDK found${NC}"
+    
+    # Check if pubsub-emulator is installed
+    if [ ! -f "google-cloud-sdk/platform/pubsub-emulator/bin/cloud-pubsub-emulator" ]; then
+        echo "Installing Pub/Sub emulator component..."
+        ./google-cloud-sdk/bin/gcloud components install pubsub-emulator --quiet
+        echo -e "${GREEN}✅ Pub/Sub emulator installed${NC}"
+    fi
+fi
+
 # Create Python virtual environment
 echo ""
-echo -e "${BLUE}[4/7] Setting up Python virtual environment...${NC}"
+echo -e "${BLUE}[5/7] Setting up Python virtual environment...${NC}"
 echo ""
 
 if [ -d "$VENV_DIR" ]; then
@@ -165,7 +243,7 @@ pip install --upgrade pip > /dev/null 2>&1
 
 # Install requirements
 echo ""
-echo -e "${BLUE}[5/7] Installing Python dependencies...${NC}"
+echo -e "${BLUE}[6/7] Installing Python dependencies...${NC}"
 echo ""
 
 if [ -f "requirements.txt" ]; then
@@ -180,7 +258,7 @@ fi
 
 # Import MongoDB collections
 echo ""
-echo -e "${BLUE}[6/7] Importing MongoDB collections...${NC}"
+echo -e "${BLUE}[7/7] Importing MongoDB collections...${NC}"
 echo ""
 
 if [ -d "$COLLECTIONS_DIR" ]; then
@@ -226,7 +304,7 @@ fi
 
 # Create .env file if it doesn't exist
 echo ""
-echo -e "${BLUE}[7/7] Checking configuration files...${NC}"
+echo -e "${BLUE}[8/8] Checking configuration files...${NC}"
 echo ""
 
 if [ ! -f ".env" ]; then

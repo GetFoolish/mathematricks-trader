@@ -75,7 +75,20 @@ def start_pubsub_emulator():
 
     # Start emulator
     print("Starting emulator in background...")
-    emulator_jar = PROJECT_ROOT / "google-cloud-sdk" / "platform" / "pubsub-emulator" / "lib" / "cloud-pubsub-emulator-0.8.6.jar"
+    
+    # Find emulator JAR dynamically
+    import glob
+    emulator_glob = PROJECT_ROOT / "google-cloud-sdk" / "platform" / "pubsub-emulator" / "lib" / "cloud-pubsub-emulator-*.jar"
+    jar_files = glob.glob(str(emulator_glob))
+    
+    if not jar_files:
+        print(f"{Colors.RED}✗ Pub/Sub emulator JAR not found.{Colors.NC}")
+        print(f"  Expected at: {emulator_glob}")
+        print("  Please run ./dev/setup_project_onUbuntu.sh to install Google Cloud SDK")
+        return None
+        
+    emulator_jar = Path(jar_files[0])
+    print(f"  Using emulator JAR: {emulator_jar.name}")
     
     # OS-specific Java detection
     java_path = None
