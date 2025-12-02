@@ -11,8 +11,11 @@ from datetime import datetime, timezone
 import argparse
 
 class SignalSender:
-    def __init__(self, passphrase="yahoo123", use_staging=False):
-        self.api_url = "https://staging.mathematricks.fund/api/signals" if use_staging else "https://mathematricks.fund/api/signals"
+    def __init__(self, passphrase="yahoo123", use_staging=False, custom_url=None):
+        if custom_url:
+            self.api_url = custom_url
+        else:
+            self.api_url = "https://staging.mathematricks.fund/api/signals" if use_staging else "https://mathematricks.fund/api/signals"
         self.passphrase = passphrase
         self.session = requests.Session()
         self.session.headers.update({
@@ -133,10 +136,12 @@ def main():
                        help='Use staging environment')
     parser.add_argument('--test-suite', action='store_true',
                        help='Run full test suite')
+    parser.add_argument('--url',
+                       help='Custom webhook URL (e.g., http://localhost:8888)')
 
     args = parser.parse_args()
 
-    sender = SignalSender(args.passphrase, args.staging)
+    sender = SignalSender(args.passphrase, args.staging, args.url)
 
     if args.test_suite:
         sender.run_test_suite()

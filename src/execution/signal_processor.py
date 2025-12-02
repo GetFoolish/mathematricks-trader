@@ -16,7 +16,7 @@ from ..order_management import SignalConverter, MathematricksOrder
 from ..brokers import BaseBroker
 from .portfolio_manager import PortfolioManager
 from ..utils.logger import setup_logger
-from telegram import TelegramNotifier
+from telegram.notifier import TelegramNotifier
 
 # Setup logger
 logger = setup_logger('signal_processor', 'signal_processor.log')

@@ -15,6 +15,9 @@ from src.order_management import SignalConverter
 from src.reporting import DataStore
 from src.utils.logger import setup_logger
 from telegram import TelegramNotifier
+from google.cloud import pubsub_v1
+import json
+import threading
 
 # Load environment variables
 load_dotenv()
@@ -102,11 +105,14 @@ def initialize_trading_system():
     logger.info("Initializing signal converter...")
     signal_converter = SignalConverter()
 
-    # 6. Initialize data store
+    # 6. Initialize MongoDB data store
     logger.info("Initializing MongoDB data store...")
-    mongodb_url = os.getenv('mongodbconnectionstring')
+    mongodb_url = os.getenv('MONGODB_URI') or os.getenv('mongodbconnectionstring') or "mongodb://mathematricks_mongodb:27017/mathematricks_trader"
     data_store = DataStore(mongodb_url)
-    data_store.connect()
+    if data_store.connect():
+        logger.info("✅ Connected to MongoDB data store")
+    else:
+        logger.warning("⚠️  MongoDB connection failed - continuing without data store")
 
     # 7. Initialize Telegram notifier
     logger.info("Initializing Telegram notifier...")
@@ -133,6 +139,58 @@ def initialize_trading_system():
     return signal_processor
 
 
+def start_pubsub_listener(signal_processor):
+    """Start listening for Pub/Sub messages"""
+    project_id = os.getenv('PUBSUB_PROJECT_ID', 'mathematricks-dev')
+    subscription_id = os.getenv('PUBSUB_SUBSCRIPTION_ID', 'trader_subscription')
+    topic_id = os.getenv('PUBSUB_TOPIC_ID', 'trading_signals')
+
+    logger.info(f"Starting Pub/Sub listener for {project_id}/{subscription_id}...")
+
+    try:
+        subscriber = pubsub_v1.SubscriberClient()
+        subscription_path = subscriber.subscription_path(project_id, subscription_id)
+        topic_path = subscriber.topic_path(project_id, topic_id)
+
+        # Create subscription if it doesn't exist
+        try:
+            subscriber.create_subscription(
+                request={"name": subscription_path, "topic": topic_path}
+            )
+            logger.info(f"✅ Created Pub/Sub subscription: {subscription_path}")
+        except Exception:
+            # Subscription likely already exists
+            pass
+
+        def callback(message):
+            try:
+                logger.info(f"📥 Received Pub/Sub message: {message.message_id}")
+                data = message.data.decode("utf-8")
+                signal_data = json.loads(data)
+                
+                logger.info(f"Processing signal from Pub/Sub: {signal_data.get('signalID', 'Unknown')}")
+                
+                # Process signal
+                signal_processor.process_new_signal(signal_data)
+                
+                # Acknowledge message
+                message.ack()
+            except Exception as e:
+                logger.error(f"❌ Error processing Pub/Sub message: {e}")
+                # Nack the message so it can be retried
+                message.nack()
+
+        # Subscribe asynchronously
+        streaming_pull_future = subscriber.subscribe(subscription_path, callback=callback)
+        logger.info(f"✅ Listening for messages on {subscription_path}")
+        
+        return streaming_pull_future
+
+    except Exception as e:
+        logger.error(f"❌ Failed to start Pub/Sub listener: {e}")
+        return None
+
+
 def main():
     """Main entry point"""
     # Initialize trading system
@@ -141,6 +199,9 @@ def main():
     logger.info("System is now listening for signals from signal_collector.py")
     logger.info("Signals will be automatically processed when received")
     logger.info("View dashboard at: http://localhost:8501")
+
+    # Start Pub/Sub listener
+    pubsub_future = start_pubsub_listener(signal_processor)
 
     # Keep the process running
     try:

@@ -30,11 +30,19 @@ class DataStore:
     def connect(self) -> bool:
         """Connect to MongoDB"""
         try:
-            self.client = MongoClient(
-                self.mongodb_url,
-                tls=True,
-                tlsAllowInvalidCertificates=True
-            )
+            # Detect if connecting to Atlas or local MongoDB
+            is_atlas = 'mongodb+srv' in self.mongodb_url or 'mongodb.net' in self.mongodb_url
+            
+            if is_atlas:
+                # Atlas connection requires TLS
+                self.client = MongoClient(
+                    self.mongodb_url,
+                    tls=True,
+                    tlsAllowInvalidCertificates=True
+                )
+            else:
+                # Local MongoDB connection (no TLS needed)
+                self.client = MongoClient(self.mongodb_url)
 
             # Test connection
             self.client.admin.command('ping')

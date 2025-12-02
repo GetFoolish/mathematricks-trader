@@ -4,11 +4,13 @@ import time
 import datetime
 import os
 import logging
+import threading
 from dateutil import parser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 from dotenv import load_dotenv
+from google.cloud import pubsub_v1
 
 # Load environment variables
 load_dotenv()
@@ -48,6 +50,15 @@ class WebhookSignalCollector:
         self.mongodb_client = None
         self.mongodb_collection = None
 
+        # Pub/Sub configuration
+        self.project_id = os.getenv('PUBSUB_PROJECT_ID', 'mathematricks-dev')
+        self.topic_id = os.getenv('PUBSUB_TOPIC_ID', 'trading_signals')
+        self.publisher = None
+        self.topic_path = None
+
+        # Initialize Pub/Sub
+        self.setup_pubsub()
+
         # Try to connect to MongoDB
         self.connect_to_mongodb()
 
@@ -73,6 +84,43 @@ class WebhookSignalCollector:
             logger.info(f"⚠️ MongoDB connection failed: {e}")
             logger.info("📄 Will fall back to JSON file storage")
             return False
+
+    def setup_pubsub(self):
+        """Initialize Pub/Sub publisher and create topic if needed"""
+        try:
+            self.publisher = pubsub_v1.PublisherClient()
+            self.topic_path = self.publisher.topic_path(self.project_id, self.topic_id)
+            
+            # Create topic if it doesn't exist
+            try:
+                self.publisher.create_topic(request={"name": self.topic_path})
+                logger.info(f"✅ Created Pub/Sub topic: {self.topic_path}")
+            except Exception:
+                # Topic likely already exists
+                pass
+                
+            logger.info(f"✅ Connected to Pub/Sub topic: {self.topic_path}")
+        except Exception as e:
+            logger.info(f"⚠️ Failed to initialize Pub/Sub: {e}")
+            self.publisher = None
+
+    def publish_to_pubsub(self, signal_data: dict):
+        """Publish signal to Pub/Sub topic"""
+        if not self.publisher or not self.topic_path:
+            return
+
+        try:
+            # Convert signal data to JSON string and then bytes
+            data_str = json.dumps(signal_data)
+            data = data_str.encode("utf-8")
+            
+            # Publish message
+            future = self.publisher.publish(self.topic_path, data)
+            message_id = future.result()
+            
+            logger.info(f"📤 Published to Pub/Sub (Message ID: {message_id})")
+        except Exception as e:
+            logger.info(f"❌ Failed to publish to Pub/Sub: {e}")
 
     def fetch_missed_signals_from_mongodb(self):
         """Fetch missed signals directly from MongoDB"""
@@ -358,6 +406,9 @@ class WebhookSignalCollector:
         except Exception as e:
             logger.info(f"⚠️  Error processing signal in Mathematricks Trader: {e}")
 
+        # Publish to Pub/Sub
+        self.publish_to_pubsub(signal_data)
+
     class SignalHandler(BaseHTTPRequestHandler):
         def __init__(self, collector, *args, **kwargs):
             self.collector = collector
@@ -420,9 +471,10 @@ class WebhookSignalCollector:
     def start_local_server(self):
         """Start local server to receive signals for testing"""
         handler = lambda *args, **kwargs: self.SignalHandler(self, *args, **kwargs)
-        self.server = HTTPServer(('localhost', self.local_port), handler)
+        # Bind to 0.0.0.0 to ensure it's accessible
+        self.server = HTTPServer(('0.0.0.0', self.local_port), handler)
 
-        logger.info(f"🔧 Local signal collector server started on http://localhost:{self.local_port}")
+        logger.info(f"🔧 Local signal collector server started on http://0.0.0.0:{self.local_port}")
         logger.info(f"💡 To test locally, send signals to: http://localhost:{self.local_port}")
         logger.info("─" * 60)
 
@@ -443,7 +495,13 @@ class WebhookSignalCollector:
         else:
             logger.info("❌ MongoDB connection failed - cannot start monitoring")
             logger.info("💡 Restart the collector to retry MongoDB connection")
-            return
+            # Continue anyway to allow local testing via HTTP
+            # return 
+
+        # PHASE 1.5: Start Local HTTP Server (for testing/local dev)
+        logger.info("\n🔌 PHASE 1.5: Starting Local HTTP Server")
+        server_thread = threading.Thread(target=self.start_local_server, daemon=True)
+        server_thread.start()
 
         # PHASE 2: Real-time mode - MongoDB Change Streams
         logger.info("\n📡 PHASE 2: Real-Time Mode - Change Streams")
