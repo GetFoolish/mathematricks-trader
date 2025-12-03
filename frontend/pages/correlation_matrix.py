@@ -23,7 +23,7 @@ def show():
     st.title("🔗 Strategy Correlation Matrix")
 
     # Initialize
-    mongodb_url = os.getenv('mongodbconnectionstring', '')
+    mongodb_url = os.getenv('MONGODB_URI') or os.getenv('mongodbconnectionstring') or "mongodb://mathematricks_mongodb:27017/mathematricks_trader"
 
     if not mongodb_url:
         st.error("MongoDB connection string not found")

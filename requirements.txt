@@ -14,6 +14,9 @@ plotly>=5.17.0
 # Environment variables
 python-dotenv>=1.0.0
 
+# Google Cloud Pub/Sub
+google-cloud-pubsub>=2.18.0
+
 # Broker SDKs (commented out - install as needed)
 # ib-insync>=0.9.86  # Interactive Brokers
 # kiteconnect>=4.2.0  # Zerodha
@@ -22,6 +25,9 @@ python-dotenv>=1.0.0
 
 # Performance metrics
 quantstats>=0.0.62
+
+# IPython is required by `quantstats` for rich display (used in Streamlit pages)
+ipython>=8.15.0
 
 # Development dependencies (optional)
 # pytest>=7.4.0

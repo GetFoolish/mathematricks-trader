@@ -1,0 +1,143 @@
+services:
+  mongodb:
+    image: mongo:8.0 # Latest stable MongoDB (October 2024)
+    container_name: mathematricks_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE}
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb # Persist MongoDB configuration
+    networks:
+      - internal_net
+      - frontend_net
+    healthcheck:
+      # MongoDB 8.0 uses mongosh (modern shell)
+      test: [ "CMD-SHELL", "mongosh --eval \"db.adminCommand('ping')\" --quiet || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s # MongoDB 8.0 may take longer to initialize
+    # Do NOT expose MongoDB port to the host in production
+
+  pubsub:
+    image: google/cloud-sdk:emulators
+    container_name: mathematricks_pubsub
+    ports:
+      - "8085:8085"
+    command: gcloud beta emulators pubsub start --project=mathematricks-dev --host-port=0.0.0.0:8085
+    networks:
+      - internal_net
+
+  trader_engine:
+    build:
+      context: .
+      dockerfile: docker/trader_engine/Dockerfile
+    container_name: mathematricks_trader_engine
+    env_file: .env
+    environment:
+      - PUBSUB_EMULATOR_HOST=pubsub:8085
+      - PUBSUB_PROJECT_ID=mathematricks-dev
+      - PUBSUB_TOPIC_ID=trading_signals
+      - PUBSUB_SUBSCRIPTION_ID=trader_subscription
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      pubsub:
+        condition: service_started
+    networks:
+      - internal_net
+    volumes:
+      - trader_logs:/app/logs
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    user: "1000:1000"
+
+  signal_collector:
+    build:
+      context: .
+      dockerfile: docker/signal_collector/Dockerfile
+    container_name: mathematricks_signal_collector
+    env_file: .env
+    environment:
+      - PUBSUB_EMULATOR_HOST=pubsub:8085
+      - PUBSUB_PROJECT_ID=mathematricks-dev
+      - PUBSUB_TOPIC_ID=trading_signals
+    ports:
+      - "8888:8888" # Expose HTTP server for local testing
+    networks:
+      - internal_net
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      trader_engine:
+        condition: service_started
+      pubsub:
+        condition: service_started
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+    user: "1000:1000"
+
+  telegram_notifier:
+    build:
+      context: .
+      dockerfile: docker/telegram_notifier/Dockerfile
+    container_name: mathematricks_telegram_notifier
+    env_file: .env
+    networks:
+      - internal_net
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+    user: "1000:1000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    container_name: mathematricks_frontend
+    env_file: .env
+    ports:
+      - "8501:8501" # Only frontend is exposed to host
+    networks:
+      - frontend_net
+    volumes:
+      - frontend_cache:/app/.streamlit
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    user: "1000:1000"
+
+volumes:
+  mongo_data:
+    name: mathematricks_mongo_data
+  mongo_config:
+    name: mathematricks_mongo_config
+  trader_logs:
+    name: mathematricks_trader_logs
+  frontend_cache:
+    name: mathematricks_frontend_cache
+
+networks:
+  internal_net:
+    driver: bridge
+    internal: true
+  frontend_net:
+    driver: bridge
