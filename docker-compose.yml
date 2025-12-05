@@ -1,0 +1,99 @@
+services:
+  mongodb:
+    image: mongo:6.0
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - trader_net
+
+  pubsub-emulator:
+    image: google/cloud-sdk:emulators
+    container_name: pubsub-emulator
+    command: gcloud beta emulators pubsub start --project=mathematricks-trader --host-port=0.0.0.0:8085
+    ports:
+      - "8085:8085"
+    networks:
+      - trader_net
+
+  # --- The API Service ---
+  account-data-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: account-data-service
+    volumes:
+      - .:/app
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1  # Important: Force logs to stdout immediately
+    working_dir: /app/services/account_data_service
+    command: python account_data_main.py
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mongodb
+    networks:
+      - trader_net
+
+  cerebro-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: cerebro-service
+    volumes:
+      - .:/app
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    working_dir: /app/services/cerebro_service
+    command: python cerebro_main.py
+    depends_on:
+      - mongodb
+      - pubsub-emulator
+    networks:
+      - trader_net
+
+  execution-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    container_name: execution-service
+    volumes:
+      - .:/app
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    working_dir: /app/services/execution_service
+    command: python execution_main.py
+    depends_on:
+      - mongodb
+    networks:
+      - trader_net
+
+  frontend:
+    build: ./frontend-admin
+    container_name: frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend-admin/src:/app/src
+    environment:
+      # Localhost is correct here because the browser (host) calls the API (host port 8000)
+      - VITE_API_URL=http://localhost:8000
+    networks:
+      - trader_net
+
+volumes:
+  mongo_data:
+
+networks:
+  trader_net:
+    driver: bridge
