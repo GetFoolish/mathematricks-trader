@@ -29,27 +29,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None):
+def send_signal(db, payload: dict, signal_type: str = "single", previous_entry_id: str = None):
     """
     Insert signal directly into MongoDB signal_store collection
 
     Args:
+        db: PyMongo database object
         payload: Signal JSON matching webhook format
         signal_type: Type of signal ("entry", "exit", or "single")
         previous_entry_id: MongoDB ObjectId of previous ENTRY signal (for EXIT signals)
     """
-    # Connect to MongoDB
-    mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/?replicaSet=rs0')
-    try:
-        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
-        # Test connection
-        client.server_info()
-    except Exception as e:
-        print(f"❌ Failed to connect to MongoDB: {e}")
-        print(f"   URI: {mongodb_uri}")
-        sys.exit(1)
-
-    db = client['mathematricks_trading']
 
     # Inject entry_signal_id if this is an EXIT signal and we have a previous ENTRY
     if signal_type == "exit" and previous_entry_id:
@@ -171,21 +160,11 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
         print(f"❌ Failed to insert signal: {e}")
         sys.exit(1)
 
-    client.close()
     return return_value
 
 
-def list_strategies():
+def list_strategies(db):
     """List available strategies from MongoDB"""
-    mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/?replicaSet=rs0')
-    try:
-        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
-        client.server_info()
-    except Exception as e:
-        print(f"❌ Failed to connect to MongoDB: {e}")
-        sys.exit(1)
-
-    db = client['mathematricks_trading']
     strategies = list(db.strategies.find({}, {"name": 1, "accounts": 1}))
 
     if not strategies:
@@ -202,8 +181,6 @@ def list_strategies():
         print(f"    Accounts: {account_str}")
     print("=" * 80)
     print("")
-
-    client.close()
 
 
 def main():
@@ -287,9 +264,23 @@ See sample files in services/signal_ingestion/sample_signals/
 
     args = parser.parse_args()
 
+    # Connect to MongoDB once for the script execution
+    mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/?replicaSet=rs0')
+    try:
+        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
+        # Test connection
+        client.server_info()
+        db = client['mathematricks_trading']
+        print("✓ Connected to MongoDB")
+    except Exception as e:
+        print(f"❌ Failed to connect to MongoDB: {e}")
+        print(f"   URI: {mongodb_uri}")
+        sys.exit(1)
+
     # List strategies mode
     if args.list_strategies:
-        list_strategies()
+        list_strategies(db)
+        client.close()
         return
 
     # Handle --file option
@@ -360,7 +351,7 @@ See sample files in services/signal_ingestion/sample_signals/
                         print(f"⚠️ WARNING: Variable {entry_ref} not found in registry")
 
             # Send signal (pass signal_type lowercase and resolved_entry_id)
-            result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id)
+            result = send_signal(db, signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id)
 
             # Capture ENTRY signal_store ID and register named variable
             if signal_type == "ENTRY" and result and result.get("signal_store_id"):
@@ -392,7 +383,9 @@ See sample files in services/signal_ingestion/sample_signals/
     else:
         # Single signal format
         _validate_signal_payload(payload)
-        send_signal(payload, signal_type="single")
+        send_signal(db, payload, signal_type="single")
+
+    client.close()
 
 
 def _validate_signal_payload(payload: dict, allow_signal_type: bool = False):

@@ -6,6 +6,7 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    command: mongod --replSet rs0
     networks:
       - trader_net
 
@@ -23,9 +24,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.python
+      args:
+        REQS_FILE: services/account_data_service/requirements.txt
     container_name: account-data-service
     volumes:
       - .:/app
+    env_file:
+      - ./.env
     environment:
       - MONGO_URI=mongodb://mongodb:27017
       - PYTHONPATH=/app
@@ -33,7 +38,7 @@ services:
     working_dir: /app/services/account_data_service
     command: python account_data_main.py
     ports:
-      - "8000:8000"
+      - "8082:8000" # Match README: Host 8082 -> Container 8000
     depends_on:
       - mongodb
     networks:
@@ -43,9 +48,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.python
+      args:
+        REQS_FILE: services/cerebro_service/requirements.txt
     container_name: cerebro-service
     volumes:
       - .:/app
+    env_file:
+      - ./.env
     environment:
       - MONGO_URI=mongodb://mongodb:27017
       - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
@@ -63,9 +72,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.python
+      args:
+        REQS_FILE: services/execution_service/requirements.txt
     container_name: execution-service
     volumes:
       - .:/app
+    env_file:
+      - ./.env
     environment:
       - MONGO_URI=mongodb://mongodb:27017
       - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
@@ -78,6 +91,82 @@ services:
     networks:
       - trader_net
 
+  portfolio-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        # Assuming a requirements file exists at this path
+        REQS_FILE: services/portfolio_builder/requirements.txt
+    container_name: portfolio-service
+    volumes:
+      - .:/app
+    env_file:
+      - ./.env
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    working_dir: /app/services/portfolio_builder
+    command: python main.py
+    ports:
+      - "8003:8000" # Host port 8003 (from README) -> Container port 8000
+    depends_on:
+      - mongodb
+    networks:
+      - trader_net
+
+  dashboard-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        # Assuming a requirements file exists at this path
+        REQS_FILE: services/dashboard_creator/requirements.txt
+    container_name: dashboard-service
+    volumes:
+      - .:/app
+    env_file:
+      - ./.env
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    working_dir: /app/services/dashboard_creator
+    command: python dashboard_creator_main.py
+    ports:
+      - "8004:8000" # Host port 8004 (from README) -> Container port 8000
+    depends_on:
+      - mongodb
+    networks:
+      - trader_net
+
+  signal-ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        # Assuming a requirements file exists at this path
+        REQS_FILE: services/signal_ingestion/requirements.txt
+    container_name: signal-ingestion
+    volumes:
+      - .:/app
+    env_file:
+      - ./.env
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - SIGNAL_INGESTION_STAGING=true # Assuming --staging maps to this env var
+    working_dir: /app/services/signal_ingestion
+    command: python signal_ingestion_main.py
+    depends_on:
+      - mongodb
+      - pubsub-emulator
+    networks:
+      - trader_net
+
   frontend:
     build: ./frontend-admin
     container_name: frontend
@@ -86,8 +175,8 @@ services:
     volumes:
       - ./frontend-admin/src:/app/src
     environment:
-      # Localhost is correct here because the browser (host) calls the API (host port 8000)
-      - VITE_API_URL=http://localhost:8000
+      # This may need to be updated to the correct API endpoint, e.g., http://localhost:8082
+      - VITE_API_URL=http://localhost:8082
     networks:
       - trader_net
 
