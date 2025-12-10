@@ -1,4 +1,4 @@
-.PHONY: start stop restart status logs clean help
+.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard
 
 # Default target
 help:
@@ -11,6 +11,10 @@ help:
 	@echo "make logs          - View logs of all services"
 	@echo "make logs-cerebro  - View logs of cerebro-service"
 	@echo "make logs-execution - View logs of execution-service"
+	@echo "make logs-signal-ingestion - View logs of signal-ingestion"
+	@echo "make logs-account-data - View logs of account-data-service"
+	@echo "make logs-portfolio - View logs of portfolio-builder"
+	@echo "make logs-dashboard - View logs of dashboard-creator"
 	@echo "make rebuild       - Rebuild all containers"
 	@echo "make clean         - Stop and remove all containers and volumes (DATA LOSS!)"
 
@@ -38,8 +42,35 @@ logs-execution:
 logs-frontend:
 	docker-compose logs -f frontend
 
+logs-signal-ingestion:
+	docker-compose logs -f signal-ingestion
+
+logs-account-data:
+	docker-compose logs -f account-data-service
+
+logs-portfolio:
+	docker-compose logs -f portfolio-builder
+
+logs-dashboard:
+	docker-compose logs -f dashboard-creator
+
 restart-cerebro:
 	docker-compose restart cerebro-service
+
+restart-execution:
+	docker-compose restart execution-service
+
+restart-signal-ingestion:
+	docker-compose restart signal-ingestion
+
+restart-account-data:
+	docker-compose restart account-data-service
+
+restart-portfolio:
+	docker-compose restart portfolio-builder
+
+restart-dashboard:
+	docker-compose restart dashboard-creator
 
 rebuild:
 	docker-compose build
