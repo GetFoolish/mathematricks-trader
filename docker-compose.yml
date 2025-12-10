@@ -1,0 +1,158 @@
+version: '3.8'
+
+services:
+  # Python Services
+  cerebro-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        SERVICE_NAME: cerebro_service
+    volumes:
+      - ./services:/app/services
+    ports:
+      - "5678:5678" # Debug port
+    depends_on:
+      - mongodb
+      - pubsub-emulator
+    environment:
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - PUBSUB_PROJECT_ID=mathematricks-trader
+      - MONGODB_URI=mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/
+      # Add services directory to python path for imports
+      - PYTHONPATH=/app/services/cerebro_service:/app
+      - ACCOUNT_DATA_SERVICE_URL=http://account-data-service:8082
+    command: python -m services.cerebro_service.cerebro_main
+
+  execution-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        SERVICE_NAME: execution_service
+    volumes:
+      - ./services:/app/services
+    ports:
+      - "5679:5679" # Debug port
+    depends_on:
+      - mongodb
+      - pubsub-emulator
+      - pubsub-init
+    environment:
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - PUBSUB_PROJECT_ID=mathematricks-trader
+      - MONGODB_URI=mongodb://mongodb:27017
+      - ACCOUNT_DATA_SERVICE_URL=http://account-data-service:8082
+    command: python -m services.execution_service.execution_main
+
+  account-data-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        SERVICE_NAME: account_data_service
+    volumes:
+      - ./services:/app/services
+    depends_on:
+      - mongodb
+      - pubsub-emulator
+    environment:
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - PUBSUB_PROJECT_ID=mathematricks-trader
+      - MONGODB_URI=mongodb://mongodb:27017
+    command: python -m services.account_data_service.account_data_main
+
+  # Infrastructure Services
+  mongodb:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    command: [ "--replSet", "rs0", "--bind_ip_all" ]
+    healthcheck:
+      test: echo "try { rs.status() } catch (e) { rs.initiate() }" | mongosh --port 27017 --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # Signal Ingestion
+  signal-ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        SERVICE_NAME: signal_ingestion
+    volumes:
+      - ./services:/app/services
+    depends_on:
+      - pubsub-emulator
+      - pubsub-init
+    environment:
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - PUBSUB_PROJECT_ID=mathematricks-trader
+      - MONGODB_URI=mongodb://mongodb:27017
+    command: python -m services.signal_ingestion.signal_ingestion_main --staging
+
+  # IB Gateway
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:latest
+    ports:
+      - "4001:4003" # Live API port
+      - "4002:4004" # Paper API port
+      - "5900:5900" # VNC
+    environment:
+      - TWS_USERID=${IBKR_PAPER_USERNAME}
+      - TWS_PASSWORD=${IBKR_PAPER_PASSWORD}
+      - TRADING_MODE=paper
+      - TWOFA_TIMEOUT_ACTION=restart
+      - READ_ONLY_API=no
+      - IBC_AcceptIncomingConnectionAction=accept
+      - VNC_SERVER_PASSWORD=ibgateway
+    # Restart policy to handle 2FA timeouts/restarts
+    restart: unless-stopped
+
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    ports:
+      - "8085:8085"
+    command: gcloud beta emulators pubsub start --project=mathematricks-trader --host-port=0.0.0.0:8085
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8085/" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  pubsub-init:
+    image: python:3.11-slim
+    volumes:
+      - ./scripts:/scripts
+    depends_on:
+      pubsub-emulator:
+        condition: service_healthy
+    environment:
+      - PUBSUB_EMULATOR_HOST=pubsub-emulator:8085
+      - PUBSUB_PROJECT_ID=mathematricks-trader
+    command: >
+      bash -c "pip install google-cloud-pubsub && python /scripts/init_pubsub.py"
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend-admin
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend-admin:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    command: npm run dev -- --host
+
+volumes:
+  mongo_data:
+
+
+networks:
+  default:
+    name: tradenet

@@ -28,7 +28,7 @@ wheels/
 .venv
 
 # IDE
-.vscode/
+
 .idea/
 *.swp
 *.swo

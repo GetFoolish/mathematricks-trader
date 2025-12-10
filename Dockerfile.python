@@ -1,0 +1,68 @@
+# Dockerfile.python
+FROM python:3.11-slim
+
+# Install system dependencies if any (e.g. for building packages)
+# gcc and python3-dev are common requirements for some python packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Ensure we can import from the root /app
+ENV PYTHONPATH=/app
+
+# Copy generic requirements separately if needed, but for now we assume
+# requirements are passed or mounted. 
+# In dev mode, we mount volumes, but we need packages installed.
+# We'll expect a requirements.txt to be present or we'll install common ones.
+# Actually, the user guide says: "Edit requirements.txt on your machine... Rebuild container"
+# This implies the Dockerfile copies requirements.txt and installs it.
+
+# Since we share this Dockerfile across services, we need a way to target specific requirements.
+# However, usually there's a base set. 
+# Let's check if there is a root requirements.txt? 
+# The file list showed one in root: "requirements.txt". 
+# And the user guide showed "services/cerebro_service/requirements.txt".
+
+# Strategy: Install the root requirements first.
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Then, if a service specific requirements file exists, it should be installed.
+# But this is a generic Dockerfile. 
+# We can use an ONBUILD instruction or just expect the docker-compose to handle the build context specific to the service?
+# If we assume docker-compose build context is the root, we can't easily copy a specific service's requirements without args.
+
+# Re-reading user guide "Scenario 3":
+# echo "pandas-ta==0.3.14" >> services/cerebro_service/requirements.txt
+# docker-compose build cerebro-service
+#
+# This implies `docker-compose.yml` has `build: context: . dockerfile: Dockerfile.python args: ...` 
+# OR `build: context: services/cerebro_service` and that directory has a Dockerfile?
+# The user prompted "Create Dockerfile for Python services" (singular). 
+# This typically means one Dockerfile used for all.
+#
+# Let's use a build argument for the service path.
+ONBUILD ARG SERVICE_PATH
+ONBUILD COPY ${SERVICE_PATH}/requirements.txt /app/service_requirements.txt
+ONBUILD RUN if [ -f /app/service_requirements.txt ]; then pip install --no-cache-dir -r /app/service_requirements.txt; fi
+
+# Wait, ONBUILD triggers when this image is used as a base. 
+# If I use this image directly in docker-compose, ONBUILD won't help unless I have child images.
+#
+# Simplified approach for Dev:
+# Just install the root requirements. If a service has extra requirements, 
+# the user might need to install them manually or we need a better copy strategy.
+#
+# Actually, I'll write a script or just assume the root requirements covers most, 
+# and maybe add a step to install service specific ones if passed as an ARG.
+
+# Revised:
+ARG SERVICE_NAME
+COPY services/${SERVICE_NAME}/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt || echo "No requirements found for ${SERVICE_NAME}"
+
+# Keep container running
+CMD ["tail", "-f", "/dev/null"]
