@@ -1,0 +1,121 @@
+[
+    {
+        "strategy_name": "SPX_1-D_Opt",
+        "passphrase": "test_password_123",
+        "signal_type": "ENTRY",
+        "entry_name": "$ENTRY_1",
+        "account_equity": 500000,
+        "signal_legs": [
+            {
+                "instrument": "AAPL",
+                "instrument_type": "STOCK",
+                "action": "BUY",
+                "direction": "LONG",
+                "quantity": 10,
+                "order_type": "MARKET",
+                "price": 150.00,
+                "environment": "staging"
+            }
+        ],
+        "wait": 5
+    },
+    {
+        "strategy_name": "SPX_1-D_Opt",
+        "passphrase": "test_password_123",
+        "signal_type": "ENTRY",
+        "entry_name": "$ENTRY_2",
+        "account_equity": 500000,
+        "signal_legs": [
+            {
+                "instrument": "AAPL",
+                "instrument_type": "STOCK",
+                "action": "BUY",
+                "direction": "LONG",
+                "quantity": 7,
+                "order_type": "MARKET",
+                "price": 151.00,
+                "environment": "staging"
+            }
+        ],
+        "wait": 5
+    },
+    {
+        "strategy_name": "SPX_1-D_Opt",
+        "passphrase": "test_password_123",
+        "signal_type": "ENTRY",
+        "entry_name": "$ENTRY_3",
+        "account_equity": 500000,
+        "signal_legs": [
+            {
+                "instrument": "AAPL",
+                "instrument_type": "STOCK",
+                "action": "BUY",
+                "direction": "LONG",
+                "quantity": 13,
+                "order_type": "MARKET",
+                "price": 152.00,
+                "environment": "staging"
+            }
+        ],
+        "wait": 10
+    },
+    {
+        "strategy_name": "SPX_1-D_Opt",
+        "passphrase": "test_password_123",
+        "signal_type": "EXIT",
+        "entry_signal_id": "$ENTRY_1",
+        "account_equity": 500000,
+        "signal_legs": [
+            {
+                "instrument": "AAPL",
+                "instrument_type": "STOCK",
+                "action": "SELL",
+                "direction": "SHORT",
+                "quantity": 5,
+                "order_type": "MARKET",
+                "price": 153.00,
+                "environment": "staging"
+            }
+        ],
+        "wait": 5
+    },
+    {
+        "strategy_name": "SPX_1-D_Opt",
+        "passphrase": "test_password_123",
+        "signal_type": "EXIT",
+        "entry_signal_id": "$ENTRY_2",
+        "account_equity": 500000,
+        "signal_legs": [
+            {
+                "instrument": "AAPL",
+                "instrument_type": "STOCK",
+                "action": "SELL",
+                "direction": "SHORT",
+                "quantity": 15,
+                "order_type": "MARKET",
+                "price": 154.00,
+                "environment": "staging"
+            }
+        ],
+        "wait": 5
+    },
+    {
+        "strategy_name": "SPX_1-D_Opt",
+        "passphrase": "test_password_123",
+        "signal_type": "EXIT",
+        "entry_signal_id": "$ENTRY_3",
+        "account_equity": 500000,
+        "signal_legs": [
+            {
+                "instrument": "AAPL",
+                "instrument_type": "STOCK",
+                "action": "SELL",
+                "direction": "SHORT",
+                "quantity": 10,
+                "order_type": "MARKET",
+                "price": 155.00,
+                "environment": "staging"
+            }
+        ]
+    }
+]

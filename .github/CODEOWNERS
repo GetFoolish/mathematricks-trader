@@ -1,0 +1,10 @@
+# CODEOWNERS file
+# This file defines code ownership for the repository
+# Only the specified owners can approve changes to protected branches
+
+# Protect staging and main branches - only vandanchopra can approve changes
+* @vandanchopra
+
+# All files in the repository require approval from vandanchopra
+# When branch protection is enabled with "Require pull request reviews before merging"
+# and "Require review from Code Owners", this ensures only you can approve PRs

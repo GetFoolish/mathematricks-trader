@@ -9,6 +9,7 @@ export const Strategies: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingStrategy, setEditingStrategy] = useState<Strategy | null>(null);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   // Fetch all strategies
   const { data: strategies, isLoading } = useQuery({
@@ -35,10 +36,51 @@ export const Strategies: React.FC = () => {
     },
   });
 
-  // Delete strategy mutation
+  // Delete strategy mutation with optimistic update
   const deleteMutation = useMutation({
     mutationFn: (strategyId: string) => apiClient.deleteStrategy(strategyId),
-    onSuccess: () => {
+    onMutate: async (strategyId) => {
+      // Mark as deleting for animation
+      setDeletingIds(prev => new Set(prev).add(strategyId));
+
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['strategies'] });
+
+      // Snapshot previous value
+      const previousStrategies = queryClient.getQueryData<Strategy[]>(['strategies']);
+
+      // Optimistically remove from UI after animation starts
+      setTimeout(() => {
+        queryClient.setQueryData<Strategy[]>(['strategies'], (old) =>
+          old?.filter((s) => s.strategy_id !== strategyId)
+        );
+      }, 300); // Match animation duration
+
+      return { previousStrategies };
+    },
+    onError: (err, strategyId, context) => {
+      // Rollback on error
+      if (context?.previousStrategies) {
+        queryClient.setQueryData(['strategies'], context.previousStrategies);
+      }
+      setDeletingIds(prev => {
+        const next = new Set(prev);
+        next.delete(strategyId);
+        return next;
+      });
+    },
+    onSuccess: (data, strategyId) => {
+      // Remove from deleting set after animation completes
+      setTimeout(() => {
+        setDeletingIds(prev => {
+          const next = new Set(prev);
+          next.delete(strategyId);
+          return next;
+        });
+      }, 300);
+    },
+    onSettled: () => {
+      // Refetch to ensure sync with server
       queryClient.invalidateQueries({ queryKey: ['strategies'] });
     },
   });
@@ -123,7 +165,14 @@ export const Strategies: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-gray-700">
               {filteredStrategies?.map((strategy) => (
-                <tr key={strategy.strategy_id} className="hover:bg-gray-700/50">
+                <tr
+                  key={strategy.strategy_id}
+                  className={`hover:bg-gray-700/50 transition-all duration-300 ${
+                    deletingIds.has(strategy.strategy_id)
+                      ? 'opacity-0 scale-95 bg-red-900/20'
+                      : 'opacity-100 scale-100'
+                  }`}
+                >
                   <td className="table-cell font-mono text-xs">{strategy.strategy_id}</td>
                   <td className="table-cell">{strategy.asset_class}</td>
                   <td className="table-cell">

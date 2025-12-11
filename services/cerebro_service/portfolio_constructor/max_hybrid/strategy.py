@@ -144,11 +144,11 @@ class MaxHybridConstructor(PortfolioConstructor):
                  min_allocation: float = 0.01,
                  cagr_target: float = 2,
                  risk_free_rate: float = 0.0,
-                 use_fixed_allocations: bool = True,
+                 use_cached_allocations: bool = True,
                  allocations_config_path: str = None):
         """
         Initialize MaxHybrid constructor.
-        
+
         Args:
             alpha: Balance between Sharpe (1.0) and CAGR (0.0). 0.5 = equal weight
             max_drawdown_limit: Max allowed drawdown (e.g., -0.08 = -8%)
@@ -157,8 +157,8 @@ class MaxHybridConstructor(PortfolioConstructor):
             min_allocation: Minimum allocation threshold
             cagr_target: Target CAGR for normalization (1.0 = 100%)
             risk_free_rate: Risk-free rate for Sharpe calculation
-            use_fixed_allocations: If True, use pre-calculated allocations instead of re-optimizing
-            allocations_config_path: Path to JSON file with fixed allocations
+            use_cached_allocations: If True, use cached allocations (not recalculated - signals are time-critical)
+            allocations_config_path: Path to JSON file with cached approved allocations
         """
         self.alpha = alpha
         self.max_drawdown_limit = max_drawdown_limit
@@ -167,53 +167,53 @@ class MaxHybridConstructor(PortfolioConstructor):
         self.min_allocation = min_allocation
         self.cagr_target = cagr_target
         self.risk_free_rate = risk_free_rate
-        self.use_fixed_allocations = use_fixed_allocations
-        self.fixed_allocations = None
-        
-        # Load fixed allocations if enabled
-        if self.use_fixed_allocations:
+        self.use_cached_allocations = use_cached_allocations
+        self.cached_allocations = None
+
+        # Load cached allocations if enabled
+        if self.use_cached_allocations:
             if allocations_config_path is None:
-                # Default path: portfolio_allocations.json in cerebro_service directory
+                # Default path: current_portfolio_allocation_approved.json in cerebro_service directory
                 import os
                 # __file__ = .../cerebro_service/portfolio_constructor/max_hybrid/strategy.py
                 # Need to go up 3 levels to reach cerebro_service/
                 cerebro_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                allocations_config_path = os.path.join(cerebro_dir, 'portfolio_allocations.json')
-            
-            self._load_fixed_allocations(allocations_config_path)
-        
+                allocations_config_path = os.path.join(cerebro_dir, 'current_portfolio_allocation_approved.json')
+
+            self._load_cached_allocations(allocations_config_path)
+
         logger.info(f"MaxHybrid Constructor initialized:")
-        logger.info(f"  Mode: {'FIXED ALLOCATIONS' if self.use_fixed_allocations else 'DYNAMIC OPTIMIZATION'}")
-        if self.use_fixed_allocations and self.fixed_allocations:
-            logger.info(f"  Loaded {len(self.fixed_allocations)} fixed allocations")
-            logger.info(f"  Total allocation: {sum(self.fixed_allocations.values()):.1f}%")
+        logger.info(f"  Mode: {'CACHED ALLOCATIONS' if self.use_cached_allocations else 'DYNAMIC OPTIMIZATION'}")
+        if self.use_cached_allocations and self.cached_allocations:
+            logger.info(f"  Loaded {len(self.cached_allocations)} cached allocations")
+            logger.info(f"  Total allocation: {sum(self.cached_allocations.values()):.1f}%")
         logger.info(f"  Alpha (Sharpe weight): {alpha:.2f}")
         logger.info(f"  Max Drawdown Limit: {max_drawdown_limit*100:.1f}%")
         logger.info(f"  Max Leverage: {max_leverage*100:.0f}%")
         logger.info(f"  Max Single Strategy: {max_single_strategy*100:.0f}%")
     
-    def _load_fixed_allocations(self, config_path: str):
-        """Load fixed allocations from JSON config file"""
+    def _load_cached_allocations(self, config_path: str):
+        """Load cached approved allocations from JSON config file"""
         import json
         try:
             with open(config_path, 'r') as f:
                 config = json.load(f)
-            
-            self.fixed_allocations = config.get('allocations', {})
-            
+
+            self.cached_allocations = config.get('allocations', {})
+
             # Filter out zero allocations
-            self.fixed_allocations = {
-                k: v for k, v in self.fixed_allocations.items() if v > 0
+            self.cached_allocations = {
+                k: v for k, v in self.cached_allocations.items() if v > 0
             }
-            
-            logger.info(f"✅ Loaded fixed allocations from: {config_path}")
-            logger.info(f"   Allocations: {self.fixed_allocations}")
-            
+
+            logger.info(f"✅ Loaded cached allocations from: {config_path}")
+            logger.info(f"   Allocations: {self.cached_allocations}")
+
         except Exception as e:
-            logger.error(f"❌ Failed to load fixed allocations from {config_path}: {e}")
+            logger.error(f"❌ Failed to load cached allocations from {config_path}: {e}")
             logger.warning("⚠️  Falling back to dynamic optimization mode")
-            self.use_fixed_allocations = False
-            self.fixed_allocations = None
+            self.use_cached_allocations = False
+            self.cached_allocations = None
     
     def _calculate_cagr(self, returns: np.ndarray) -> float:
         """Calculate CAGR from returns"""
@@ -265,15 +265,15 @@ class MaxHybridConstructor(PortfolioConstructor):
         logger.info("="*80)
         logger.info("MaxHybrid Portfolio Allocation")
         logger.info("="*80)
-        
-        # MODE 1: Use fixed allocations (no re-optimization)
-        if self.use_fixed_allocations and self.fixed_allocations:
-            log_opt("🔒 FIXED ALLOCATION MODE - Using pre-calculated allocations")
-            log_opt(f"   Loaded allocations: {self.fixed_allocations}")
+
+        # MODE 1: Use cached allocations (no re-optimization - signals are time-critical)
+        if self.use_cached_allocations and self.cached_allocations:
+            log_opt("⚡ CACHED ALLOCATION MODE - Using approved allocations (not recalculated)")
+            log_opt(f"   Loaded allocations: {self.cached_allocations}")
             log_opt("="*100 + "\n")
             opt_log.close()
-            return self.fixed_allocations.copy()
-        
+            return self.cached_allocations.copy()
+
         # MODE 2: Dynamic optimization (original behavior)
         log_opt("\n🔄 DYNAMIC OPTIMIZATION MODE - Re-optimizing portfolio")
         log_opt(f"\nOptimization Parameters:")
@@ -662,12 +662,24 @@ class MaxHybridConstructor(PortfolioConstructor):
         if strategy_id in allocations and allocations[strategy_id] > 0:
             allocation_pct = allocations[strategy_id]
             
-            # Calculate allocated capital and margin
+            # Calculate allocated capital
             allocated_capital = context.account_equity * (allocation_pct / 100.0)
-            estimated_margin = allocated_capital * 0.5  # Assume 50% margin requirement
-            
+
+            # NOTE: Margin % and position sizing will be calculated in main.py
+            # using strategy-specific data from MongoDB. We just pass allocated_capital here.
+            estimated_margin = allocated_capital * 0.5  # Placeholder, will be recalculated in main.py
+
+            # Calculate shares from allocated capital and price
+            # This is the theoretical full allocation - main.py will adjust for:
+            # 1. Average number of positions this strategy holds
+            # 2. Capital already deployed in other positions
+            if signal.price > 0:
+                calculated_shares = allocated_capital / signal.price
+            else:
+                calculated_shares = 0
+
             logger.info(f"Signal ACCEPTED: {strategy_id} | Allocation: {allocation_pct:.1f}%")
-            
+
             # Build detailed metadata for transparency
             metadata = {
                 'allocation_pct': allocation_pct,
@@ -682,12 +694,13 @@ class MaxHybridConstructor(PortfolioConstructor):
                     'max_leverage': self.max_leverage,
                     'max_drawdown_limit': self.max_drawdown_limit
                 },
-                'position_size_calculation': f"{context.account_equity:,.0f} × {allocation_pct:.2f}% = ${allocated_capital:,.2f}"
+                'position_size_calculation': f"{context.account_equity:,.0f} × {allocation_pct:.2f}% = ${allocated_capital:,.2f}",
+                'calculated_shares_formula': f"${allocated_capital:,.2f} ÷ ${signal.price:,.2f} = {calculated_shares:.2f} shares"
             }
-            
+
             return SignalDecision(
                 action="APPROVE",
-                quantity=signal.quantity,  # Keep original quantity, will be adjusted by Cerebro
+                quantity=calculated_shares,  # FIX: Calculate from allocated capital, not signal.quantity
                 reason=f"MaxHybrid allocation: {allocation_pct:.1f}% (Total portfolio: {total_allocation:.1f}%)",
                 allocated_capital=allocated_capital,
                 margin_required=estimated_margin,
@@ -712,7 +725,7 @@ class MaxHybridConstructor(PortfolioConstructor):
             }
             
             return SignalDecision(
-                action="REJECT",
+                action='REJECTED',
                 quantity=0,
                 reason="No allocation in MaxHybrid portfolio",
                 allocated_capital=0.0,

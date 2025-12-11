@@ -1,0 +1,206 @@
+version: '3.8'
+
+services:
+  # Python Services
+  cerebro-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        SERVICE_NAME: cerebro_service
+    volumes:
+      - ./services:/app/services
+    ports:
+      - "5678:5678" # Debug port
+    depends_on:
+      - mongodb-init
+      - pubsub-emulator
+    environment:
+      - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
+      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
+      - MONGODB_URI=${MONGODB_URI}
+      - PYTHONPATH=/app/services/cerebro_service:/app
+      - ACCOUNT_DATA_SERVICE_URL=${ACCOUNT_DATA_SERVICE_URL}
+    command: python -m services.cerebro_service.cerebro_main
+
+  execution-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        SERVICE_NAME: execution_service
+    volumes:
+      - ./services:/app/services
+    ports:
+      - "5679:5679" # Debug port
+    depends_on:
+      - mongodb-init
+      - pubsub-emulator
+      - pubsub-init
+    environment:
+      - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
+      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
+      - MONGODB_URI=${MONGODB_URI}
+      - ACCOUNT_DATA_SERVICE_URL=${ACCOUNT_DATA_SERVICE_URL}
+    command: python -m services.execution_service.execution_main
+
+  account-data-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        SERVICE_NAME: account_data_service
+    volumes:
+      - ./services:/app/services
+    depends_on:
+      - mongodb-init
+      - pubsub-emulator
+    environment:
+      - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
+      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
+      - MONGODB_URI=${MONGODB_URI}
+    command: python -m services.account_data_service.account_data_main
+
+  # Infrastructure Services
+  mongodb:
+    image: mongo:6.0
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_data:/data/db
+    command: [ "--replSet", "rs0", "--bind_ip_all" ]
+    healthcheck:
+      test: echo "try { rs.status() } catch (e) { rs.initiate() }" | mongosh --port 27017 --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # MongoDB Seed Data Initialization (runs once on first startup)
+  mongodb-init:
+    image: mongo:6.0
+    volumes:
+      - ./scripts:/scripts
+      - ./seed_data:/seed_data
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    entrypoint: ["bash", "/scripts/init_mongodb.sh"]
+    restart: "no"
+
+  # Signal Ingestion
+  signal-ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        SERVICE_NAME: signal_ingestion
+    volumes:
+      - ./services:/app/services
+    depends_on:
+      - mongodb-init
+      - pubsub-emulator
+      - pubsub-init
+    environment:
+      - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
+      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
+      - MONGODB_URI=${MONGODB_URI}
+    command: python -m services.signal_ingestion.signal_ingestion_main --staging
+
+  # Portfolio Builder
+  portfolio-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        SERVICE_NAME: portfolio_builder
+    volumes:
+      - ./services:/app/services
+    ports:
+      - "8003:8003"
+    depends_on:
+      - mongodb-init
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - PYTHONPATH=/app/services/portfolio_builder:/app
+    command: python -m services.portfolio_builder.main
+
+  # Dashboard Creator
+  dashboard-creator:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+      args:
+        SERVICE_NAME: dashboard_creator
+    volumes:
+      - ./services:/app/services
+    ports:
+      - "8004:8004"
+    depends_on:
+      - mongodb-init
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - PYTHONPATH=/app/services/dashboard_creator:/app
+    command: python -m services.dashboard_creator.dashboard_creator_main
+
+  # IB Gateway
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:latest
+    ports:
+      - "4001:4003" # Live API port
+      - "4002:4004" # Paper API port
+      - "5900:5900" # VNC
+    environment:
+      - TWS_USERID=${IBKR_PAPER_USERNAME}
+      - TWS_PASSWORD=${IBKR_PAPER_PASSWORD}
+      - TRADING_MODE=paper
+      - TWOFA_TIMEOUT_ACTION=restart
+      - READ_ONLY_API=no
+      - IBC_AcceptIncomingConnectionAction=accept
+      - VNC_SERVER_PASSWORD=ibgateway
+    # Restart policy to handle 2FA timeouts/restarts
+    restart: unless-stopped
+
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    ports:
+      - "8085:8085"
+    command: gcloud beta emulators pubsub start --project=${PUBSUB_PROJECT_ID} --host-port=0.0.0.0:8085
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8085/" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  pubsub-init:
+    image: python:3.11-slim
+    volumes:
+      - ./scripts:/scripts
+    depends_on:
+      pubsub-emulator:
+        condition: service_healthy
+    environment:
+      - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
+      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
+    command: >
+      bash -c "pip install google-cloud-pubsub && python /scripts/init_pubsub.py"
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend-admin
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend-admin:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    command: npm run dev -- --host
+
+volumes:
+  mongo_data:
+
+
+networks:
+  default:
+    name: tradenet

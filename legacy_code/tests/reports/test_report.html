@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title id="head-title">test_report.html</title>
+      <style type="text/css">body {
+  font-family: Helvetica, Arial, sans-serif;
+  font-size: 12px;
+  /* do not increase min-width as some may use split screens */
+  min-width: 800px;
+  color: #999;
+}
+
+h1 {
+  font-size: 24px;
+  color: black;
+}
+
+h2 {
+  font-size: 16px;
+  color: black;
+}
+
+p {
+  color: black;
+}
+
+a {
+  color: #999;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+/******************************
+ * SUMMARY INFORMATION
+ ******************************/
+#environment td {
+  padding: 5px;
+  border: 1px solid #e6e6e6;
+  vertical-align: top;
+}
+#environment tr:nth-child(odd) {
+  background-color: #f6f6f6;
+}
+#environment ul {
+  margin: 0;
+  padding: 0 20px;
+}
+
+/******************************
+ * TEST RESULT COLORS
+ ******************************/
+span.passed,
+.passed .col-result {
+  color: green;
+}
+
+span.skipped,
+span.xfailed,
+span.rerun,
+.skipped .col-result,
+.xfailed .col-result,
+.rerun .col-result {
+  color: orange;
+}
+
+span.error,
+span.failed,
+span.xpassed,
+.error .col-result,
+.failed .col-result,
+.xpassed .col-result {
+  color: red;
+}
+
+.col-links__extra {
+  margin-right: 3px;
+}
+
+/******************************
+ * RESULTS TABLE
+ *
+ * 1. Table Layout
+ * 2. Extra
+ * 3. Sorting items
+ *
+ ******************************/
+/*------------------
+ * 1. Table Layout
+ *------------------*/
+#results-table {
+  border: 1px solid #e6e6e6;
+  color: #999;
+  font-size: 12px;
+  width: 100%;
+}
+#results-table th,
+#results-table td {
+  padding: 5px;
+  border: 1px solid #e6e6e6;
+  text-align: left;
+}
+#results-table th {
+  font-weight: bold;
+}
+
+/*------------------
+ * 2. Extra
+ *------------------*/
+.logwrapper {
+  max-height: 230px;
+  overflow-y: scroll;
+  background-color: #e6e6e6;
+}
+.logwrapper.expanded {
+  max-height: none;
+}
+.logwrapper.expanded .logexpander:after {
+  content: "collapse [-]";
+}
+.logwrapper .logexpander {
+  z-index: 1;
+  position: sticky;
+  top: 10px;
+  width: max-content;
+  border: 1px solid;
+  border-radius: 3px;
+  padding: 5px 7px;
+  margin: 10px 0 10px calc(100% - 80px);
+  cursor: pointer;
+  background-color: #e6e6e6;
+}
+.logwrapper .logexpander:after {
+  content: "expand [+]";
+}
+.logwrapper .logexpander:hover {
+  color: #000;
+  border-color: #000;
+}
+.logwrapper .log {
+  min-height: 40px;
+  position: relative;
+  top: -50px;
+  height: calc(100% + 50px);
+  border: 1px solid #e6e6e6;
+  color: black;
+  display: block;
+  font-family: "Courier New", Courier, monospace;
+  padding: 5px;
+  padding-right: 80px;
+  white-space: pre-wrap;
+}
+
+div.media {
+  border: 1px solid #e6e6e6;
+  float: right;
+  height: 240px;
+  margin: 0 5px;
+  overflow: hidden;
+  width: 320px;
+}
+
+.media-container {
+  display: grid;
+  grid-template-columns: 25px auto 25px;
+  align-items: center;
+  flex: 1 1;
+  overflow: hidden;
+  height: 200px;
+}
+
+.media-container--fullscreen {
+  grid-template-columns: 0px auto 0px;
+}
+
+.media-container__nav--right,
+.media-container__nav--left {
+  text-align: center;
+  cursor: pointer;
+}
+
+.media-container__viewport {
+  cursor: pointer;
+  text-align: center;
+  height: inherit;
+}
+.media-container__viewport img,
+.media-container__viewport video {
+  object-fit: cover;
+  width: 100%;
+  max-height: 100%;
+}
+
+.media__name,
+.media__counter {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-around;
+  flex: 0 0 25px;
+  align-items: center;
+}
+
+.collapsible td:not(.col-links) {
+  cursor: pointer;
+}
+.collapsible td:not(.col-links):hover::after {
+  color: #bbb;
+  font-style: italic;
+  cursor: pointer;
+}
+
+.col-result {
+  width: 130px;
+}
+.col-result:hover::after {
+  content: " (hide details)";
+}
+
+.col-result.collapsed:hover::after {
+  content: " (show details)";
+}
+
+#environment-header h2:hover::after {
+  content: " (hide details)";
+  color: #bbb;
+  font-style: italic;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#environment-header.collapsed h2:hover::after {
+  content: " (show details)";
+  color: #bbb;
+  font-style: italic;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/*------------------
+ * 3. Sorting items
+ *------------------*/
+.sortable {
+  cursor: pointer;
+}
+.sortable.desc:after {
+  content: " ";
+  position: relative;
+  left: 5px;
+  bottom: -12.5px;
+  border: 10px solid #4caf50;
+  border-bottom: 0;
+  border-left-color: transparent;
+  border-right-color: transparent;
+}
+.sortable.asc:after {
+  content: " ";
+  position: relative;
+  left: 5px;
+  bottom: 12.5px;
+  border: 10px solid #4caf50;
+  border-top: 0;
+  border-left-color: transparent;
+  border-right-color: transparent;
+}
+
+.hidden, .summary__reload__button.hidden {
+  display: none;
+}
+
+.summary__data {
+  flex: 0 0 550px;
+}
+.summary__reload {
+  flex: 1 1;
+  display: flex;
+  justify-content: center;
+}
+.summary__reload__button {
+  flex: 0 0 300px;
+  display: flex;
+  color: white;
+  font-weight: bold;
+  background-color: #4caf50;
+  text-align: center;
+  justify-content: center;
+  align-items: center;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.summary__reload__button:hover {
+  background-color: #46a049;
+}
+.summary__spacer {
+  flex: 0 0 550px;
+}
+
+.controls {
+  display: flex;
+  justify-content: space-between;
+}
+
+.filters,
+.collapse {
+  display: flex;
+  align-items: center;
+}
+.filters button,
+.collapse button {
+  color: #999;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.filters button:hover,
+.collapse button:hover {
+  color: #ccc;
+}
+
+.filter__label {
+  margin-right: 10px;
+}
+
+      </style>
+    
+  </head>
+  <body>
+    <h1 id="title">test_report.html</h1>
+    <p>Report generated on 09-Nov-2025 at 08:15:01 by <a href="https://pypi.python.org/pypi/pytest-html">pytest-html</a>
+        v4.1.1</p>
+    <div id="environment-header">
+      <h2>Environment</h2>
+    </div>
+    <table id="environment"></table>
+    <!-- TEMPLATES -->
+      <template id="template_environment_row">
+      <tr>
+        <td></td>
+        <td></td>
+      </tr>
+    </template>
+    <template id="template_results-table__body--empty">
+      <tbody class="results-table-row">
+        <tr id="not-found-message">
+          <td colspan="4">No results found. Check the filters.</th>
+        </tr>
+    </template>
+    <template id="template_results-table__tbody">
+      <tbody class="results-table-row">
+        <tr class="collapsible">
+        </tr>
+        <tr class="extras-row">
+          <td class="extra" colspan="4">
+            <div class="extraHTML"></div>
+            <div class="media">
+              <div class="media-container">
+                  <div class="media-container__nav--left"><</div>
+                  <div class="media-container__viewport">
+                    <img src="" />
+                    <video controls>
+                      <source src="" type="video/mp4">
+                    </video>
+                  </div>
+                  <div class="media-container__nav--right">></div>
+                </div>
+                <div class="media__name"></div>
+                <div class="media__counter"></div>
+            </div>
+            <div class="logwrapper">
+              <div class="logexpander"></div>
+              <div class="log"></div>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </template>
+    <!-- END TEMPLATES -->
+    <div class="summary">
+      <div class="summary__data">
+        <h2>Summary</h2>
+        <div class="additional-summary prefix">
+        </div>
+        <p class="run-count">48 tests took 00:00:49.</p>
+        <p class="filter">(Un)check the boxes to filter the results.</p>
+        <div class="summary__reload">
+          <div class="summary__reload__button hidden" onclick="location.reload()">
+            <div>There are still tests running. <br />Reload this page to get the latest results!</div>
+          </div>
+        </div>
+        <div class="summary__spacer"></div>
+        <div class="controls">
+          <div class="filters">
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="failed" />
+            <span class="failed">23 Failed,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="passed" />
+            <span class="passed">25 Passed,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="skipped" />
+            <span class="skipped">10 Skipped,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="xfailed" disabled/>
+            <span class="xfailed">0 Expected failures,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="xpassed" disabled/>
+            <span class="xpassed">0 Unexpected passes,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="error" disabled/>
+            <span class="error">0 Errors,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="rerun" disabled/>
+            <span class="rerun">0 Reruns</span>
+          </div>
+          <div class="collapse">
+            <button id="show_all_details">Show all details</button>&nbsp;/&nbsp;<button id="hide_all_details">Hide all details</button>
+          </div>
+        </div>
+      </div>
+      <div class="additional-summary summary">
+      </div>
+      <div class="additional-summary postfix">
+      </div>
+    </div>
+    <table id="results-table">
+      <thead id="results-table-head">
+        <tr>
+          <th class="sortable" data-column-type="result">Result</th>
+          <th class="sortable" data-column-type="testId">Test</th>
+          <th class="sortable" data-column-type="duration">Duration</th>
+          <th>Links</th>
+        </tr>
+      </thead>
+    </table>
+  </body>
+  <footer>
+    <div id="data-container" data-jsonblob="{&#34;environment&#34;: {&#34;Python&#34;: &#34;3.11.14&#34;, &#34;Platform&#34;: &#34;macOS-26.1-arm64-arm-64bit&#34;, &#34;Packages&#34;: {&#34;pytest&#34;: &#34;8.0.0&#34;, &#34;pluggy&#34;: &#34;1.6.0&#34;}, &#34;Plugins&#34;: {&#34;timeout&#34;: &#34;2.2.0&#34;, &#34;asyncio&#34;: &#34;0.21.0&#34;, &#34;anyio&#34;: &#34;4.11.0&#34;, &#34;html&#34;: &#34;4.1.1&#34;, &#34;metadata&#34;: &#34;3.1.1&#34;}}, &#34;tests&#34;: {&#34;tests/integration/test_01_signal_ingestion.py::test_signal_ingestion_from_script_to_pubsub&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_01_signal_ingestion.py::test_signal_ingestion_from_script_to_pubsub&#34;, &#34;duration&#34;: &#34;00:00:19&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_01_signal_ingestion.py::test_signal_ingestion_from_script_to_pubsub&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:19&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_01_signal_ingestion.py:96: in test_signal_ingestion_from_script_to_pubsub\n    assert len(messages) &amp;gt; 0, &amp;quot;No messages received from Pub/Sub after 15 seconds&amp;quot;\nE   AssertionError: No messages received from Pub/Sub after 15 seconds\nE   assert 0 &amp;gt; 0\nE    +  where 0 = len([])\n\n----------------------------- Captured stdout call -----------------------------\n\u2705 Signal sent via script\n\u2705 Signal found in MongoDB: signal_17626940523N\n&#34;}], &#34;tests/integration/test_01_signal_ingestion.py::test_signal_collector_mongodb_catchup&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_01_signal_ingestion.py::test_signal_collector_mongodb_catchup&#34;, &#34;duration&#34;: &#34;00:00:03&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_01_signal_ingestion.py::test_signal_collector_mongodb_catchup&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:03&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Test signal inserted into MongoDB: TestCatchup_20251109_131431\n\u2705 Signal caught up successfully\n\u2705 Signal marked as processed in MongoDB\n\n----------------------------- Captured stderr call -----------------------------\n\u2705 Connected to MongoDB Atlas\n\u2705 Pub/Sub bridge enabled - signals will route to microservices\n\ud83d\udd04 Checking for missed signals from MongoDB...\n\ud83d\udce5 Found 1 missed signals in MongoDB\n\n\ud83d\udce5 CATCHUP\n\ud83d\udcca Strategy: TestCatchup\n\ud83c\udd94 Signal ID: TestCatchup_20251109_131431\n\ud83d\udce1 Signal: {&amp;#x27;ticker&amp;#x27;: &amp;#x27;TSLA&amp;#x27;, &amp;#x27;instrument&amp;#x27;: &amp;#x27;TSLA&amp;#x27;, &amp;#x27;action&amp;#x27;: &amp;#x27;BUY&amp;#x27;, &amp;#x27;price&amp;#x27;: 250.5, &amp;#x27;quantity&amp;#x27;: 100, &amp;#x27;order_type&amp;#x27;: &amp;#x27;MARKET&amp;#x27;}\n\ud83d\udd04 Caught up from MongoDB storage\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nSIGNAL: TestCatchup_20251109_131431 | RECEIVED | Strategy=TestCatchup | Instrument=TSLA | Action=BUY | Environment=STAGING\n\n\ud83d\ude80 Routing to MVP microservices (Cerebro \u2192 Execution)\n\u2705 Signal published to Cerebro: 3\n   \u2192 Signal ID: TestCatchup_20251109_131432_131\n   \u2192 Instrument: TSLA\n   \u2192 Action: BUY\n\u2705 Successfully caught up with 1 signals from MongoDB\n\n------------------------------ Captured log call -------------------------------\nINFO     signal_collector:signal_collector.py:102 \u2705 Connected to MongoDB Atlas\nINFO     signal_collector:signal_collector.py:81 \u2705 Pub/Sub bridge enabled - signals will route to microservices\nINFO     signal_collector:signal_collector.py:116 \ud83d\udd04 Checking for missed signals from MongoDB...\nINFO     signal_collector:signal_collector.py:138 \ud83d\udce5 Found 1 missed signals in MongoDB\nINFO     signal_collector:signal_collector.py:362 \n\ud83d\udce5 CATCHUP\nINFO     signal_collector:signal_collector.py:363 \ud83d\udcca Strategy: TestCatchup\nINFO     signal_collector:signal_collector.py:367 \ud83c\udd94 Signal ID: TestCatchup_20251109_131431\nINFO     signal_collector:signal_collector.py:368 \ud83d\udce1 Signal: {&amp;#x27;ticker&amp;#x27;: &amp;#x27;TSLA&amp;#x27;, &amp;#x27;instrument&amp;#x27;: &amp;#x27;TSLA&amp;#x27;, &amp;#x27;action&amp;#x27;: &amp;#x27;BUY&amp;#x27;, &amp;#x27;price&amp;#x27;: 250.5, &amp;#x27;quantity&amp;#x27;: 100, &amp;#x27;order_type&amp;#x27;: &amp;#x27;MARKET&amp;#x27;}\nINFO     signal_collector:signal_collector.py:370 \ud83d\udd04 Caught up from MongoDB storage\nINFO     signal_collector:signal_collector.py:371 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nINFO     signal_collector:signal_collector.py:375 SIGNAL: TestCatchup_20251109_131431 | RECEIVED | Strategy=TestCatchup | Instrument=TSLA | Action=BUY | Environment=STAGING\nINFO     telegram:notifier.py:51 Telegram notifications enabled for STAGING environment (chat_id: -01003237770899)\nINFO     signal_collector:signal_collector.py:467 \n\ud83d\ude80 Routing to MVP microservices (Cerebro \u2192 Execution)\nINFO     signal_collector:signal_collector.py:468 \u2705 Signal published to Cerebro: 3\nINFO     signal_collector:signal_collector.py:469    \u2192 Signal ID: TestCatchup_20251109_131432_131\nINFO     signal_collector:signal_collector.py:470    \u2192 Instrument: TSLA\nINFO     signal_collector:signal_collector.py:471    \u2192 Action: BUY\nINFO     signal_collector:signal_collector.py:167 \u2705 Successfully caught up with 1 signals from MongoDB\n\n&#34;}], &#34;tests/integration/test_01_signal_ingestion.py::test_signal_standardization_format&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_01_signal_ingestion.py::test_signal_standardization_format&#34;, &#34;duration&#34;: &#34;527 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_01_signal_ingestion.py::test_signal_standardization_format&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;527 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Signal published using _publish_to_microservices\n\u2705 Standardized signal format verified\n   \u2192 Signal ID: FormatTest_20251109_131434_131\n   \u2192 Format: {strategy}_{YYYYMMDD}_{HHMMSS}_{seq}\n\n----------------------------- Captured stderr call -----------------------------\n\u2705 Connected to MongoDB Atlas\n\u2705 Pub/Sub bridge enabled - signals will route to microservices\n\n\ud83d\ude80 Routing to MVP microservices (Cerebro \u2192 Execution)\n\u2705 Signal published to Cerebro: 4\n   \u2192 Signal ID: FormatTest_20251109_131434_131\n   \u2192 Instrument: GOOGL\n   \u2192 Action: BUY\n\n------------------------------ Captured log call -------------------------------\nINFO     signal_collector:signal_collector.py:102 \u2705 Connected to MongoDB Atlas\nINFO     signal_collector:signal_collector.py:81 \u2705 Pub/Sub bridge enabled - signals will route to microservices\nINFO     signal_collector:signal_collector.py:467 \n\ud83d\ude80 Routing to MVP microservices (Cerebro \u2192 Execution)\nINFO     signal_collector:signal_collector.py:468 \u2705 Signal published to Cerebro: 4\nINFO     signal_collector:signal_collector.py:469    \u2192 Signal ID: FormatTest_20251109_131434_131\nINFO     signal_collector:signal_collector.py:470    \u2192 Instrument: GOOGL\nINFO     signal_collector:signal_collector.py:471    \u2192 Action: BUY\n\n&#34;}], &#34;tests/integration/test_01_signal_ingestion.py::test_signal_environment_filtering&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_01_signal_ingestion.py::test_signal_environment_filtering&#34;, &#34;duration&#34;: &#34;00:00:01&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_01_signal_ingestion.py::test_signal_environment_filtering&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:01&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Inserted 1 production signal and 1 staging signal\n\u2705 Environment filtering working correctly\n   \u2192 Staging collector only processed staging signal\n   \u2192 Production signal was ignored\n\n----------------------------- Captured stderr call -----------------------------\n\u2705 Connected to MongoDB Atlas\n\u2705 Pub/Sub bridge enabled - signals will route to microservices\n\ud83d\udd04 Checking for missed signals from MongoDB...\n\ud83d\udce5 Found 1 missed signals in MongoDB\n\n\ud83d\udce5 CATCHUP\n\ud83d\udcca Strategy: StagingOnly\n\ud83c\udd94 Signal ID: StagingOnly_20251109_131435\n\ud83d\udce1 Signal: {&amp;#x27;ticker&amp;#x27;: &amp;#x27;AMZN&amp;#x27;, &amp;#x27;instrument&amp;#x27;: &amp;#x27;AMZN&amp;#x27;, &amp;#x27;action&amp;#x27;: &amp;#x27;BUY&amp;#x27;, &amp;#x27;price&amp;#x27;: 150.25, &amp;#x27;quantity&amp;#x27;: 100, &amp;#x27;order_type&amp;#x27;: &amp;#x27;MARKET&amp;#x27;}\n\ud83d\udd04 Caught up from MongoDB storage\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nSIGNAL: StagingOnly_20251109_131435 | RECEIVED | Strategy=StagingOnly | Instrument=AMZN | Action=BUY | Environment=STAGING\n\n\ud83d\ude80 Routing to MVP microservices (Cerebro \u2192 Execution)\n\u2705 Signal published to Cerebro: 5\n   \u2192 Signal ID: StagingOnly_20251109_131435_131\n   \u2192 Instrument: AMZN\n   \u2192 Action: BUY\n\u2705 Successfully caught up with 1 signals from MongoDB\n\n------------------------------ Captured log call -------------------------------\nINFO     signal_collector:signal_collector.py:102 \u2705 Connected to MongoDB Atlas\nINFO     signal_collector:signal_collector.py:81 \u2705 Pub/Sub bridge enabled - signals will route to microservices\nINFO     signal_collector:signal_collector.py:116 \ud83d\udd04 Checking for missed signals from MongoDB...\nINFO     signal_collector:signal_collector.py:138 \ud83d\udce5 Found 1 missed signals in MongoDB\nINFO     signal_collector:signal_collector.py:362 \n\ud83d\udce5 CATCHUP\nINFO     signal_collector:signal_collector.py:363 \ud83d\udcca Strategy: StagingOnly\nINFO     signal_collector:signal_collector.py:367 \ud83c\udd94 Signal ID: StagingOnly_20251109_131435\nINFO     signal_collector:signal_collector.py:368 \ud83d\udce1 Signal: {&amp;#x27;ticker&amp;#x27;: &amp;#x27;AMZN&amp;#x27;, &amp;#x27;instrument&amp;#x27;: &amp;#x27;AMZN&amp;#x27;, &amp;#x27;action&amp;#x27;: &amp;#x27;BUY&amp;#x27;, &amp;#x27;price&amp;#x27;: 150.25, &amp;#x27;quantity&amp;#x27;: 100, &amp;#x27;order_type&amp;#x27;: &amp;#x27;MARKET&amp;#x27;}\nINFO     signal_collector:signal_collector.py:370 \ud83d\udd04 Caught up from MongoDB storage\nINFO     signal_collector:signal_collector.py:371 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nINFO     signal_collector:signal_collector.py:375 SIGNAL: StagingOnly_20251109_131435 | RECEIVED | Strategy=StagingOnly | Instrument=AMZN | Action=BUY | Environment=STAGING\nINFO     telegram:notifier.py:51 Telegram notifications enabled for STAGING environment (chat_id: -01003237770899)\nINFO     signal_collector:signal_collector.py:467 \n\ud83d\ude80 Routing to MVP microservices (Cerebro \u2192 Execution)\nINFO     signal_collector:signal_collector.py:468 \u2705 Signal published to Cerebro: 5\nINFO     signal_collector:signal_collector.py:469    \u2192 Signal ID: StagingOnly_20251109_131435_131\nINFO     signal_collector:signal_collector.py:470    \u2192 Instrument: AMZN\nINFO     signal_collector:signal_collector.py:471    \u2192 Action: BUY\nINFO     signal_collector:signal_collector.py:167 \u2705 Successfully caught up with 1 signals from MongoDB\n\n&#34;}], &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_position_sizing_calculation&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_position_sizing_calculation&#34;, &#34;duration&#34;: &#34;00:00:02&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_02_cerebro_processing.py::test_cerebro_position_sizing_calculation&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:02&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Position sizing calculation completed\n   \u2192 Decision: APPROVED\n   \u2192 Original Quantity: 100.0\n   \u2192 Final Quantity: 83.95143000000002\n   \u2192 Allocated Capital: $12,592.71\n   \u2192 Reason: APPROVED\n\n------------------------------ Captured log call -------------------------------\nWARNING  main:main.py:1288 \u26a0\ufe0f  No allocation found for strategy TestStrategy\nWARNING  main:main.py:1289    Using fallback: 5% default allocation\n\n&#34;}], &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_signal_to_order_flow&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_signal_to_order_flow&#34;, &#34;duration&#34;: &#34;00:00:06&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_02_cerebro_processing.py::test_cerebro_signal_to_order_flow&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:06&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Created test signal: TestCerebroFlow_20251109_131437_873\n\u2705 Signal published to Pub/Sub: 7\n\u2705 Cerebro decision found in MongoDB\n   \u2192 Decision: REJECTED\n   \u2192 Reason: No allocation in MaxHybrid portfolio\n\u26a0\ufe0f  Signal was rejected, no order created\n&#34;}], &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_margin_limit_enforcement&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_margin_limit_enforcement&#34;, &#34;duration&#34;: &#34;1 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_02_cerebro_processing.py::test_cerebro_margin_limit_enforcement&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;1 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Margin limit enforcement verified\n   \u2192 Max Margin Limit: 40%\n   \u2192 Before: 35.00%\n   \u2192 After (projected): 37.50%\n   \u2192 Decision: APPROVED\n\n------------------------------ Captured log call -------------------------------\nWARNING  main:main.py:1288 \u26a0\ufe0f  No allocation found for strategy TestMarginLimit\nWARNING  main:main.py:1289    Using fallback: 5% default allocation\n\n&#34;}], &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_allocation_based_sizing&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_allocation_based_sizing&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_02_cerebro_processing.py::test_cerebro_allocation_based_sizing&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Allocation-based sizing test\n   \u2192 Strategy Allocation: 13.0%\n   \u2192 Account Equity: $250,000.00\n   \u2192 Expected Base Allocation: $32,500.00\n   \u2192 Actual Allocated Capital: $32,500.00\n&#34;}], &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_exit_signal_handling&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_exit_signal_handling&#34;, &#34;duration&#34;: &#34;1 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_02_cerebro_processing.py::test_cerebro_exit_signal_handling&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;1 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 EXIT signal handling test\n   \u2192 Action: EXIT\n   \u2192 Decision: APPROVED\n   \u2192 Quantity: 80.64516129032258\n   \u2192 Reason: APPROVED\n\n------------------------------ Captured log call -------------------------------\nWARNING  main:main.py:1288 \u26a0\ufe0f  No allocation found for strategy TestExit\nWARNING  main:main.py:1289    Using fallback: 5% default allocation\n\n&#34;}], &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_smart_position_sizing&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_02_cerebro_processing.py::test_cerebro_smart_position_sizing&#34;, &#34;duration&#34;: &#34;86 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_02_cerebro_processing.py::test_cerebro_smart_position_sizing&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;86 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\ud83d\udcca Strategy Metadata (from cache or defaults):\n   \u2192 Estimated Avg Positions: 3.0\n   \u2192 Median Margin %: 0.50%\n\u2705 Smart position sizing test\n   \u2192 Strategy: TestSmartSizing\n   \u2192 Allocation: 15.0%\n   \u2192 Decision: APPROVED\n   \u2192 Final Quantity: 257.14285714285717\n\n------------------------------ Captured log call -------------------------------\nWARNING  main:main.py:413 Strategy TestSmartSizing not found in MongoDB\n\n&#34;}], &#34;tests/integration/test_03_execution_service.py::test_execution_service_contract_creation&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_03_execution_service.py::test_execution_service_contract_creation&#34;, &#34;duration&#34;: &#34;1 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_03_execution_service.py::test_execution_service_contract_creation&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;1 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_03_execution_service.py:34: in test_execution_service_contract_creation\n    from main import create_contracts_from_order\nE   ImportError: cannot import name &amp;#x27;create_contracts_from_order&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_03_execution_service.py::test_execution_service_action_mapping&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_03_execution_service.py::test_execution_service_action_mapping&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_03_execution_service.py::test_execution_service_action_mapping&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_03_execution_service.py:104: in test_execution_service_action_mapping\n    from main import create_contracts_from_order\nE   ImportError: cannot import name &amp;#x27;create_contracts_from_order&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_03_execution_service.py::test_execution_service_quantity_rounding&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_03_execution_service.py::test_execution_service_quantity_rounding&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_03_execution_service.py::test_execution_service_quantity_rounding&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_03_execution_service.py:152: in test_execution_service_quantity_rounding\n    from main import create_contracts_from_order\nE   ImportError: cannot import name &amp;#x27;create_contracts_from_order&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_03_execution_service.py::test_execution_service_ibkr_connection&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_03_execution_service.py::test_execution_service_ibkr_connection&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_03_execution_service.py::test_execution_service_ibkr_connection&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_03_execution_service.py:185: in test_execution_service_ibkr_connection\n    from main import connect_to_ibkr, ib\nE   ImportError: cannot import name &amp;#x27;connect_to_ibkr&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_03_execution_service.py::test_execution_service_order_to_confirmation_flow&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_03_execution_service.py::test_execution_service_order_to_confirmation_flow&#34;, &#34;duration&#34;: &#34;1 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_03_execution_service.py::test_execution_service_order_to_confirmation_flow&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;1 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_03_execution_service.py:225: in test_execution_service_order_to_confirmation_flow\n    from main import ib\nE   ImportError: cannot import name &amp;#x27;ib&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_03_execution_service.py::test_execution_service_duplicate_signal_prevention&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_03_execution_service.py::test_execution_service_duplicate_signal_prevention&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_03_execution_service.py::test_execution_service_duplicate_signal_prevention&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_03_execution_service.py:313: in test_execution_service_duplicate_signal_prevention\n    from main import processed_signal_ids\nE   ImportError: cannot import name &amp;#x27;processed_signal_ids&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_03_execution_service.py::test_execution_service_multi_leg_option_support&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_03_execution_service.py::test_execution_service_multi_leg_option_support&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_03_execution_service.py::test_execution_service_multi_leg_option_support&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_03_execution_service.py:342: in test_execution_service_multi_leg_option_support\n    from main import create_contracts_from_order\nE   ImportError: cannot import name &amp;#x27;create_contracts_from_order&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_03_execution_service.py::test_execution_service_order_validation&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_03_execution_service.py::test_execution_service_order_validation&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_03_execution_service.py::test_execution_service_order_validation&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_03_execution_service.py:398: in test_execution_service_order_validation\n    from main import create_contracts_from_order\nE   ImportError: cannot import name &amp;#x27;create_contracts_from_order&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_04_order_fill_tracking.py::test_position_creation_on_fill&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_04_order_fill_tracking.py::test_position_creation_on_fill&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_04_order_fill_tracking.py::test_position_creation_on_fill&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_04_order_fill_tracking.py:31: in test_position_creation_on_fill\n    from main import create_or_update_position, open_positions_collection\nE   ImportError: cannot import name &amp;#x27;create_or_update_position&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_04_order_fill_tracking.py::test_position_scale_in_weighted_average&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_04_order_fill_tracking.py::test_position_scale_in_weighted_average&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_04_order_fill_tracking.py::test_position_scale_in_weighted_average&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_04_order_fill_tracking.py:90: in test_position_scale_in_weighted_average\n    from main import create_or_update_position, open_positions_collection\nE   ImportError: cannot import name &amp;#x27;create_or_update_position&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_04_order_fill_tracking.py::test_position_partial_exit&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_04_order_fill_tracking.py::test_position_partial_exit&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_04_order_fill_tracking.py::test_position_partial_exit&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_04_order_fill_tracking.py:154: in test_position_partial_exit\n    from main import create_or_update_position, open_positions_collection\nE   ImportError: cannot import name &amp;#x27;create_or_update_position&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_04_order_fill_tracking.py::test_position_full_exit_closes_position&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_04_order_fill_tracking.py::test_position_full_exit_closes_position&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_04_order_fill_tracking.py::test_position_full_exit_closes_position&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_04_order_fill_tracking.py:217: in test_position_full_exit_closes_position\n    from main import create_or_update_position, open_positions_collection\nE   ImportError: cannot import name &amp;#x27;create_or_update_position&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_04_order_fill_tracking.py::test_get_account_state_from_ibkr&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_04_order_fill_tracking.py::test_get_account_state_from_ibkr&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_04_order_fill_tracking.py::test_get_account_state_from_ibkr&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_04_order_fill_tracking.py:290: in test_get_account_state_from_ibkr\n    from main import get_account_state, ib\nE   ImportError: cannot import name &amp;#x27;ib&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_04_order_fill_tracking.py::test_position_tracking_with_multiple_strategies&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_04_order_fill_tracking.py::test_position_tracking_with_multiple_strategies&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_04_order_fill_tracking.py::test_position_tracking_with_multiple_strategies&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_04_order_fill_tracking.py:331: in test_position_tracking_with_multiple_strategies\n    from main import create_or_update_position, open_positions_collection\nE   ImportError: cannot import name &amp;#x27;create_or_update_position&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_04_order_fill_tracking.py::test_execution_confirmation_structure&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_04_order_fill_tracking.py::test_execution_confirmation_structure&#34;, &#34;duration&#34;: &#34;37 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_04_order_fill_tracking.py::test_execution_confirmation_structure&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;37 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Found sample execution confirmation\n   \u2192 order_id: Forex_20251028_033150_039_ORD\n   \u2192 timestamp: 2025-10-28 03:31:59.471000\n   \u2192 status: FILLED\n&#34;}], &#34;tests/integration/test_04_order_fill_tracking.py::test_position_pnl_tracking&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_04_order_fill_tracking.py::test_position_pnl_tracking&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_04_order_fill_tracking.py::test_position_pnl_tracking&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_04_order_fill_tracking.py:436: in test_position_pnl_tracking\n    from main import create_or_update_position, open_positions_collection\nE   ImportError: cannot import name &amp;#x27;create_or_update_position&amp;#x27; from &amp;#x27;main&amp;#x27; (/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/../../services/cerebro_service/main.py)\n&#34;}], &#34;tests/integration/test_05_strategy_management.py::test_create_strategy&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_05_strategy_management.py::test_create_strategy&#34;, &#34;duration&#34;: &#34;174 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_05_strategy_management.py::test_create_strategy&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;174 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_05_strategy_management.py:73: in test_create_strategy\n    assert strategy_doc is not None, &amp;quot;Strategy not found in MongoDB&amp;quot;\nE   AssertionError: Strategy not found in MongoDB\nE   assert None is not None\n\n----------------------------- Captured stdout call -----------------------------\n\u2705 Strategy created via API\n   \u2192 Strategy ID: TestStrategy_1762712084\n   \u2192 Response: Strategy TestStrategy_1762712084 created\n&#34;}], &#34;tests/integration/test_05_strategy_management.py::test_get_all_strategies&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_05_strategy_management.py::test_get_all_strategies&#34;, &#34;duration&#34;: &#34;00:00:02&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_05_strategy_management.py::test_get_all_strategies&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:02&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_05_strategy_management.py:119: in test_get_all_strategies\n    assert field in sample_strategy, f&amp;quot;Missing field: {field}&amp;quot;\nE   AssertionError: Missing field: name\nE   assert &amp;#x27;name&amp;#x27; in {&amp;#x27;account&amp;#x27;: &amp;#x27;IBKR_Main&amp;#x27;, &amp;#x27;asset_class&amp;#x27;: &amp;#x27;unknown&amp;#x27;, &amp;#x27;created_at&amp;#x27;: &amp;#x27;2025-10-25T15:35:29.742000&amp;#x27;, &amp;#x27;include_in_optimization&amp;#x27;: True, ...}\n\n----------------------------- Captured stdout call -----------------------------\n\u2705 Retrieved strategies via API\n   \u2192 Total strategies: 10\n&#34;}], &#34;tests/integration/test_05_strategy_management.py::test_get_single_strategy&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_05_strategy_management.py::test_get_single_strategy&#34;, &#34;duration&#34;: &#34;244 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_05_strategy_management.py::test_get_single_strategy&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;244 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Retrieved single strategy via API\n   \u2192 Strategy ID: TestGetSingle_1762712086\n   \u2192 Name: Test Single Get Strategy\n\u2705 404 handling verified for non-existent strategy\n&#34;}], &#34;tests/integration/test_05_strategy_management.py::test_update_strategy&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_05_strategy_management.py::test_update_strategy&#34;, &#34;duration&#34;: &#34;263 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_05_strategy_management.py::test_update_strategy&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;263 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_05_strategy_management.py:250: in test_update_strategy\n    assert updated_doc[&amp;quot;name&amp;quot;] == &amp;quot;Updated Name&amp;quot;\nE   TypeError: &amp;#x27;NoneType&amp;#x27; object is not subscriptable\n\n----------------------------- Captured stdout call -----------------------------\n\u2705 Strategy updated via API\n   \u2192 Modified count: 1\n&#34;}], &#34;tests/integration/test_05_strategy_management.py::test_delete_strategy_soft_delete&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_05_strategy_management.py::test_delete_strategy_soft_delete&#34;, &#34;duration&#34;: &#34;443 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_05_strategy_management.py::test_delete_strategy_soft_delete&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;443 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_05_strategy_management.py:314: in test_delete_strategy_soft_delete\n    assert deleted_doc is not None, &amp;quot;Strategy was hard deleted (should be soft delete)&amp;quot;\nE   AssertionError: Strategy was hard deleted (should be soft delete)\nE   assert None is not None\n\n----------------------------- Captured stdout call -----------------------------\n\u2705 Strategy deleted via API\n   \u2192 Strategy ID: TestDelete_1762712086\n&#34;}], &#34;tests/integration/test_05_strategy_management.py::test_create_strategy_validation&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_05_strategy_management.py::test_create_strategy_validation&#34;, &#34;duration&#34;: &#34;138 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_05_strategy_management.py::test_create_strategy_validation&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;138 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Validation: Missing required field returns 400\n\u2705 Validation: Duplicate strategy_id returns 409\n&#34;}], &#34;tests/integration/test_05_strategy_management.py::test_strategy_filtering_by_status&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_05_strategy_management.py::test_strategy_filtering_by_status&#34;, &#34;duration&#34;: &#34;00:00:02&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_05_strategy_management.py::test_strategy_filtering_by_status&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:02&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Created 2 test strategies with different statuses\n   \u2192 Total strategies returned: 16\n   \u2192 Found ACTIVE test strategy: True\n   \u2192 Found INACTIVE test strategy: True\n&#34;}], &#34;tests/integration/test_05_strategy_management.py::test_strategy_backtest_data_sync&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_05_strategy_management.py::test_strategy_backtest_data_sync&#34;, &#34;duration&#34;: &#34;412 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_05_strategy_management.py::test_strategy_backtest_data_sync&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;412 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_05_strategy_management.py:498: in test_strategy_backtest_data_sync\n    assert &amp;quot;backtest_metrics&amp;quot; in updated_doc\nE   TypeError: argument of type &amp;#x27;NoneType&amp;#x27; is not iterable\n&#34;}], &#34;tests/integration/test_06_portfolio_optimization.py::test_get_portfolio_tests&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_06_portfolio_optimization.py::test_get_portfolio_tests&#34;, &#34;duration&#34;: &#34;44 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_06_portfolio_optimization.py::test_get_portfolio_tests&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;44 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Retrieved portfolio tests via API\n   \u2192 Total tests: 6\n   \u2192 Sample test ID: test_20251023_233123\n   \u2192 Constructor: max_cagr_v2\n   \u2192 Created at: 2025-10-23T23:31:33.351000\n&#34;}], &#34;tests/integration/test_06_portfolio_optimization.py::test_run_portfolio_optimization_max_hybrid&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Skipped&#34;, &#34;testId&#34;: &#34;tests/integration/test_06_portfolio_optimization.py::test_run_portfolio_optimization_max_hybrid&#34;, &#34;duration&#34;: &#34;00:00:01&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Skipped&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_06_portfolio_optimization.py::test_run_portfolio_optimization_max_hybrid&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:01&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;(&amp;#x27;/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/test_06_portfolio_optimization.py&amp;#x27;, 145, &amp;#x27;Skipped: Portfolio optimization failed - may need more strategy data&amp;#x27;)\n\n----------------------------- Captured stdout call -----------------------------\n\ud83d\udcca Running portfolio optimization test\n   \u2192 Constructor: max_hybrid\n   \u2192 Strategies: [&amp;#x27;Com1-Met&amp;#x27;, &amp;#x27;Com2-Ag&amp;#x27;, &amp;#x27;Com3-Mkt&amp;#x27;]\n\u26a0\ufe0f  Portfolio optimization failed (this may be expected if strategies lack data)\n   \u2192 Status: 500\n   \u2192 Response: {&amp;quot;detail&amp;quot;:&amp;quot;[Errno 2] No such file or directory: &amp;#x27;/Users/vandanchopra/Vandan_Personal_Folder/CODE_STUFF/Projects/MathematricksTrader/venv/bin/python&amp;#x27;\\n\\nCheck server logs for full traceback&amp;quot;}\n&#34;}], &#34;tests/integration/test_06_portfolio_optimization.py::test_get_portfolio_test_tearsheet&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Skipped&#34;, &#34;testId&#34;: &#34;tests/integration/test_06_portfolio_optimization.py::test_get_portfolio_test_tearsheet&#34;, &#34;duration&#34;: &#34;81 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Skipped&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_06_portfolio_optimization.py::test_get_portfolio_test_tearsheet&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;81 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;(&amp;#x27;/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/test_06_portfolio_optimization.py&amp;#x27;, 190, &amp;#x27;Skipped: Tearsheet file not found&amp;#x27;)\n\n----------------------------- Captured stdout call -----------------------------\n\u26a0\ufe0f  Tearsheet not found for test test_20251023_233123\n&#34;}], &#34;tests/integration/test_06_portfolio_optimization.py::test_delete_portfolio_test&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Skipped&#34;, &#34;testId&#34;: &#34;tests/integration/test_06_portfolio_optimization.py::test_delete_portfolio_test&#34;, &#34;duration&#34;: &#34;00:00:01&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Skipped&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_06_portfolio_optimization.py::test_delete_portfolio_test&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:01&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;(&amp;#x27;/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/test_06_portfolio_optimization.py&amp;#x27;, 238, &amp;#x27;Skipped: Could not create test for deletion&amp;#x27;)\n&#34;}], &#34;tests/integration/test_06_portfolio_optimization.py::test_get_current_allocation&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_06_portfolio_optimization.py::test_get_current_allocation&#34;, &#34;duration&#34;: &#34;42 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_06_portfolio_optimization.py::test_get_current_allocation&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;42 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_06_portfolio_optimization.py:291: in test_get_current_allocation\n    print(f&amp;quot;   \u2192 {strategy_id}: {pct:.2f}%&amp;quot;)\nE   TypeError: unsupported format string passed to dict.__format__\n\n----------------------------- Captured stdout call -----------------------------\n\u2705 Retrieved current allocation\n   \u2192 Active allocations: 3\n&#34;}], &#34;tests/integration/test_06_portfolio_optimization.py::test_approve_allocation&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_06_portfolio_optimization.py::test_approve_allocation&#34;, &#34;duration&#34;: &#34;148 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_06_portfolio_optimization.py::test_approve_allocation&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;148 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Allocation approved via API\n   \u2192 Allocations: {&amp;#x27;TestStrategy1&amp;#x27;: 40.0, &amp;#x27;TestStrategy2&amp;#x27;: 35.0, &amp;#x27;TestStrategy3&amp;#x27;: 25.0}\n\u2705 Allocation verified in MongoDB\n&#34;}], &#34;tests/integration/test_06_portfolio_optimization.py::test_portfolio_constructor_with_different_strategies&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_06_portfolio_optimization.py::test_portfolio_constructor_with_different_strategies&#34;, &#34;duration&#34;: &#34;00:00:01&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_06_portfolio_optimization.py::test_portfolio_constructor_with_different_strategies&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:01&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\n\ud83d\udd2c Test 1: 2 strategies\n   \u26a0\ufe0f  Failed - Status: 500\n\n\ud83d\udd2c Test 2: 3 strategies\n   \u26a0\ufe0f  Failed - Status: 500\n\n\ud83d\udd2c Test 3: 2 strategies\n   \u26a0\ufe0f  Failed - Status: 500\n\n\ud83d\udcca Summary: 0/3 combinations succeeded\n&#34;}], &#34;tests/integration/test_06_portfolio_optimization.py::test_portfolio_allocation_validation&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_06_portfolio_optimization.py::test_portfolio_allocation_validation&#34;, &#34;duration&#34;: &#34;1 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_06_portfolio_optimization.py::test_portfolio_allocation_validation&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;1 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Empty allocation response: 400\n   \u2192 Empty allocations rejected\n&#34;}], &#34;tests/integration/test_07_frontend_admin.py::test_frontend_admin_api_endpoints_accessible&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_07_frontend_admin.py::test_frontend_admin_api_endpoints_accessible&#34;, &#34;duration&#34;: &#34;00:00:01&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_07_frontend_admin.py::test_frontend_admin_api_endpoints_accessible&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:01&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\ud83d\udd0d Testing API endpoints for frontend-admin...\n   \u2705 http://localhost:8001/health - Status 200\n   \u2705 http://localhost:8001/api/v1/strategies - Status 200\n   \u2705 http://localhost:8001/api/v1/allocations/current - Status 200\n   \u2705 http://localhost:8001/api/v1/portfolio-tests - Status 200\n   \u2705 http://localhost:8001/api/v1/activity/signals - Status 200\n   \u2705 http://localhost:8002/health - Status 200\n\u2705 All frontend-admin API endpoints accessible\n&#34;}], &#34;tests/integration/test_07_frontend_admin.py::test_frontend_admin_placeholder&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Skipped&#34;, &#34;testId&#34;: &#34;tests/integration/test_07_frontend_admin.py::test_frontend_admin_placeholder&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Skipped&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_07_frontend_admin.py::test_frontend_admin_placeholder&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;(&amp;#x27;/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/test_07_frontend_admin.py&amp;#x27;, 75, &amp;#x27;Skipped: Frontend UI tests not yet implemented - requires Selenium/Playwright&amp;#x27;)\n&#34;}], &#34;tests/integration/test_08_dashboard_creator.py::test_dashboard_data_sources_available&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_08_dashboard_creator.py::test_dashboard_data_sources_available&#34;, &#34;duration&#34;: &#34;250 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_08_dashboard_creator.py::test_dashboard_data_sources_available&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;250 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\ud83d\udd0d Verifying dashboard data sources...\n   \u26a0\ufe0f  No account state data\n   \u2705 Signals collection: 1 signals\n   \u2705 Orders collection: 104 orders\n   \u2705 Current allocation available\n   \u2705 Active strategies: 15\n\u2705 All dashboard data sources available\n&#34;}], &#34;tests/integration/test_08_dashboard_creator.py::test_dashboard_json_structure&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_08_dashboard_creator.py::test_dashboard_json_structure&#34;, &#34;duration&#34;: &#34;1 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_08_dashboard_creator.py::test_dashboard_json_structure&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;1 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\ud83d\udccb Dashboard JSON structure defined\n   \u2192 Top-level keys: [&amp;#x27;timestamp&amp;#x27;, &amp;#x27;account&amp;#x27;, &amp;#x27;positions&amp;#x27;, &amp;#x27;allocations&amp;#x27;, &amp;#x27;recent_activity&amp;#x27;, &amp;#x27;performance&amp;#x27;]\n\u2705 Dashboard structure is valid JSON\n   \u2192 Size: 867 bytes\n&#34;}], &#34;tests/integration/test_08_dashboard_creator.py::test_dashboard_creator_placeholder&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Skipped&#34;, &#34;testId&#34;: &#34;tests/integration/test_08_dashboard_creator.py::test_dashboard_creator_placeholder&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Skipped&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_08_dashboard_creator.py::test_dashboard_creator_placeholder&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;(&amp;#x27;/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/test_08_dashboard_creator.py&amp;#x27;, 153, &amp;#x27;Skipped: DashboardCreatorService not yet implemented - planned for Phase 4&amp;#x27;)\n&#34;}], &#34;tests/integration/test_09_frontend_client.py::test_client_dashboard_data_structure&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Skipped&#34;, &#34;testId&#34;: &#34;tests/integration/test_09_frontend_client.py::test_client_dashboard_data_structure&#34;, &#34;duration&#34;: &#34;39 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Skipped&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_09_frontend_client.py::test_client_dashboard_data_structure&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;39 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;(&amp;#x27;/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/test_09_frontend_client.py&amp;#x27;, 46, &amp;#x27;Skipped: No account state available for client dashboard&amp;#x27;)\n\n----------------------------- Captured stdout call -----------------------------\n\ud83d\udd0d Verifying client dashboard data availability...\n&#34;}], &#34;tests/integration/test_09_frontend_client.py::test_client_dashboard_performance_metrics&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_09_frontend_client.py::test_client_dashboard_performance_metrics&#34;, &#34;duration&#34;: &#34;1 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_09_frontend_client.py::test_client_dashboard_performance_metrics&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;1 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\ud83d\udcca Client dashboard metrics format:\n   \u2192 ytd_return_pct: 15.5\n   \u2192 mtd_return_pct: 2.3\n   \u2192 inception_return_pct: 45.8\n   \u2192 sharpe_ratio: 2.35\n   \u2192 sortino_ratio: 3.12\n   \u2192 max_drawdown_pct: -5.2\n   \u2192 current_drawdown_pct: -1.5\n   \u2192 win_rate_pct: 62.5\n   \u2192 avg_win_pct: 2.1\n   \u2192 avg_loss_pct: -1.3\n   \u2192 profit_factor: 1.85\n   \u2192 total_trades: 245\n\u2705 Performance metrics format validated\n&#34;}], &#34;tests/integration/test_09_frontend_client.py::test_client_dashboard_equity_curve_data&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Skipped&#34;, &#34;testId&#34;: &#34;tests/integration/test_09_frontend_client.py::test_client_dashboard_equity_curve_data&#34;, &#34;duration&#34;: &#34;37 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Skipped&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_09_frontend_client.py::test_client_dashboard_equity_curve_data&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;37 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;(&amp;#x27;/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/test_09_frontend_client.py&amp;#x27;, 141, &amp;#x27;Skipped: No portfolio test data available&amp;#x27;)\n&#34;}], &#34;tests/integration/test_09_frontend_client.py::test_client_dashboard_api_response_time&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_09_frontend_client.py::test_client_dashboard_api_response_time&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_09_frontend_client.py::test_client_dashboard_api_response_time&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u23f1\ufe0f  Dashboard API response time requirement:\n   \u2192 Target: &amp;lt; 500ms\n   \u2192 This ensures good UX for mathematricks.fund\n\u2705 Response time requirement documented\n&#34;}], &#34;tests/integration/test_09_frontend_client.py::test_frontend_client_placeholder&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Skipped&#34;, &#34;testId&#34;: &#34;tests/integration/test_09_frontend_client.py::test_frontend_client_placeholder&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Skipped&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_09_frontend_client.py::test_frontend_client_placeholder&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;(&amp;#x27;/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/test_09_frontend_client.py&amp;#x27;, 187, &amp;#x27;Skipped: Frontend client UI tests not yet implemented - requires Selenium/Playwright&amp;#x27;)\n&#34;}], &#34;tests/integration/test_09_frontend_client.py::test_client_dashboard_accessibility&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Skipped&#34;, &#34;testId&#34;: &#34;tests/integration/test_09_frontend_client.py::test_client_dashboard_accessibility&#34;, &#34;duration&#34;: &#34;0 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Skipped&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_09_frontend_client.py::test_client_dashboard_accessibility&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;0 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;(&amp;#x27;/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/test_09_frontend_client.py&amp;#x27;, 200, &amp;#x27;Skipped: Accessibility tests not yet implemented&amp;#x27;)\n&#34;}], &#34;tests/integration/test_10_end_to_end_signal_flow.py::test_complete_signal_to_execution_pipeline&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_10_end_to_end_signal_flow.py::test_complete_signal_to_execution_pipeline&#34;, &#34;duration&#34;: &#34;00:00:07&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_10_end_to_end_signal_flow.py::test_complete_signal_to_execution_pipeline&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:07&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n================================================================================\nCOMPLETE END-TO-END SIGNAL FLOW TEST\n================================================================================\n\n\ud83d\udce4 STEP 1: Sending test signal via script...\n   \u2705 Signal sent successfully\n\n\ud83d\udce5 STEP 2: Waiting for signal in MongoDB...\n   \u2705 Signal found in MongoDB: signal_17626940943N\n\n\ud83e\udde0 STEP 3: Waiting for Cerebro decision...\n   \u2705 Cerebro decision found\n      \u2192 Signal ID: Forex_20251109_131416_171\n      \u2192 Decision: APPROVE\n      \u2192 Reason: MaxHybrid allocation: 13.2% (Total portfolio: 230.0%) | ENTRY | Pos-sizing: 1.0 avg pos\n      \u2192 Final Quantity: 0\n\n\u26a0\ufe0f  STEP 4-6 SKIPPED: Signal was rejected by Cerebro\n      \u2192 This is normal if margin limits reached or other constraints\n\n================================================================================\nEND-TO-END TEST COMPLETE\n================================================================================\n\u2705 Signal successfully flowed through all services:\n   1. \u2705 TradingView webhook \u2192 MongoDB\n   2. \u2705 signal_collector pickup\n   3. \u2705 Cerebro decision\n================================================================================\n&#34;}], &#34;tests/integration/test_10_end_to_end_signal_flow.py::test_signal_rejection_flow&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_10_end_to_end_signal_flow.py::test_signal_rejection_flow&#34;, &#34;duration&#34;: &#34;92 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_10_end_to_end_signal_flow.py::test_signal_rejection_flow&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;92 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 Found rejected signal example\n   \u2192 Signal ID: TestCerebroFlow_20251109_131437_873\n   \u2192 Rejection Reason: No allocation in MaxHybrid portfolio\n   \u2705 No order created for rejected signal (correct)\n&#34;}], &#34;tests/integration/test_10_end_to_end_signal_flow.py::test_signal_processing_latency&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Skipped&#34;, &#34;testId&#34;: &#34;tests/integration/test_10_end_to_end_signal_flow.py::test_signal_processing_latency&#34;, &#34;duration&#34;: &#34;50 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Skipped&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_10_end_to_end_signal_flow.py::test_signal_processing_latency&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;50 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;(&amp;#x27;/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks-trader/tests/integration/test_10_end_to_end_signal_flow.py&amp;#x27;, 274, &amp;#x27;Skipped: No recent approved decisions to analyze&amp;#x27;)\n&#34;}], &#34;tests/integration/test_10_end_to_end_signal_flow.py::test_multiple_signals_concurrent_processing&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Failed&#34;, &#34;testId&#34;: &#34;tests/integration/test_10_end_to_end_signal_flow.py::test_multiple_signals_concurrent_processing&#34;, &#34;duration&#34;: &#34;42 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Failed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_10_end_to_end_signal_flow.py::test_multiple_signals_concurrent_processing&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;42 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;tests/integration/test_10_end_to_end_signal_flow.py:357: in test_multiple_signals_concurrent_processing\n    assert len(signal_ids) == len(unique_signal_ids), &amp;quot;Duplicate signal processing detected!&amp;quot;\nE   AssertionError: Duplicate signal processing detected!\nE   assert 6 == 5\nE    +  where 6 = len([&amp;#x27;Forex_20251109_131416_171&amp;#x27;, &amp;#x27;TestCatchup_20251109_131432_131&amp;#x27;, &amp;#x27;TestCatchup_20251109_131432_131&amp;#x27;, &amp;#x27;StagingOnly_20251109_131436_131&amp;#x27;, &amp;#x27;StagingOnly_20251109_131435_131&amp;#x27;, &amp;#x27;TestCerebroFlow_20251109_131437_873&amp;#x27;])\nE    +  and   5 = len({&amp;#x27;Forex_20251109_131416_171&amp;#x27;, &amp;#x27;StagingOnly_20251109_131435_131&amp;#x27;, &amp;#x27;StagingOnly_20251109_131436_131&amp;#x27;, &amp;#x27;TestCatchup_20251109_131432_131&amp;#x27;, &amp;#x27;TestCerebroFlow_20251109_131437_873&amp;#x27;})\n\n----------------------------- Captured stdout call -----------------------------\n\u2705 Found 6 concurrent signals processed\n&#34;}], &#34;tests/integration/test_10_end_to_end_signal_flow.py::test_system_recovery_after_service_restart&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;tests/integration/test_10_end_to_end_signal_flow.py::test_system_recovery_after_service_restart&#34;, &#34;duration&#34;: &#34;132 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;tests/integration/test_10_end_to_end_signal_flow.py::test_system_recovery_after_service_restart&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;132 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;----------------------------- Captured stdout call -----------------------------\n\u2705 No unprocessed signals (all caught up)\n\u2705 signal_processed flag is being set correctly\n&#34;}]}, &#34;renderCollapsed&#34;: [&#34;passed&#34;], &#34;initialSort&#34;: &#34;result&#34;, &#34;title&#34;: &#34;test_report.html&#34;}"></div>
+    <script>
+      (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
+const { getCollapsedCategory, setCollapsedIds } = require('./storage.js')
+
+class DataManager {
+    setManager(data) {
+        const collapsedCategories = [...getCollapsedCategory(data.renderCollapsed)]
+        const collapsedIds = []
+        const tests = Object.values(data.tests).flat().map((test, index) => {
+            const collapsed = collapsedCategories.includes(test.result.toLowerCase())
+            const id = `test_${index}`
+            if (collapsed) {
+                collapsedIds.push(id)
+            }
+            return {
+                ...test,
+                id,
+                collapsed,
+            }
+        })
+        const dataBlob = { ...data, tests }
+        this.data = { ...dataBlob }
+        this.renderData = { ...dataBlob }
+        setCollapsedIds(collapsedIds)
+    }
+
+    get allData() {
+        return { ...this.data }
+    }
+
+    resetRender() {
+        this.renderData = { ...this.data }
+    }
+
+    setRender(data) {
+        this.renderData.tests = [...data]
+    }
+
+    toggleCollapsedItem(id) {
+        this.renderData.tests = this.renderData.tests.map((test) =>
+            test.id === id ? { ...test, collapsed: !test.collapsed } : test,
+        )
+    }
+
+    set allCollapsed(collapsed) {
+        this.renderData = { ...this.renderData, tests: [...this.renderData.tests.map((test) => (
+            { ...test, collapsed }
+        ))] }
+    }
+
+    get testSubset() {
+        return [...this.renderData.tests]
+    }
+
+    get environment() {
+        return this.renderData.environment
+    }
+
+    get initialSort() {
+        return this.data.initialSort
+    }
+}
+
+module.exports = {
+    manager: new DataManager(),
+}
+
+},{"./storage.js":8}],2:[function(require,module,exports){
+const mediaViewer = require('./mediaviewer.js')
+const templateEnvRow = document.getElementById('template_environment_row')
+const templateResult = document.getElementById('template_results-table__tbody')
+
+function htmlToElements(html) {
+    const temp = document.createElement('template')
+    temp.innerHTML = html
+    return temp.content.childNodes
+}
+
+const find = (selector, elem) => {
+    if (!elem) {
+        elem = document
+    }
+    return elem.querySelector(selector)
+}
+
+const findAll = (selector, elem) => {
+    if (!elem) {
+        elem = document
+    }
+    return [...elem.querySelectorAll(selector)]
+}
+
+const dom = {
+    getStaticRow: (key, value) => {
+        const envRow = templateEnvRow.content.cloneNode(true)
+        const isObj = typeof value === 'object' && value !== null
+        const values = isObj ? Object.keys(value).map((k) => `${k}: ${value[k]}`) : null
+
+        const valuesElement = htmlToElements(
+            values ? `<ul>${values.map((val) => `<li>${val}</li>`).join('')}<ul>` : `<div>${value}</div>`)[0]
+        const td = findAll('td', envRow)
+        td[0].textContent = key
+        td[1].appendChild(valuesElement)
+
+        return envRow
+    },
+    getResultTBody: ({ testId, id, log, extras, resultsTableRow, tableHtml, result, collapsed }) => {
+        const resultBody = templateResult.content.cloneNode(true)
+        resultBody.querySelector('tbody').classList.add(result.toLowerCase())
+        resultBody.querySelector('tbody').id = testId
+        resultBody.querySelector('.collapsible').dataset.id = id
+
+        resultsTableRow.forEach((html) => {
+            const t = document.createElement('template')
+            t.innerHTML = html
+            resultBody.querySelector('.collapsible').appendChild(t.content)
+        })
+
+        if (log) {
+            // Wrap lines starting with "E" with span.error to color those lines red
+            const wrappedLog = log.replace(/^E.*$/gm, (match) => `<span class="error">${match}</span>`)
+            resultBody.querySelector('.log').innerHTML = wrappedLog
+        } else {
+            resultBody.querySelector('.log').remove()
+        }
+
+        if (collapsed) {
+            resultBody.querySelector('.collapsible > td')?.classList.add('collapsed')
+            resultBody.querySelector('.extras-row').classList.add('hidden')
+        } else {
+            resultBody.querySelector('.collapsible > td')?.classList.remove('collapsed')
+        }
+
+        const media = []
+        extras?.forEach(({ name, format_type, content }) => {
+            if (['image', 'video'].includes(format_type)) {
+                media.push({ path: content, name, format_type })
+            }
+
+            if (format_type === 'html') {
+                resultBody.querySelector('.extraHTML').insertAdjacentHTML('beforeend', `<div>${content}</div>`)
+            }
+        })
+        mediaViewer.setup(resultBody, media)
+
+        // Add custom html from the pytest_html_results_table_html hook
+        tableHtml?.forEach((item) => {
+            resultBody.querySelector('td[class="extra"]').insertAdjacentHTML('beforeend', item)
+        })
+
+        return resultBody
+    },
+}
+
+module.exports = {
+    dom,
+    htmlToElements,
+    find,
+    findAll,
+}
+
+},{"./mediaviewer.js":6}],3:[function(require,module,exports){
+const { manager } = require('./datamanager.js')
+const { doSort } = require('./sort.js')
+const storageModule = require('./storage.js')
+
+const getFilteredSubSet = (filter) =>
+    manager.allData.tests.filter(({ result }) => filter.includes(result.toLowerCase()))
+
+const doInitFilter = () => {
+    const currentFilter = storageModule.getVisible()
+    const filteredSubset = getFilteredSubSet(currentFilter)
+    manager.setRender(filteredSubset)
+}
+
+const doFilter = (type, show) => {
+    if (show) {
+        storageModule.showCategory(type)
+    } else {
+        storageModule.hideCategory(type)
+    }
+
+    const currentFilter = storageModule.getVisible()
+    const filteredSubset = getFilteredSubSet(currentFilter)
+    manager.setRender(filteredSubset)
+
+    const sortColumn = storageModule.getSort()
+    doSort(sortColumn, true)
+}
+
+module.exports = {
+    doFilter,
+    doInitFilter,
+}
+
+},{"./datamanager.js":1,"./sort.js":7,"./storage.js":8}],4:[function(require,module,exports){
+const { redraw, bindEvents, renderStatic } = require('./main.js')
+const { doInitFilter } = require('./filter.js')
+const { doInitSort } = require('./sort.js')
+const { manager } = require('./datamanager.js')
+const data = JSON.parse(document.getElementById('data-container').dataset.jsonblob)
+
+function init() {
+    manager.setManager(data)
+    doInitFilter()
+    doInitSort()
+    renderStatic()
+    redraw()
+    bindEvents()
+}
+
+init()
+
+},{"./datamanager.js":1,"./filter.js":3,"./main.js":5,"./sort.js":7}],5:[function(require,module,exports){
+const { dom, find, findAll } = require('./dom.js')
+const { manager } = require('./datamanager.js')
+const { doSort } = require('./sort.js')
+const { doFilter } = require('./filter.js')
+const {
+    getVisible,
+    getCollapsedIds,
+    setCollapsedIds,
+    getSort,
+    getSortDirection,
+    possibleFilters,
+} = require('./storage.js')
+
+const removeChildren = (node) => {
+    while (node.firstChild) {
+        node.removeChild(node.firstChild)
+    }
+}
+
+const renderStatic = () => {
+    const renderEnvironmentTable = () => {
+        const environment = manager.environment
+        const rows = Object.keys(environment).map((key) => dom.getStaticRow(key, environment[key]))
+        const table = document.getElementById('environment')
+        removeChildren(table)
+        rows.forEach((row) => table.appendChild(row))
+    }
+    renderEnvironmentTable()
+}
+
+const addItemToggleListener = (elem) => {
+    elem.addEventListener('click', ({ target }) => {
+        const id = target.parentElement.dataset.id
+        manager.toggleCollapsedItem(id)
+
+        const collapsedIds = getCollapsedIds()
+        if (collapsedIds.includes(id)) {
+            const updated = collapsedIds.filter((item) => item !== id)
+            setCollapsedIds(updated)
+        } else {
+            collapsedIds.push(id)
+            setCollapsedIds(collapsedIds)
+        }
+        redraw()
+    })
+}
+
+const renderContent = (tests) => {
+    const sortAttr = getSort(manager.initialSort)
+    const sortAsc = JSON.parse(getSortDirection())
+    const rows = tests.map(dom.getResultTBody)
+    const table = document.getElementById('results-table')
+    const tableHeader = document.getElementById('results-table-head')
+
+    const newTable = document.createElement('table')
+    newTable.id = 'results-table'
+
+    // remove all sorting classes and set the relevant
+    findAll('.sortable', tableHeader).forEach((elem) => elem.classList.remove('asc', 'desc'))
+    tableHeader.querySelector(`.sortable[data-column-type="${sortAttr}"]`)?.classList.add(sortAsc ? 'desc' : 'asc')
+    newTable.appendChild(tableHeader)
+
+    if (!rows.length) {
+        const emptyTable = document.getElementById('template_results-table__body--empty').content.cloneNode(true)
+        newTable.appendChild(emptyTable)
+    } else {
+        rows.forEach((row) => {
+            if (!!row) {
+                findAll('.collapsible td:not(.col-links', row).forEach(addItemToggleListener)
+                find('.logexpander', row).addEventListener('click',
+                    (evt) => evt.target.parentNode.classList.toggle('expanded'),
+                )
+                newTable.appendChild(row)
+            }
+        })
+    }
+
+    table.replaceWith(newTable)
+}
+
+const renderDerived = () => {
+    const currentFilter = getVisible()
+    possibleFilters.forEach((result) => {
+        const input = document.querySelector(`input[data-test-result="${result}"]`)
+        input.checked = currentFilter.includes(result)
+    })
+}
+
+const bindEvents = () => {
+    const filterColumn = (evt) => {
+        const { target: element } = evt
+        const { testResult } = element.dataset
+
+        doFilter(testResult, element.checked)
+        const collapsedIds = getCollapsedIds()
+        const updated = manager.renderData.tests.map((test) => {
+            return {
+                ...test,
+                collapsed: collapsedIds.includes(test.id),
+            }
+        })
+        manager.setRender(updated)
+        redraw()
+    }
+
+    const header = document.getElementById('environment-header')
+    header.addEventListener('click', () => {
+        const table = document.getElementById('environment')
+        table.classList.toggle('hidden')
+        header.classList.toggle('collapsed')
+    })
+
+    findAll('input[name="filter_checkbox"]').forEach((elem) => {
+        elem.addEventListener('click', filterColumn)
+    })
+
+    findAll('.sortable').forEach((elem) => {
+        elem.addEventListener('click', (evt) => {
+            const { target: element } = evt
+            const { columnType } = element.dataset
+            doSort(columnType)
+            redraw()
+        })
+    })
+
+    document.getElementById('show_all_details').addEventListener('click', () => {
+        manager.allCollapsed = false
+        setCollapsedIds([])
+        redraw()
+    })
+    document.getElementById('hide_all_details').addEventListener('click', () => {
+        manager.allCollapsed = true
+        const allIds = manager.renderData.tests.map((test) => test.id)
+        setCollapsedIds(allIds)
+        redraw()
+    })
+}
+
+const redraw = () => {
+    const { testSubset } = manager
+
+    renderContent(testSubset)
+    renderDerived()
+}
+
+module.exports = {
+    redraw,
+    bindEvents,
+    renderStatic,
+}
+
+},{"./datamanager.js":1,"./dom.js":2,"./filter.js":3,"./sort.js":7,"./storage.js":8}],6:[function(require,module,exports){
+class MediaViewer {
+    constructor(assets) {
+        this.assets = assets
+        this.index = 0
+    }
+
+    nextActive() {
+        this.index = this.index === this.assets.length - 1 ? 0 : this.index + 1
+        return [this.activeFile, this.index]
+    }
+
+    prevActive() {
+        this.index = this.index === 0 ? this.assets.length - 1 : this.index -1
+        return [this.activeFile, this.index]
+    }
+
+    get currentIndex() {
+        return this.index
+    }
+
+    get activeFile() {
+        return this.assets[this.index]
+    }
+}
+
+
+const setup = (resultBody, assets) => {
+    if (!assets.length) {
+        resultBody.querySelector('.media').classList.add('hidden')
+        return
+    }
+
+    const mediaViewer = new MediaViewer(assets)
+    const container = resultBody.querySelector('.media-container')
+    const leftArrow = resultBody.querySelector('.media-container__nav--left')
+    const rightArrow = resultBody.querySelector('.media-container__nav--right')
+    const mediaName = resultBody.querySelector('.media__name')
+    const counter = resultBody.querySelector('.media__counter')
+    const imageEl = resultBody.querySelector('img')
+    const sourceEl = resultBody.querySelector('source')
+    const videoEl = resultBody.querySelector('video')
+
+    const setImg = (media, index) => {
+        if (media?.format_type === 'image') {
+            imageEl.src = media.path
+
+            imageEl.classList.remove('hidden')
+            videoEl.classList.add('hidden')
+        } else if (media?.format_type === 'video') {
+            sourceEl.src = media.path
+
+            videoEl.classList.remove('hidden')
+            imageEl.classList.add('hidden')
+        }
+
+        mediaName.innerText = media?.name
+        counter.innerText = `${index + 1} / ${assets.length}`
+    }
+    setImg(mediaViewer.activeFile, mediaViewer.currentIndex)
+
+    const moveLeft = () => {
+        const [media, index] = mediaViewer.prevActive()
+        setImg(media, index)
+    }
+    const doRight = () => {
+        const [media, index] = mediaViewer.nextActive()
+        setImg(media, index)
+    }
+    const openImg = () => {
+        window.open(mediaViewer.activeFile.path, '_blank')
+    }
+    if (assets.length === 1) {
+        container.classList.add('media-container--fullscreen')
+    } else {
+        leftArrow.addEventListener('click', moveLeft)
+        rightArrow.addEventListener('click', doRight)
+    }
+    imageEl.addEventListener('click', openImg)
+}
+
+module.exports = {
+    setup,
+}
+
+},{}],7:[function(require,module,exports){
+const { manager } = require('./datamanager.js')
+const storageModule = require('./storage.js')
+
+const genericSort = (list, key, ascending, customOrder) => {
+    let sorted
+    if (customOrder) {
+        sorted = list.sort((a, b) => {
+            const aValue = a.result.toLowerCase()
+            const bValue = b.result.toLowerCase()
+
+            const aIndex = customOrder.findIndex((item) => item.toLowerCase() === aValue)
+            const bIndex = customOrder.findIndex((item) => item.toLowerCase() === bValue)
+
+            // Compare the indices to determine the sort order
+            return aIndex - bIndex
+        })
+    } else {
+        sorted = list.sort((a, b) => a[key] === b[key] ? 0 : a[key] > b[key] ? 1 : -1)
+    }
+
+    if (ascending) {
+        sorted.reverse()
+    }
+    return sorted
+}
+
+const durationSort = (list, ascending) => {
+    const parseDuration = (duration) => {
+        if (duration.includes(':')) {
+            // If it's in the format "HH:mm:ss"
+            const [hours, minutes, seconds] = duration.split(':').map(Number)
+            return (hours * 3600 + minutes * 60 + seconds) * 1000
+        } else {
+            // If it's in the format "nnn ms"
+            return parseInt(duration)
+        }
+    }
+    const sorted = list.sort((a, b) => parseDuration(a['duration']) - parseDuration(b['duration']))
+    if (ascending) {
+        sorted.reverse()
+    }
+    return sorted
+}
+
+const doInitSort = () => {
+    const type = storageModule.getSort(manager.initialSort)
+    const ascending = storageModule.getSortDirection()
+    const list = manager.testSubset
+    const initialOrder = ['Error', 'Failed', 'Rerun', 'XFailed', 'XPassed', 'Skipped', 'Passed']
+
+    storageModule.setSort(type)
+    storageModule.setSortDirection(ascending)
+
+    if (type?.toLowerCase() === 'original') {
+        manager.setRender(list)
+    } else {
+        let sortedList
+        switch (type) {
+        case 'duration':
+            sortedList = durationSort(list, ascending)
+            break
+        case 'result':
+            sortedList = genericSort(list, type, ascending, initialOrder)
+            break
+        default:
+            sortedList = genericSort(list, type, ascending)
+            break
+        }
+        manager.setRender(sortedList)
+    }
+}
+
+const doSort = (type, skipDirection) => {
+    const newSortType = storageModule.getSort(manager.initialSort) !== type
+    const currentAsc = storageModule.getSortDirection()
+    let ascending
+    if (skipDirection) {
+        ascending = currentAsc
+    } else {
+        ascending = newSortType ? false : !currentAsc
+    }
+    storageModule.setSort(type)
+    storageModule.setSortDirection(ascending)
+
+    const list = manager.testSubset
+    const sortedList = type === 'duration' ? durationSort(list, ascending) : genericSort(list, type, ascending)
+    manager.setRender(sortedList)
+}
+
+module.exports = {
+    doInitSort,
+    doSort,
+}
+
+},{"./datamanager.js":1,"./storage.js":8}],8:[function(require,module,exports){
+const possibleFilters = [
+    'passed',
+    'skipped',
+    'failed',
+    'error',
+    'xfailed',
+    'xpassed',
+    'rerun',
+]
+
+const getVisible = () => {
+    const url = new URL(window.location.href)
+    const settings = new URLSearchParams(url.search).get('visible')
+    const lower = (item) => {
+        const lowerItem = item.toLowerCase()
+        if (possibleFilters.includes(lowerItem)) {
+            return lowerItem
+        }
+        return null
+    }
+    return settings === null ?
+        possibleFilters :
+        [...new Set(settings?.split(',').map(lower).filter((item) => item))]
+}
+
+const hideCategory = (categoryToHide) => {
+    const url = new URL(window.location.href)
+    const visibleParams = new URLSearchParams(url.search).get('visible')
+    const currentVisible = visibleParams ? visibleParams.split(',') : [...possibleFilters]
+    const settings = [...new Set(currentVisible)].filter((f) => f !== categoryToHide).join(',')
+
+    url.searchParams.set('visible', settings)
+    window.history.pushState({}, null, unescape(url.href))
+}
+
+const showCategory = (categoryToShow) => {
+    if (typeof window === 'undefined') {
+        return
+    }
+    const url = new URL(window.location.href)
+    const currentVisible = new URLSearchParams(url.search).get('visible')?.split(',').filter(Boolean) ||
+        [...possibleFilters]
+    const settings = [...new Set([categoryToShow, ...currentVisible])]
+    const noFilter = possibleFilters.length === settings.length || !settings.length
+
+    noFilter ? url.searchParams.delete('visible') : url.searchParams.set('visible', settings.join(','))
+    window.history.pushState({}, null, unescape(url.href))
+}
+
+const getSort = (initialSort) => {
+    const url = new URL(window.location.href)
+    let sort = new URLSearchParams(url.search).get('sort')
+    if (!sort) {
+        sort = initialSort || 'result'
+    }
+    return sort
+}
+
+const setSort = (type) => {
+    const url = new URL(window.location.href)
+    url.searchParams.set('sort', type)
+    window.history.pushState({}, null, unescape(url.href))
+}
+
+const getCollapsedCategory = (renderCollapsed) => {
+    let categories
+    if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href)
+        const collapsedItems = new URLSearchParams(url.search).get('collapsed')
+        switch (true) {
+        case !renderCollapsed && collapsedItems === null:
+            categories = ['passed']
+            break
+        case collapsedItems?.length === 0 || /^["']{2}$/.test(collapsedItems):
+            categories = []
+            break
+        case /^all$/.test(collapsedItems) || collapsedItems === null && /^all$/.test(renderCollapsed):
+            categories = [...possibleFilters]
+            break
+        default:
+            categories = collapsedItems?.split(',').map((item) => item.toLowerCase()) || renderCollapsed
+            break
+        }
+    } else {
+        categories = []
+    }
+    return categories
+}
+
+const getSortDirection = () => JSON.parse(sessionStorage.getItem('sortAsc')) || false
+const setSortDirection = (ascending) => sessionStorage.setItem('sortAsc', ascending)
+
+const getCollapsedIds = () => JSON.parse(sessionStorage.getItem('collapsedIds')) || []
+const setCollapsedIds = (list) => sessionStorage.setItem('collapsedIds', JSON.stringify(list))
+
+module.exports = {
+    getVisible,
+    hideCategory,
+    showCategory,
+    getCollapsedIds,
+    setCollapsedIds,
+    getSort,
+    setSort,
+    getSortDirection,
+    setSortDirection,
+    getCollapsedCategory,
+    possibleFilters,
+}
+
+},{}]},{},[4]);
+    </script>
+  </footer>
+</html>

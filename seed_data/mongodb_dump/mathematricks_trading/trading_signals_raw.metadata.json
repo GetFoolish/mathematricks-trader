@@ -1,0 +1,1 @@
+{"indexes":[{"v":{"$numberInt":"2"},"key":{"_id":{"$numberInt":"1"}},"name":"_id_"}],"uuid":"afc0d496d54942a7bb6c63ad7fa81daa","collectionName":"trading_signals_raw","type":"collection"}

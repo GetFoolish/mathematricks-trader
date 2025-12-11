@@ -28,7 +28,7 @@ wheels/
 .venv
 
 # IDE
-.vscode/
+
 .idea/
 *.swp
 *.swo
@@ -54,3 +54,7 @@ dev/portfolio_combiner/outputs/*
 !dev/portfolio_combiner/outputs/.gitkeep
 dev/portfolio_combiner/real_strategy_data/*
 !dev/portfolio_combiner/real_strategy_data/.gitkeep
+
+# Google Cloud SDK (downloaded, not needed in repo)
+google-cloud-cli-*.tar.gz
+google-cloud-sdk/

@@ -1,0 +1,34 @@
+{
+  "Mock_Paper": {
+    "AAPL": {
+      "precision": 0,
+      "last_checked": "2025-11-20T15:56:56.075043+00:00"
+    },
+    "NVDA": {
+      "precision": 0,
+      "last_checked": "2025-11-20T16:52:59.888907+00:00"
+    }
+  },
+  "IBKR_PAPER": {
+    "AUDCAD": {
+      "precision": 0,
+      "last_checked": "2025-11-20T18:27:31.019302+00:00"
+    },
+    "AAPL": {
+      "precision": 0,
+      "last_checked": "2025-11-24T14:59:08.189781+00:00"
+    },
+    "EURUSD": {
+      "precision": 0,
+      "last_checked": "2025-11-20T23:04:48.726117+00:00"
+    },
+    "BTC": {
+      "precision": 8,
+      "last_checked": "2025-11-23T07:05:38.768931+00:00"
+    },
+    "GC": {
+      "precision": 0,
+      "last_checked": "2025-11-21T03:02:55.136347+00:00"
+    }
+  }
+}

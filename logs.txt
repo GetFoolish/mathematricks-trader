@@ -1,0 +1,322 @@
+﻿ib-gateway-1  | os.arch = amd64
+ib-gateway-1  | java.vm.specification.name = Java Virtual Machine Specification
+ib-gateway-1  | native.encoding = ANSI_X3.4-1968
+ib-gateway-1  | java.library.path = /usr/java/packages/lib:/usr/lib64:/lib64:/lib:/usr/lib
+ib-gateway-1  | java.vm.info = mixed mode
+ib-gateway-1  | java.vendor = Azul Systems, Inc.
+ib-gateway-1  | java.vm.version = 17.0.10.0.101+3-LTS
+ib-gateway-1  | sun.io.unicode.encoding = UnicodeLittle
+ib-gateway-1  | java.class.version = 61.0
+ib-gateway-1  | ------------------------------------------------------------
+ib-gateway-1  | 2025-12-10 06:33:17:603 IBC: using default settings provider: ini file is /home/ibgateway/ibc/config.ini
+ib-gateway-1  | 2025-12-10 06:33:17:603 IBC: using default login manager: will get username and password from settings; FIX username and password (if required) from settings
+ib-gateway-1  | 2025-12-10 06:33:17:604 IBC: using default main window manager
+ib-gateway-1  | 2025-12-10 06:33:17:604 IBC: using default trading mode manager: constructor parameter args but trading mode not present - will be taken from settings
+ib-gateway-1  | 2025-12-10 06:33:17:606 IBC: using default config dialog manager
+ib-gateway-1  | 2025-12-10 06:33:17:678 IBC: CommandServer is not started because the port is not configured
+ib-gateway-1  | 2025-12-10 06:33:18:802 IBC: TWS Settings directory is: /home/ibgateway/Jts
+ib-gateway-1  | 2025-12-10 06:33:18:803 IBC: Starting session: will exit if login dialog is not displayed within 60 seconds
+ib-gateway-1  | 2025-12-10 06:33:18:866 IBC: Ensuring /home/ibgateway/Jts/jts.ini contains required minimal lines
+ib-gateway-1  | 2025-12-10 06:33:18:868 IBC: Found setting: [Logon]/s3store=true
+ib-gateway-1  | 2025-12-10 06:33:18:872 IBC: Found setting: [Logon]/Locale=en
+ib-gateway-1  | 2025-12-10 06:33:18:872 IBC: Found setting: [Logon]/displayedproxymsg=1
+ib-gateway-1  | 2025-12-10 06:33:18:873 IBC: Found setting: [Logon]/UseSSL=true
+ib-gateway-1  | 2025-12-10 06:33:18:873 IBC: Found setting: [IBGateway]/ApiOnly=true
+ib-gateway-1  | 2025-12-10 06:33:18:874 IBC: Found setting: [IBGateway]/TrustedIPs=127.0.0.1
+ib-gateway-1  | 2025-12-10 06:33:18:875 IBC: Confirmed /home/ibgateway/Jts/jts.ini contains required minimal lines
+ib-gateway-1  | 2025-12-10 06:33:18:875 IBC: Starting Gateway
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | WARN StatusConsoleListener The use of package scanning to locate plugins is deprecated and will be removed in a future release
+ib-gateway-1  | 2025-12-10 06:33:26:747 IBC: Getting config dialog
+ib-gateway-1  | 2025-12-10 06:33:26:747 IBC: Creating config dialog future
+ib-gateway-1  | 2025-12-10 06:33:26:750 IBC: Getting main window
+ib-gateway-1  | 2025-12-10 06:33:26:750 IBC: Creating main window future
+ib-gateway-1  | 2025-12-10 06:33:32:791 IBC: detected frame entitled: IBKR Gateway; event=Opened
+ib-gateway-1  | 2025-12-10 06:33:32:802 IBC: Login dialog WINDOW_OPENED: LoginState is LOGGED_OUT
+ib-gateway-1  | 2025-12-10 06:33:32:806 IBC: trading mode from settings: tradingMode=paper
+ib-gateway-1  | 2025-12-10 06:33:32:807 IBC: Setting Trading mode = paper
+ib-gateway-1  | 2025-12-10 06:33:33:190 IBC: Setting user name
+ib-gateway-1  | 2025-12-10 06:33:33:190 IBC: Setting password
+ib-gateway-1  | 2025-12-10 06:33:33:192 IBC: detected frame entitled: IBKR Gateway; event=Activated
+ib-gateway-1  | 2025-12-10 06:33:33:199 IBC: detected frame entitled: IBKR Gateway; event=Focused
+frontend-1    | 
+frontend-1    | > frontend-admin@0.0.0 dev
+frontend-1    | > vite --host
+frontend-1    | 
+frontend-1    | 
+frontend-1    |   VITE v7.2.4  ready in 1626 ms
+frontend-1    | 
+frontend-1    |   Γ₧£  Local:   http://localhost:5173/
+frontend-1    |   Γ₧£  Network: http://172.18.0.6:5173/
+execution-service-1  | |INFO|Initializing broker pool from AccountDataService...|2025-12-10 06:43:08,089|file:execution_main.py:line No.210
+execution-service-1  | |ERROR|Failed to get accounts from AccountDataService: HTTPConnectionPool(host='account-data-service', port=8082): Max retries exceeded with url: /api/v1/accounts (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x760ce05a0b10>: Failed to establish a new connection: [Errno 111] Connection refused'))|2025-12-10 06:43:08,138|file:execution_main.py:line No.195
+execution-service-1  | |WARNING|Falling back to single IBKR broker configuration|2025-12-10 06:43:08,138|file:execution_main.py:line No.196
+execution-service-1  | |WARNING|No accounts from AccountDataService - creating Mock broker as fallback|2025-12-10 06:43:08,138|file:execution_main.py:line No.217
+execution-service-1  | |INFO|Creating Mock broker instance...|2025-12-10 06:43:08,138|file:factory.py:line No.100
+execution-service-1  | |INFO|Mock Broker initialized for account Mock_Paper (instant fills for testing)|2025-12-10 06:43:08,138|file:mock_broker.py:line No.81
+execution-service-1  | |INFO|Γ£à Mock broker instance created|2025-12-10 06:43:08,139|file:factory.py:line No.102
+execution-service-1  | |INFO|Γ£à Created fallback Mock broker for account: Mock_Paper|2025-12-10 06:43:08,139|file:execution_main.py:line No.228
+execution-service-1  | |INFO|≡ƒÜÇ Execution Service Starting|2025-12-10 06:43:08,139|file:execution_main.py:line No.1025
+execution-service-1  | |INFO|Connecting to 1 broker(s)...|2025-12-10 06:43:08,140|file:execution_main.py:line No.300
+execution-service-1  | |INFO|Connecting to Mock for account Mock_Paper...|2025-12-10 06:43:08,141|file:execution_main.py:line No.311
+execution-service-1  | |INFO|Γ£à Connected to MongoDB for position tracking|2025-12-10 06:43:08,171|file:mock_broker.py:line No.42
+execution-service-1  | |INFO|Γ£à Replaced existing Mock_Paper account with fresh state|2025-12-10 06:43:08,203|file:mock_broker.py:line No.155
+execution-service-1  | |INFO|   Initial Equity: $1,000,000.00|2025-12-10 06:43:08,203|file:mock_broker.py:line No.157
+execution-service-1  | |INFO|   Buying Power: $2,000,000.00|2025-12-10 06:43:08,204|file:mock_broker.py:line No.158
+execution-service-1  | |INFO|Mock Broker: Connected to Mock_Paper (no actual connection needed)|2025-12-10 06:43:08,204|file:mock_broker.py:line No.103
+execution-service-1  | |INFO|Γ£à Connected to Mock for Mock_Paper|2025-12-10 06:43:08,204|file:execution_main.py:line No.314
+execution-service-1  | |INFO|Broker pool connection complete: 1/1 connected|2025-12-10 06:43:08,204|file:execution_main.py:line No.327
+execution-service-1  | |INFO|Γ£à Broker pool: 1 broker(s) ready|2025-12-10 06:43:08,204|file:execution_main.py:line No.1031
+execution-service-1  | |INFO|Γ£à Execution Service ready - listening for orders|2025-12-10 06:43:08,214|file:execution_main.py:line No.1055
+execution-service-1  | |INFO|**************************************************|2025-12-10 06:43:08,218|file:execution_main.py:line No.1056
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:43:22 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:43:32 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:43:42 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:43:52 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:44:02 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:44:12 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:44:23 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:44:33 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:44:43 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:44:53 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:45:03 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:45:13 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:45:23 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:45:33 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:45:44 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:45:54 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:46:04 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:46:14 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:46:24 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:46:34 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:46:44 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:46:54 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:47:04 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:47:15 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+pubsub-emulator-1    | [pubsub] Dec 10, 2025 6:47:25 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+pubsub-emulator-1    | [pubsub] INFO: Detected non-HTTP/2 connection.
+signal-ingestion-1   | |DEBUG|≡ƒöº Initializing MongoDBWatcher with URL: mongodb://mongodb:27017|2025-12-10 06:43:06,725|file:mongodb_watcher.py:line No.34
+signal-ingestion-1   | |DEBUG|≡ƒöº Environment: staging|2025-12-10 06:43:06,726|file:mongodb_watcher.py:line No.35
+signal-ingestion-1   | |INFO|Γ£à Connected to MongoDB Atlas|2025-12-10 06:43:06,817|file:mongodb_watcher.py:line No.61
+signal-ingestion-1   | |INFO|Γ£à Connected to signal_store collection|2025-12-10 06:43:06,835|file:signal_ingestion_main.py:line No.107
+signal-ingestion-1   | |INFO|Γ£à Pub/Sub bridge enabled - signals will route to microservices|2025-12-10 06:43:06,868|file:signal_ingestion_main.py:line No.120
+signal-ingestion-1   | |INFO|================================================================================|2025-12-10 06:43:06,869|file:signal_ingestion_main.py:line No.125
+signal-ingestion-1   | |INFO|SignalIngestionService Starting (STAGING)|2025-12-10 06:43:06,869|file:signal_ingestion_main.py:line No.126
+signal-ingestion-1   | |INFO|================================================================================|2025-12-10 06:43:06,870|file:signal_ingestion_main.py:line No.127
+signal-ingestion-1   | |INFO|≡ƒÜÇ Starting Signal Ingestion Service (STAGING)|2025-12-10 06:43:06,870|file:signal_ingestion_main.py:line No.326
+signal-ingestion-1   | |INFO|≡ƒîÉ Monitoring: staging.mathematricks.fund|2025-12-10 06:43:06,870|file:signal_ingestion_main.py:line No.327
+signal-ingestion-1   | |INFO||2025-12-10 06:43:06,870|file:signal_ingestion_main.py:line No.328
+signal-ingestion-1   | |INFO|
+signal-ingestion-1   | ≡ƒöä PHASE 1: Catch-up Mode|2025-12-10 06:43:06,871|file:mongodb_watcher.py:line No.363
+signal-ingestion-1   | |INFO|≡ƒöä Checking for missed signals from MongoDB...|2025-12-10 06:43:06,872|file:mongodb_watcher.py:line No.78
+signal-ingestion-1   | |INFO|Γ£à No missed signals found in MongoDB|2025-12-10 06:43:06,874|file:mongodb_watcher.py:line No.181
+signal-ingestion-1   | |INFO|
+signal-ingestion-1   | ≡ƒôí PHASE 2: Real-Time Mode - Change Streams|2025-12-10 06:43:06,875|file:mongodb_watcher.py:line No.372
+signal-ingestion-1   | |INFO|Γ£à Change Stream connected - waiting for staging signals only...|2025-12-10 06:43:06,887|file:mongodb_watcher.py:line No.220
+signal-ingestion-1   | |DEBUG|≡ƒöù MongoDB URL: mongodb://mongodb:27017|2025-12-10 06:43:06,887|file:mongodb_watcher.py:line No.221
+signal-ingestion-1   | |DEBUG|≡ƒôè Watching: mathematricks_trading.trading_signals_raw|2025-12-10 06:43:06,888|file:mongodb_watcher.py:line No.222
+signal-ingestion-1   | |DEBUG|≡ƒÄ» Environment filter: staging|2025-12-10 06:43:06,888|file:mongodb_watcher.py:line No.223
+pubsub-init-1        | Γ¥î Error creating order-commands-sub: 409 Subscription already exists
+pubsub-init-1        | 
+pubsub-init-1        | Γ£¿ Pub/Sub initialization complete!
+pubsub-init-1        | Requirement already satisfied: google-cloud-pubsub in /usr/local/lib/python3.11/site-packages (2.33.0)
+pubsub-init-1        | Requirement already satisfied: grpcio<2.0.0,>=1.51.3 in /usr/local/lib/python3.11/site-packages (from google-cloud-pubsub) (1.76.0)
+pubsub-init-1        | Requirement already satisfied: google-auth<3.0.0,>=2.14.1 in /usr/local/lib/python3.11/site-packages (from google-cloud-pubsub) (2.43.0)
+pubsub-init-1        | Requirement already satisfied: google-api-core!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0 in /usr/local/lib/python3.11/site-packages (from google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-cloud-pubsub) (2.28.1)
+pubsub-init-1        | Requirement already satisfied: proto-plus<2.0.0,>=1.22.0 in /usr/local/lib/python3.11/site-packages (from google-cloud-pubsub) (1.26.1)
+pubsub-init-1        | Requirement already satisfied: protobuf!=4.21.0,!=4.21.1,!=4.21.2,!=4.21.3,!=4.21.4,!=4.21.5,<7.0.0,>=3.20.2 in /usr/local/lib/python3.11/site-packages (from google-cloud-pubsub) (6.33.2)
+pubsub-init-1        | Requirement already satisfied: grpc-google-iam-v1<1.0.0,>=0.12.4 in /usr/local/lib/python3.11/site-packages (from google-cloud-pubsub) (0.14.3)
+pubsub-init-1        | Requirement already satisfied: grpcio-status>=1.33.2 in /usr/local/lib/python3.11/site-packages (from google-cloud-pubsub) (1.76.0)
+pubsub-init-1        | Requirement already satisfied: opentelemetry-api>=1.27.0 in /usr/local/lib/python3.11/site-packages (from google-cloud-pubsub) (1.39.0)
+pubsub-init-1        | Requirement already satisfied: opentelemetry-sdk>=1.27.0 in /usr/local/lib/python3.11/site-packages (from google-cloud-pubsub) (1.39.0)
+pubsub-init-1        | Requirement already satisfied: googleapis-common-protos<2.0.0,>=1.56.2 in /usr/local/lib/python3.11/site-packages (from google-api-core!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-cloud-pubsub) (1.72.0)
+pubsub-init-1        | Requirement already satisfied: requests<3.0.0,>=2.18.0 in /usr/local/lib/python3.11/site-packages (from google-api-core!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-cloud-pubsub) (2.32.5)
+pubsub-init-1        | Requirement already satisfied: cachetools<7.0,>=2.0.0 in /usr/local/lib/python3.11/site-packages (from google-auth<3.0.0,>=2.14.1->google-cloud-pubsub) (6.2.2)
+pubsub-init-1        | Requirement already satisfied: pyasn1-modules>=0.2.1 in /usr/local/lib/python3.11/site-packages (from google-auth<3.0.0,>=2.14.1->google-cloud-pubsub) (0.4.2)
+pubsub-init-1        | Requirement already satisfied: rsa<5,>=3.1.4 in /usr/local/lib/python3.11/site-packages (from google-auth<3.0.0,>=2.14.1->google-cloud-pubsub) (4.9.1)
+pubsub-init-1        | Requirement already satisfied: typing-extensions~=4.12 in /usr/local/lib/python3.11/site-packages (from grpcio<2.0.0,>=1.51.3->google-cloud-pubsub) (4.15.0)
+pubsub-init-1        | Requirement already satisfied: importlib-metadata<8.8.0,>=6.0 in /usr/local/lib/python3.11/site-packages (from opentelemetry-api>=1.27.0->google-cloud-pubsub) (8.7.0)
+pubsub-init-1        | Requirement already satisfied: opentelemetry-semantic-conventions==0.60b0 in /usr/local/lib/python3.11/site-packages (from opentelemetry-sdk>=1.27.0->google-cloud-pubsub) (0.60b0)
+pubsub-init-1        | Requirement already satisfied: zipp>=3.20 in /usr/local/lib/python3.11/site-packages (from importlib-metadata<8.8.0,>=6.0->opentelemetry-api>=1.27.0->google-cloud-pubsub) (3.23.0)
+pubsub-init-1        | Requirement already satisfied: pyasn1<0.7.0,>=0.6.1 in /usr/local/lib/python3.11/site-packages (from pyasn1-modules>=0.2.1->google-auth<3.0.0,>=2.14.1->google-cloud-pubsub) (0.6.1)
+pubsub-init-1        | Requirement already satisfied: charset_normalizer<4,>=2 in /usr/local/lib/python3.11/site-packages (from requests<3.0.0,>=2.18.0->google-api-core!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-cloud-pubsub) (3.4.4)
+pubsub-init-1        | Requirement already satisfied: idna<4,>=2.5 in /usr/local/lib/python3.11/site-packages (from requests<3.0.0,>=2.18.0->google-api-core!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-cloud-pubsub) (3.11)
+pubsub-init-1        | Requirement already satisfied: urllib3<3,>=1.21.1 in /usr/local/lib/python3.11/site-packages (from requests<3.0.0,>=2.18.0->google-api-core!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-cloud-pubsub) (2.6.1)
+pubsub-init-1        | Requirement already satisfied: certifi>=2017.4.17 in /usr/local/lib/python3.11/site-packages (from requests<3.0.0,>=2.18.0->google-api-core!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-api-core[grpc]!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0,>=1.34.0->google-cloud-pubsub) (2025.11.12)
+pubsub-init-1        | WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+pubsub-init-1        | 
+pubsub-init-1        | [notice] A new release of pip is available: 24.0 -> 25.3
+pubsub-init-1        | [notice] To update, run: pip install --upgrade pip
+pubsub-init-1        | Initializing Pub/Sub for project: mathematricks-trader
+pubsub-init-1        | Emulator Host: pubsub-emulator:8085
+pubsub-init-1        | Waiting for Pub/Sub emulator...
+pubsub-init-1        | 
+pubsub-init-1        | Creating Topics...
+pubsub-init-1        | Γ¥î Error creating standardized-signals: 409 Topic already exists
+pubsub-init-1        | Γ¥î Error creating trading-orders: 409 Topic already exists
+pubsub-init-1        | Γ¥î Error creating execution-confirmations: 409 Topic already exists
+pubsub-init-1        | Γ¥î Error creating account-updates: 409 Topic already exists
+pubsub-init-1        | Γ¥î Error creating order-commands: 409 Topic already exists
+pubsub-init-1        | 
+pubsub-init-1        | Creating Subscriptions...
+pubsub-init-1        | Γ¥î Error creating standardized-signals-sub: 409 Subscription already exists
+pubsub-init-1        | Γ¥î Error creating trading-orders-sub: 409 Subscription already exists
+pubsub-init-1        | Γ¥î Error creating execution-confirmations-sub: 409 Subscription already exists
+pubsub-init-1        | Γ¥î Error creating account-updates-sub: 409 Subscription already exists
+pubsub-init-1        | Γ¥î Error creating order-commands-sub: 409 Subscription already exists
+pubsub-init-1        | 
+pubsub-init-1        | Γ£¿ Pub/Sub initialization complete!
+account-data-service-1  | /app/services/account_data_service/account_data_main.py:588: DeprecationWarning: 
+account-data-service-1  |         on_event is deprecated, use lifespan event handlers instead.
+account-data-service-1  | 
+account-data-service-1  |         Read more about it in the
+account-data-service-1  |         [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+account-data-service-1  |         
+account-data-service-1  |   @app.on_event("startup")
+account-data-service-1  | /app/services/account_data_service/account_data_main.py:618: DeprecationWarning: 
+account-data-service-1  |         on_event is deprecated, use lifespan event handlers instead.
+account-data-service-1  | 
+account-data-service-1  |         Read more about it in the
+account-data-service-1  |         [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+account-data-service-1  |         
+account-data-service-1  |   @app.on_event("shutdown")
+account-data-service-1  | INFO:     Started server process [1]
+account-data-service-1  | INFO:     Waiting for application startup.
+account-data-service-1  | |INFO|======================================================================|2025-12-10 06:43:08,469|file:account_data_main.py:line No.591
+account-data-service-1  | |INFO|Starting Account Data Service v2.0 (Simplified)|2025-12-10 06:43:08,470|file:account_data_main.py:line No.592
+account-data-service-1  | |INFO|======================================================================|2025-12-10 06:43:08,470|file:account_data_main.py:line No.593
+account-data-service-1  | |INFO|MongoDB URI: mongodb://mongodb:27017|2025-12-10 06:43:08,470|file:account_data_main.py:line No.594
+account-data-service-1  | |INFO|Database: mathematricks_trading|2025-12-10 06:43:08,471|file:account_data_main.py:line No.595
+account-data-service-1  | |INFO|Poll interval: 300s|2025-12-10 06:43:08,471|file:account_data_main.py:line No.596
+account-data-service-1  | |INFO|Port: 8082|2025-12-10 06:43:08,471|file:account_data_main.py:line No.597
+account-data-service-1  | |INFO|======================================================================|2025-12-10 06:43:08,471|file:account_data_main.py:line No.598
+account-data-service-1  | |INFO|Γ£à MongoDB connected|2025-12-10 06:43:08,484|file:account_data_main.py:line No.603
+account-data-service-1  | |INFO|Γ£à Started broker polling (interval: 300s)|2025-12-10 06:43:08,488|file:broker_poller.py:line No.241
+account-data-service-1  | |INFO|≡ƒôè Polling 1 active accounts...|2025-12-10 06:43:08,494|file:broker_poller.py:line No.378
+account-data-service-1  | |INFO|Creating Mock broker instance...|2025-12-10 06:43:08,495|file:factory.py:line No.100
+account-data-service-1  | |INFO|Mock Broker initialized for account Mock_Paper (instant fills for testing)|2025-12-10 06:43:08,495|file:mock_broker.py:line No.81
+account-data-service-1  | |INFO|Γ£à Mock broker instance created|2025-12-10 06:43:08,496|file:factory.py:line No.102
+account-data-service-1  | |INFO|Connecting to Mock_Paper...|2025-12-10 06:43:08,496|file:broker_poller.py:line No.451
+account-data-service-1  | |INFO|Γ£à Connected to MongoDB for position tracking|2025-12-10 06:43:08,588|file:mock_broker.py:line No.42
+account-data-service-1  | |INFO|Γ£à MongoPositionWatcher connected to MongoDB|2025-12-10 06:43:08,657|file:broker_poller.py:line No.71
+account-data-service-1  | |INFO|Γ£à Started MongoDB position watching (event-driven polling)|2025-12-10 06:43:08,673|file:broker_poller.py:line No.90
+account-data-service-1  | |INFO|Γ£à Change Stream connected - watching for position updates...|2025-12-10 06:43:08,676|file:broker_poller.py:line No.159
+account-data-service-1  | |INFO|≡ƒôè 1 active accounts configured|2025-12-10 06:43:08,677|file:account_data_main.py:line No.613
+account-data-service-1  | |INFO|Γ£à Service started successfully|2025-12-10 06:43:08,678|file:account_data_main.py:line No.615
+account-data-service-1  | INFO:     Application startup complete.
+account-data-service-1  | INFO:     Uvicorn running on http://0.0.0.0:8082 (Press CTRL+C to quit)
+account-data-service-1  | |INFO|Γ£à Replaced existing Mock_Paper account with fresh state|2025-12-10 06:43:08,684|file:mock_broker.py:line No.155
+account-data-service-1  | |INFO|   Initial Equity: $1,000,000.00|2025-12-10 06:43:08,684|file:mock_broker.py:line No.157
+account-data-service-1  | |INFO|   Buying Power: $2,000,000.00|2025-12-10 06:43:08,684|file:mock_broker.py:line No.158
+account-data-service-1  | |INFO|Mock Broker: Connected to Mock_Paper (no actual connection needed)|2025-12-10 06:43:08,684|file:mock_broker.py:line No.103
+account-data-service-1  | |INFO|--------------------------------------------------|2025-12-10 06:43:08,729|file:broker_poller.py:line No.666
+account-data-service-1  | |INFO|≡ƒôè SCHEDULED POLL - Mock_Paper|2025-12-10 06:43:08,729|file:broker_poller.py:line No.667
+account-data-service-1  | |INFO|--------------------------------------------------|2025-12-10 06:43:08,729|file:broker_poller.py:line No.668
+account-data-service-1  | |INFO|Equity: $1,000,000.00 | Cash: $500,000.00|2025-12-10 06:43:08,729|file:broker_poller.py:line No.669
+account-data-service-1  | |INFO|Positions: None|2025-12-10 06:43:08,729|file:broker_poller.py:line No.684
+account-data-service-1  | |INFO|--------------------------------------------------|2025-12-10 06:43:08,729|file:broker_poller.py:line No.686
+cerebro-service-1       | |INFO|Initialized CerebroBrokerAdapter for IBKR (account: IBKR_PAPER) - LIVE MODE|2025-12-10 06:43:12,749|file:broker_adapter.py:line No.47
+cerebro-service-1       | |INFO|PrecisionService initialized with cache at /app/services/data/precision_cache.json|2025-12-10 06:43:12,759|file:precision_service.py:line No.43
+cerebro-service-1       | |INFO|Starting Cerebro Service (Pub/Sub Only)|2025-12-10 06:43:12,760|file:cerebro_main.py:line No.2083
+cerebro-service-1       | |INFO|Γ£à Downloaded allocations from MongoDB to cache: /app/services/cerebro_service/current_portfolio_allocation_approved.json|2025-12-10 06:43:13,011|file:cerebro_main.py:line No.316
+cerebro-service-1       | |INFO|   Update action: cerebro_restart|2025-12-10 06:43:13,012|file:cerebro_main.py:line No.317
+cerebro-service-1       | |INFO|   Strategies: 6, Total: 229.0%|2025-12-10 06:43:13,012|file:cerebro_main.py:line No.318
+cerebro-service-1       | |INFO|Initializing Portfolio Constructor (MaxHybrid)|2025-12-10 06:43:13,012|file:cerebro_main.py:line No.218
+cerebro-service-1       | |INFO|Γ£à Loaded cached allocations from: /app/services/cerebro_service/current_portfolio_allocation_approved.json|2025-12-10 06:43:13,044|file:strategy.py:line No.209
+cerebro-service-1       | |INFO|   Allocations: {'SPX_1-D_Opt': 89.35793382849425, 'Com1-Met': 66.62802160702229, 'Com3-Mkt': 26.39453072248481, 'Com2-Ag': 16.050101282916952, 'SPY': 10.11249155975692, 'FloridaForex': 20.456920999324783}|2025-12-10 06:43:13,044|file:strategy.py:line No.210
+cerebro-service-1       | |INFO|MaxHybrid Constructor initialized:|2025-12-10 06:43:13,044|file:strategy.py:line No.185
+cerebro-service-1       | |INFO|  Mode: CACHED ALLOCATIONS|2025-12-10 06:43:13,044|file:strategy.py:line No.186
+cerebro-service-1       | |INFO|  Loaded 6 cached allocations|2025-12-10 06:43:13,044|file:strategy.py:line No.188
+cerebro-service-1       | |INFO|  Total allocation: 229.0%|2025-12-10 06:43:13,044|file:strategy.py:line No.189
+cerebro-service-1       | |INFO|  Alpha (Sharpe weight): 0.85|2025-12-10 06:43:13,045|file:strategy.py:line No.190
+cerebro-service-1       | |INFO|  Max Drawdown Limit: -6.0%|2025-12-10 06:43:13,045|file:strategy.py:line No.191
+cerebro-service-1       | |INFO|  Max Leverage: 230%|2025-12-10 06:43:13,045|file:strategy.py:line No.192
+cerebro-service-1       | |INFO|  Max Single Strategy: 100%|2025-12-10 06:43:13,045|file:strategy.py:line No.193
+cerebro-service-1       | |INFO|Γ£à Portfolio Constructor initialized (MaxHybrid)|2025-12-10 06:43:13,045|file:cerebro_main.py:line No.238
+cerebro-service-1       | |WARNING|No ACTIVE portfolio allocation found in MongoDB|2025-12-10 06:43:13,270|file:cerebro_main.py:line No.256
+cerebro-service-1       | |WARNING|Using fallback: equal allocation for all strategies|2025-12-10 06:43:13,270|file:cerebro_main.py:line No.257
+cerebro-service-1       | |INFO|Portfolio allocations reloaded: 0 strategies|2025-12-10 06:43:13,271|file:cerebro_main.py:line No.331
+cerebro-service-1       | |INFO|CerebroService listening for signals...|2025-12-10 06:43:13,276|file:cerebro_main.py:line No.2065
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:47.991+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn830","msg":"Connection ended","attr":{"remote":"127.0.0.1:50028","uuid":"e37d893f-96c5-4db7-a6e4-12ee02d4d3c6","connectionId":830,"connectionCount":21}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:47.991+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn829","msg":"Connection ended","attr":{"remote":"127.0.0.1:50022","uuid":"70c999ff-92f9-43f0-a6db-4502b92c9b51","connectionId":829,"connectionCount":20}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:47.992+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn828","msg":"Connection ended","attr":{"remote":"127.0.0.1:50020","uuid":"e6e036fe-6274-4525-ab68-06488c40aff5","connectionId":828,"connectionCount":19}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:59.870+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:56962","uuid":"3874c811-94d4-4461-8ab5-f6dba1fedbac","connectionId":832,"connectionCount":20}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:59.878+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn832","msg":"client metadata","attr":{"remote":"127.0.0.1:56962","client":"conn832","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:59.968+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:56972","uuid":"6de3ada6-6922-4b81-89e8-6dbdd8be7c2b","connectionId":833,"connectionCount":21}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:59.969+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:56978","uuid":"7b8fdb86-4f60-4b95-97da-da9edd2f4183","connectionId":834,"connectionCount":22}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:59.973+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn833","msg":"client metadata","attr":{"remote":"127.0.0.1:56972","client":"conn833","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:59.976+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn834","msg":"client metadata","attr":{"remote":"127.0.0.1:56978","client":"conn834","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:59.987+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:56992","uuid":"6856e72c-4fe8-4e80-bc1c-4e1f964856b4","connectionId":835,"connectionCount":23}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:46:59.996+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:56998","uuid":"94d933b9-6d00-4d01-820e-b0bfcd4536c1","connectionId":836,"connectionCount":24}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:00.016+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn835","msg":"client metadata","attr":{"remote":"127.0.0.1:56992","client":"conn835","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:00.018+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn836","msg":"client metadata","attr":{"remote":"127.0.0.1:56998","client":"conn836","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:00.476+00:00"},"s":"I",  "c":"-",        "id":20883,   "ctx":"conn832","msg":"Interrupted operation as its client disconnected","attr":{"opId":33401}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:00.477+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn832","msg":"Connection ended","attr":{"remote":"127.0.0.1:56962","uuid":"3874c811-94d4-4461-8ab5-f6dba1fedbac","connectionId":832,"connectionCount":23}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:00.478+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn836","msg":"Connection ended","attr":{"remote":"127.0.0.1:56998","uuid":"94d933b9-6d00-4d01-820e-b0bfcd4536c1","connectionId":836,"connectionCount":22}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:00.478+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn835","msg":"Connection ended","attr":{"remote":"127.0.0.1:56992","uuid":"6856e72c-4fe8-4e80-bc1c-4e1f964856b4","connectionId":835,"connectionCount":21}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:00.479+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn834","msg":"Connection ended","attr":{"remote":"127.0.0.1:56978","uuid":"7b8fdb86-4f60-4b95-97da-da9edd2f4183","connectionId":834,"connectionCount":20}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:00.479+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn833","msg":"Connection ended","attr":{"remote":"127.0.0.1:56972","uuid":"6de3ada6-6922-4b81-89e8-6dbdd8be7c2b","connectionId":833,"connectionCount":19}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:11.524+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:47130","uuid":"195c858b-2b67-4ced-a629-c2d807e4719d","connectionId":837,"connectionCount":20}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:11.534+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn837","msg":"client metadata","attr":{"remote":"127.0.0.1:47130","client":"conn837","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:11.621+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:47142","uuid":"49f4da76-48d0-4981-aa5f-155b994e75e8","connectionId":838,"connectionCount":21}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:11.622+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:47154","uuid":"5b35ca5b-bf59-4c66-957a-6b96be494080","connectionId":839,"connectionCount":22}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:11.626+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn838","msg":"client metadata","attr":{"remote":"127.0.0.1:47142","client":"conn838","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:11.627+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn839","msg":"client metadata","attr":{"remote":"127.0.0.1:47154","client":"conn839","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:11.637+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:47168","uuid":"316a6c5d-1472-46eb-a698-14fbd86fad4a","connectionId":840,"connectionCount":23}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:11.641+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:47170","uuid":"417e844d-48b3-47ad-830f-c88d1e1ba8b4","connectionId":841,"connectionCount":24}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:11.650+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn840","msg":"client metadata","attr":{"remote":"127.0.0.1:47168","client":"conn840","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:11.654+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn841","msg":"client metadata","attr":{"remote":"127.0.0.1:47170","client":"conn841","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:12.117+00:00"},"s":"I",  "c":"-",        "id":20883,   "ctx":"conn837","msg":"Interrupted operation as its client disconnected","attr":{"opId":33617}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:12.118+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn837","msg":"Connection ended","attr":{"remote":"127.0.0.1:47130","uuid":"195c858b-2b67-4ced-a629-c2d807e4719d","connectionId":837,"connectionCount":23}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:12.122+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn841","msg":"Connection ended","attr":{"remote":"127.0.0.1:47170","uuid":"417e844d-48b3-47ad-830f-c88d1e1ba8b4","connectionId":841,"connectionCount":22}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:12.123+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn840","msg":"Connection ended","attr":{"remote":"127.0.0.1:47168","uuid":"316a6c5d-1472-46eb-a698-14fbd86fad4a","connectionId":840,"connectionCount":21}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:12.126+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn838","msg":"Connection ended","attr":{"remote":"127.0.0.1:47142","uuid":"49f4da76-48d0-4981-aa5f-155b994e75e8","connectionId":838,"connectionCount":20}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:12.128+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn839","msg":"Connection ended","attr":{"remote":"127.0.0.1:47154","uuid":"5b35ca5b-bf59-4c66-957a-6b96be494080","connectionId":839,"connectionCount":19}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.181+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:57874","uuid":"9be9097d-8601-4b84-837b-918099de18ba","connectionId":842,"connectionCount":20}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.189+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn842","msg":"client metadata","attr":{"remote":"127.0.0.1:57874","client":"conn842","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.267+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:57876","uuid":"4326ed54-12c1-4611-b7c5-130e32829526","connectionId":843,"connectionCount":21}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.267+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:57882","uuid":"a4c506b6-65ad-4d93-8ecf-7a63858571c3","connectionId":844,"connectionCount":22}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.273+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn843","msg":"client metadata","attr":{"remote":"127.0.0.1:57876","client":"conn843","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.275+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn844","msg":"client metadata","attr":{"remote":"127.0.0.1:57882","client":"conn844","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.287+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:57890","uuid":"a800ca05-415c-47d0-88a5-a0f13435e9f3","connectionId":845,"connectionCount":23}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.293+00:00"},"s":"I",  "c":"NETWORK",  "id":22943,   "ctx":"listener","msg":"Connection accepted","attr":{"remote":"127.0.0.1:57906","uuid":"7e4be677-61da-4791-9401-d08f2e71f174","connectionId":846,"connectionCount":24}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.306+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn845","msg":"client metadata","attr":{"remote":"127.0.0.1:57890","client":"conn845","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.308+00:00"},"s":"I",  "c":"NETWORK",  "id":51800,   "ctx":"conn846","msg":"client metadata","attr":{"remote":"127.0.0.1:57906","client":"conn846","negotiatedCompressors":[],"doc":{"application":{"name":"mongosh 2.5.8"},"driver":{"name":"nodejs|mongosh","version":"6.19.0|2.5.8"},"platform":"Node.js v20.19.5, LE","os":{"name":"linux","architecture":"x64","version":"3.10.0-327.22.2.el7.x86_64","type":"Linux"},"env":{"container":{"runtime":"docker"}}}}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.712+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn842","msg":"Connection ended","attr":{"remote":"127.0.0.1:57874","uuid":"9be9097d-8601-4b84-837b-918099de18ba","connectionId":842,"connectionCount":23}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.712+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn846","msg":"Connection ended","attr":{"remote":"127.0.0.1:57906","uuid":"7e4be677-61da-4791-9401-d08f2e71f174","connectionId":846,"connectionCount":22}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.714+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn845","msg":"Connection ended","attr":{"remote":"127.0.0.1:57890","uuid":"a800ca05-415c-47d0-88a5-a0f13435e9f3","connectionId":845,"connectionCount":21}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.715+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn844","msg":"Connection ended","attr":{"remote":"127.0.0.1:57882","uuid":"a4c506b6-65ad-4d93-8ecf-7a63858571c3","connectionId":844,"connectionCount":20}}
+mongodb-1               | {"t":{"$date":"2025-12-10T06:47:23.715+00:00"},"s":"I",  "c":"NETWORK",  "id":22944,   "ctx":"conn843","msg":"Connection ended","attr":{"remote":"127.0.0.1:57876","uuid":"4326ed54-12c1-4611-b7c5-130e32829526","connectionId":843,"connectionCount":19}}
