@@ -10,22 +10,22 @@ $ErrorActionPreference = "Stop"
 # Color output functions
 function Write-Success {
     param($Message)
-    Write-Host "✓ $Message" -ForegroundColor Green
+    Write-Host "[OK] $Message" -ForegroundColor Green
 }
 
 function Write-Error-Message {
     param($Message)
-    Write-Host "✗ $Message" -ForegroundColor Red
+    Write-Host "[ERROR] $Message" -ForegroundColor Red
 }
 
 function Write-Warning-Message {
     param($Message)
-    Write-Host "⚠ $Message" -ForegroundColor Yellow
+    Write-Host "[WARN] $Message" -ForegroundColor Yellow
 }
 
 function Write-Info {
     param($Message)
-    Write-Host "ℹ $Message" -ForegroundColor Cyan
+    Write-Host "[INFO] $Message" -ForegroundColor Cyan
 }
 
 function Write-Header {
@@ -42,7 +42,6 @@ function Test-DockerInstalled {
     try {
         $null = Get-Command docker -ErrorAction Stop
         Write-Success "Docker is installed"
-        return $true
     }
     catch {
         Write-Error-Message "Docker is not installed"
@@ -53,15 +52,14 @@ function Test-DockerInstalled {
 
 # Check if Docker daemon is running
 function Test-DockerRunning {
-    try {
-        $null = docker info 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Docker daemon not running"
-        }
+    $ErrorActionPreference = "Continue"
+    $null = docker info 2>&1
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($exitCode -eq 0) {
         Write-Success "Docker daemon is running"
-        return $true
     }
-    catch {
+    else {
         Write-Error-Message "Docker daemon is not running"
         Write-Host "Please start Docker Desktop and try again"
         exit 1
@@ -71,29 +69,27 @@ function Test-DockerRunning {
 # Check docker-compose availability
 function Test-DockerCompose {
     $script:ComposeCmd = $null
+    $ErrorActionPreference = "Continue"
 
     # Try modern CLI first
-    try {
-        $null = docker compose version 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $script:ComposeCmd = "docker", "compose"
-            Write-Success "Docker Compose is available (modern CLI)"
-            return $true
-        }
+    $null = docker compose version 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:ComposeCmd = "docker", "compose"
+        Write-Success "Docker Compose is available (modern CLI)"
+        $ErrorActionPreference = "Stop"
+        return
     }
-    catch {}
 
     # Try legacy CLI
-    try {
-        $null = docker-compose --version 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $script:ComposeCmd = "docker-compose"
-            Write-Success "Docker Compose is available (legacy CLI)"
-            return $true
-        }
+    $null = docker-compose --version 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:ComposeCmd = "docker-compose"
+        Write-Success "Docker Compose is available (legacy CLI)"
+        $ErrorActionPreference = "Stop"
+        return
     }
-    catch {}
 
+    $ErrorActionPreference = "Stop"
     Write-Error-Message "Docker Compose is not available"
     Write-Host "Please install Docker Desktop which includes Docker Compose"
     exit 1
@@ -304,7 +300,7 @@ function Send-TestSignal {
 
     Write-Host ""
     Write-Info "Watching for signal flow in logs..."
-    Write-Info "You should see: signal-ingestion → cerebro-service → execution-service"
+    Write-Info "You should see: signal-ingestion -> cerebro-service -> execution-service"
     Write-Info "Press Ctrl+C to stop watching logs"
     Write-Host ""
     Start-Sleep -Seconds 3
@@ -320,7 +316,7 @@ function Send-TestSignal {
 
 # Print summary
 function Show-Summary {
-    Write-Header "✓ SETUP COMPLETE!"
+    Write-Header "SETUP COMPLETE!"
 
     Write-Host "Access points:"
     Write-Host "  Frontend Dashboard:  http://localhost:5173"
@@ -338,8 +334,8 @@ function Show-Summary {
     Write-Host "  make restart        - Restart all services"
     Write-Host ""
     Write-Host "Send test signal:"
-    Write-Host "  python tests\signals_testing\send_test_signal.py \"
-    Write-Host "    --file tests\signals_testing\sample_signals\equity_simple_signal_1.json"
+    Write-Host '  python tests\signals_testing\send_test_signal.py \'
+    Write-Host '    --file tests\signals_testing\sample_signals\equity_simple_signal_1.json'
     Write-Host ""
     Write-Host "Documentation:"
     Write-Host "  SETUP.md           - Detailed setup guide"
