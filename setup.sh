@@ -1,6 +1,6 @@
 #!/bin/bash
 # Mathematricks Trader - One-Command Setup Script
-# Usage: ./setup.sh [--test-signal]
+# Usage: ./setup.sh [--TestSignal]
 
 set -e  # Exit on error
 
@@ -17,13 +17,13 @@ TEST_SIGNAL=false
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --test-signal)
+        --TestSignal)
             TEST_SIGNAL=true
             shift
             ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
-            echo "Usage: ./setup.sh [--test-signal]"
+            echo "Usage: ./setup.sh [--TestSignal]"
             exit 1
             ;;
     esac
@@ -76,12 +76,8 @@ check_docker_running() {
 
 # Check docker-compose availability (supports both old and new CLI)
 check_docker_compose() {
-    if docker compose version &> /dev/null 2>&1; then
-        COMPOSE_CMD="docker compose"
-        print_success "Docker Compose is available (modern CLI)"
-    elif docker-compose --version &> /dev/null 2>&1; then
-        COMPOSE_CMD="docker-compose"
-        print_success "Docker Compose is available (legacy CLI)"
+    if docker compose version &> /dev/null 2>&1 || docker-compose --version &> /dev/null 2>&1; then
+        print_success "Docker Compose is available"
     else
         print_error "Docker Compose is not available"
         echo "Please install Docker Desktop which includes Docker Compose"
@@ -106,7 +102,7 @@ check_env_file() {
 # Build Docker containers
 build_containers() {
     print_info "Building Docker containers (this may take a few minutes)..."
-    if $COMPOSE_CMD build; then
+    if make rebuild; then
         print_success "Containers built successfully"
     else
         print_error "Failed to build containers"
@@ -118,7 +114,7 @@ build_containers() {
 # Start all services
 start_services() {
     print_info "Starting all services..."
-    if $COMPOSE_CMD up -d; then
+    if make start; then
         print_success "All services started"
     else
         print_error "Failed to start services"
@@ -134,7 +130,7 @@ wait_for_mongodb() {
     local attempt=1
 
     while [ $attempt -le $max_attempts ]; do
-        if $COMPOSE_CMD exec -T mongodb \
+        if docker-compose exec -T mongodb \
            mongosh --quiet --eval "rs.status().ok" 2>/dev/null | grep -q "1"; then
             print_success "MongoDB replica set is ready"
             return 0
@@ -149,7 +145,7 @@ wait_for_mongodb() {
     done
 
     print_error "MongoDB did not become ready in time"
-    echo "Check MongoDB logs with: make logs-cerebro"
+    echo "Check MongoDB logs with: make logs-mongodb"
     return 1
 }
 
@@ -182,7 +178,7 @@ wait_for_pubsub() {
 verify_seed_data() {
     print_info "Verifying MongoDB seed data..."
 
-    local collection_count=$($COMPOSE_CMD exec -T mongodb \
+    local collection_count=$(docker-compose exec -T mongodb \
         mongosh --quiet --eval \
         "db.getSiblingDB('mathematricks_trading').getCollectionNames().length" \
         2>/dev/null | tail -1)
@@ -203,7 +199,7 @@ wait_for_services() {
     sleep 10
 
     # Check for critical error patterns in logs
-    if $COMPOSE_CMD logs --tail=50 2>&1 | grep -i "error.*failed to start\|fatal\|crashed" &>/dev/null; then
+    if docker-compose logs --tail=50 2>&1 | grep -i "error.*failed to start\|fatal\|crashed" &>/dev/null; then
         print_warning "Some services may have errors"
         echo "Check logs with: make logs"
     else
@@ -250,9 +246,7 @@ send_test_signal() {
     sleep 3
 
     # Display filtered logs showing signal flow
-    $COMPOSE_CMD logs -f --tail=100 2>&1 | \
-        grep -E "(signal-ingestion|cerebro-service|execution-service)" | \
-        grep -iE "(signal|ENTRY|EXIT|AAPL|Processing|Order)" || true
+    make logs | grep -iE "(signal|ENTRY|EXIT|AAPL|Processing|Order)" || true
 }
 
 # Print summary
