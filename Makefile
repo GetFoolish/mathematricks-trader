@@ -1,4 +1,4 @@
-.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard
+.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard
 
 # Default target
 help:
@@ -15,6 +15,8 @@ help:
 	@echo "make logs-account-data - View logs of account-data-service"
 	@echo "make logs-portfolio - View logs of portfolio-builder"
 	@echo "make logs-dashboard - View logs of dashboard-creator"
+	@echo "make logs-mongodb  - View logs of mongodb"
+	@echo "make send-test-signal - Send test ENTRY+EXIT signal for AAPL"
 	@echo "make rebuild       - Rebuild all containers"
 	@echo "make clean         - Stop and remove all containers and volumes (DATA LOSS!)"
 
@@ -31,7 +33,7 @@ status:
 	docker-compose ps
 
 logs:
-	docker-compose logs -f
+	docker-compose logs -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator ib-gateway frontend pubsub-emulator
 
 logs-cerebro:
 	docker-compose logs -f cerebro-service
@@ -53,6 +55,12 @@ logs-portfolio:
 
 logs-dashboard:
 	docker-compose logs -f dashboard-creator
+
+logs-mongodb:
+	docker-compose logs -f mongodb
+
+send-test-signal:
+	./venv/bin/python tests/signals_testing/send_test_signal.py --file tests/signals_testing/sample_signals/equity_simple_signal_1.json
 
 restart-cerebro:
 	docker-compose restart cerebro-service

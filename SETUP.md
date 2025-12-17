@@ -2,6 +2,55 @@
 
 This guide will help you set up the Mathematricks Trader application on your local machine using Docker.
 
+## Quick Setup (Recommended for New Developers)
+
+### One-Command Setup
+
+**Mac/Linux:**
+```bash
+./setup.sh
+```
+
+**Windows:**
+```powershell
+.\setup.ps1
+```
+
+This automated script will:
+- ✓ Check all prerequisites (Docker, docker-compose)
+- ✓ Build all Docker containers
+- ✓ Start all 11 services
+- ✓ Initialize MongoDB with seed data
+- ✓ Create Pub/Sub topics
+- ✓ Verify everything is running
+- ✓ Display service URLs and next steps
+
+### Setup with Test Signal
+
+To verify the entire trading pipeline works:
+
+**Mac/Linux:**
+```bash
+./setup.sh --TestSignal
+```
+
+**Windows:**
+```powershell
+.\setup.ps1 -TestSignal
+```
+
+This will:
+- Run the full setup
+- Send a test ENTRY+EXIT signal for AAPL
+- Display logs showing signal flow through all services
+- Validate end-to-end functionality
+
+---
+
+## Manual Setup (Detailed Instructions)
+
+If you prefer to set up manually or need to troubleshoot, follow the detailed instructions below.
+
 ## Prerequisites
 
 Before you begin, ensure you have the following installed on your machine:
