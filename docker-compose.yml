@@ -164,7 +164,7 @@ services:
     image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
     ports:
       - "8085:8085"
-    command: gcloud beta emulators pubsub start --project=${PUBSUB_PROJECT_ID} --host-port=0.0.0.0:8085
+    command: gcloud beta emulators pubsub start --project=${PUBSUB_PROJECT_ID} --host-port=0.0.0.0:8085 --log-http=false
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8085/" ]
       interval: 10s
