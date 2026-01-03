@@ -47,6 +47,7 @@ outputs/
 
 # Portfolio constructor outputs (keep folders but not contents)
 services/cerebro_service/portfolio_constructor/*/outputs/*
+services/cerebro_service/current_portfolio_allocation_approved.json
 !services/cerebro_service/portfolio_constructor/*/outputs/.gitkeep
 
 # Portfolio combiner data folders (keep folders but not contents)

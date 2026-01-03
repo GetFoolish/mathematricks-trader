@@ -115,7 +115,7 @@ trading_accounts_collection = db['trading_accounts']  # For position tracking
 signal_store_collection = db['signal_store']  # For updating execution data
 
 # Initialize Google Cloud Pub/Sub
-project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
+project_id = os.getenv('PUBSUB_PROJECT_ID', 'mathematricks-trader')
 subscriber = pubsub_v1.SubscriberClient()
 publisher = pubsub_v1.PublisherClient()
 
@@ -978,32 +978,34 @@ def process_order_from_queue(order_item: Dict[str, Any]):
 
 def start_trading_orders_subscriber():
     """
-    Start Pub/Sub subscriber for trading orders
+    Start Pub/Sub subscriber for trading orders with retry logic
     Runs in background thread
     """
-    streaming_pull_future = subscriber.subscribe(trading_orders_subscription, callback=trading_orders_callback)
-    logger.debug("Trading orders subscriber started")
-
-    try:
-        streaming_pull_future.result()
-    except Exception as e:
-        logger.error(f"Subscriber error: {str(e)}")
-        streaming_pull_future.cancel()
+    while True:
+        try:
+            streaming_pull_future = subscriber.subscribe(trading_orders_subscription, callback=trading_orders_callback)
+            logger.debug("Trading orders subscriber started")
+            streaming_pull_future.result()
+        except Exception as e:
+            logger.error(f"Trading orders subscriber error: {str(e)}")
+            logger.warning("Reconnecting to trading-orders subscription in 5 seconds...")
+            time.sleep(5)
 
 
 def start_order_commands_subscriber():
     """
-    Start Pub/Sub subscriber for order commands (cancel, modify, etc.)
+    Start Pub/Sub subscriber for order commands (cancel, modify, etc.) with retry logic
     Runs in background thread
     """
-    streaming_pull_future = subscriber.subscribe(order_commands_subscription, callback=order_commands_callback)
-    logger.debug("Order commands subscriber started")
-
-    try:
-        streaming_pull_future.result()
-    except Exception as e:
-        logger.error(f"Subscriber error: {str(e)}")
-        streaming_pull_future.cancel()
+    while True:
+        try:
+            streaming_pull_future = subscriber.subscribe(order_commands_subscription, callback=order_commands_callback)
+            logger.debug("Order commands subscriber started")
+            streaming_pull_future.result()
+        except Exception as e:
+            logger.error(f"Order commands subscriber error: {str(e)}")
+            logger.warning("Reconnecting to order-commands subscription in 5 seconds...")
+            time.sleep(5)
 
 
 def periodic_account_updates():

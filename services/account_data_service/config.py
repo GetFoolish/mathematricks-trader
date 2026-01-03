@@ -11,7 +11,7 @@ MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
 DATABASE_NAME = 'mathematricks_trading'
 
 # GCP
-GCP_PROJECT_ID = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
+GCP_PROJECT_ID = os.getenv('PUBSUB_PROJECT_ID', 'mathematricks-trader')
 
 # Polling
 POLL_INTERVAL_SECONDS = int(os.getenv('ACCOUNT_POLL_INTERVAL', '300'))  # 5 minutes default
