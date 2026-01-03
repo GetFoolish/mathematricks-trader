@@ -772,6 +772,538 @@ async def get_cerebro_decisions(limit: int = 50, environment: str = None):
 
 
 # ============================================================================
+# Fund Management API (v5)
+# ============================================================================
+
+# Initialize funds collection
+funds_collection = db['funds']
+trading_accounts_collection = db['trading_accounts']
+
+
+@app.post("/api/v1/funds")
+async def create_fund(fund_data: dict):
+    """
+    Create a new fund
+    
+    Request body:
+    {
+        "name": "Mathematricks Capital Fund 1",
+        "description": "Main production fund",
+        "currency": "USD",
+        "accounts": []  # optional
+    }
+    """
+    try:
+        # Generate fund_id from name (slugify)
+        fund_id = fund_data.get('name', '').lower().replace(' ', '-').replace('_', '-')
+        fund_id = re.sub(r'[^a-z0-9-]', '', fund_id)  # Remove special chars
+        
+        if not fund_id:
+            raise HTTPException(status_code=400, detail="Fund name cannot be empty")
+        
+        # Check if fund_id already exists
+        if funds_collection.find_one({"fund_id": fund_id}):
+            raise HTTPException(status_code=400, detail=f"Fund with ID '{fund_id}' already exists")
+        
+        # Create fund document
+        fund_doc = {
+            "fund_id": fund_id,
+            "name": fund_data.get('name'),
+            "description": fund_data.get('description', ''),
+            "total_equity": 0.0,  # Will be calculated from accounts
+            "currency": fund_data.get('currency', 'USD'),
+            "accounts": fund_data.get('accounts', []),
+            "status": "ACTIVE",
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+        
+        result = funds_collection.insert_one(fund_doc)
+        fund_doc['_id'] = str(result.inserted_id)
+        
+        logger.info(f"Created fund: {fund_id}")
+        return {"status": "success", "fund": fund_doc}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating fund: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/funds")
+async def get_funds(status: Optional[str] = None):
+    """
+    Get all funds
+    
+    Query params:
+    - status: Filter by status (ACTIVE, PAUSED, CLOSED)
+    """
+    try:
+        query = {}
+        if status:
+            query['status'] = status.upper()
+        
+        funds = list(funds_collection.find(query))
+        
+        # Convert ObjectId to string
+        for fund in funds:
+            fund['_id'] = str(fund['_id'])
+        
+        return {"status": "success", "count": len(funds), "funds": funds}
+    
+    except Exception as e:
+        logger.error(f"Error fetching funds: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/funds/{fund_id}")
+async def get_fund(fund_id: str):
+    """Get fund details by ID"""
+    try:
+        fund = funds_collection.find_one({"fund_id": fund_id})
+        
+        if not fund:
+            raise HTTPException(status_code=404, detail=f"Fund '{fund_id}' not found")
+        
+        fund['_id'] = str(fund['_id'])
+        
+        # Get accounts for this fund
+        accounts = list(trading_accounts_collection.find({"fund_id": fund_id}))
+        for acc in accounts:
+            acc['_id'] = str(acc['_id'])
+        
+        fund['account_details'] = accounts
+        
+        return {"status": "success", "fund": fund}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching fund {fund_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/v1/funds/{fund_id}")
+async def update_fund(fund_id: str, update_data: dict):
+    """
+    Update fund
+    
+    Allowed updates: name, description, accounts, status
+    Cannot update: fund_id, total_equity (auto-calculated)
+    """
+    try:
+        fund = funds_collection.find_one({"fund_id": fund_id})
+        if not fund:
+            raise HTTPException(status_code=404, detail=f"Fund '{fund_id}' not found")
+        
+        # Allowed fields to update
+        allowed_fields = ['name', 'description', 'accounts', 'status']
+        update_doc = {}
+        
+        for field in allowed_fields:
+            if field in update_data:
+                update_doc[field] = update_data[field]
+        
+        if not update_doc:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+        
+        update_doc['updated_at'] = datetime.utcnow()
+        
+        funds_collection.update_one(
+            {"fund_id": fund_id},
+            {"$set": update_doc}
+        )
+        
+        logger.info(f"Updated fund {fund_id}: {update_doc}")
+        
+        # Return updated fund
+        updated_fund = funds_collection.find_one({"fund_id": fund_id})
+        updated_fund['_id'] = str(updated_fund['_id'])
+        
+        return {"status": "success", "fund": updated_fund}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating fund {fund_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/v1/funds/{fund_id}")
+async def delete_fund(fund_id: str):
+    """
+    Delete fund
+    
+    Validation: Cannot delete if has ACTIVE allocations
+    """
+    try:
+        fund = funds_collection.find_one({"fund_id": fund_id})
+        if not fund:
+            raise HTTPException(status_code=404, detail=f"Fund '{fund_id}' not found")
+        
+        # Check for active allocations
+        active_alloc = current_allocation_collection.find_one({
+            "fund_id": fund_id,
+            "status": "ACTIVE"
+        })
+        
+        if active_alloc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot delete fund with ACTIVE allocations. Archive allocations first."
+            )
+        
+        # Set fund_id=null on accounts
+        trading_accounts_collection.update_many(
+            {"fund_id": fund_id},
+            {"$set": {"fund_id": None, "updated_at": datetime.utcnow()}}
+        )
+        
+        # Delete fund
+        funds_collection.delete_one({"fund_id": fund_id})
+        
+        logger.info(f"Deleted fund: {fund_id}")
+        return {"status": "success", "message": f"Fund '{fund_id}' deleted"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting fund {fund_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Account Management API (v5)
+# ============================================================================
+
+@app.post("/api/v1/accounts")
+async def create_account(account_data: dict):
+    """
+    Create a new trading account
+    
+    Request body:
+    {
+        "account_id": "IBKR_Main",
+        "broker": "IBKR",
+        "broker_account_number": "DU123456",
+        "fund_id": "mathematricks-1",
+        "asset_classes": {
+            "equity": ["all"],
+            "futures": ["all"],
+            "crypto": [],
+            "forex": ["all"]
+        }
+    }
+    """
+    try:
+        account_id = account_data.get('account_id')
+        if not account_id:
+            raise HTTPException(status_code=400, detail="account_id is required")
+        
+        # Check if account_id already exists
+        if trading_accounts_collection.find_one({"account_id": account_id}):
+            raise HTTPException(status_code=400, detail=f"Account '{account_id}' already exists")
+        
+        # Verify fund exists
+        fund_id = account_data.get('fund_id')
+        if fund_id:
+            fund = funds_collection.find_one({"fund_id": fund_id})
+            if not fund:
+                raise HTTPException(status_code=400, detail=f"Fund '{fund_id}' not found")
+        
+        # Create account document
+        account_doc = {
+            "account_id": account_id,
+            "broker": account_data.get('broker'),
+            "broker_account_number": account_data.get('broker_account_number', ''),
+            "fund_id": fund_id,
+            "asset_classes": account_data.get('asset_classes', {
+                "equity": [],
+                "futures": [],
+                "crypto": [],
+                "forex": []
+            }),
+            "equity": 0.0,
+            "cash_balance": 0.0,
+            "margin_used": 0.0,
+            "margin_available": 0.0,
+            "unrealized_pnl": 0.0,
+            "realized_pnl": 0.0,
+            "open_positions": [],
+            "status": "ACTIVE",
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+        
+        result = trading_accounts_collection.insert_one(account_doc)
+        account_doc['_id'] = str(result.inserted_id)
+        
+        # Add account to fund's accounts array
+        if fund_id:
+            funds_collection.update_one(
+                {"fund_id": fund_id},
+                {
+                    "$addToSet": {"accounts": account_id},
+                    "$set": {"updated_at": datetime.utcnow()}
+                }
+            )
+        
+        logger.info(f"Created account: {account_id} for fund: {fund_id}")
+        return {"status": "success", "account": account_doc}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating account: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/accounts")
+async def get_accounts(fund_id: Optional[str] = None):
+    """
+    Get all accounts
+    
+    Query params:
+    - fund_id: Filter by fund
+    """
+    try:
+        query = {}
+        if fund_id:
+            query['fund_id'] = fund_id
+        
+        accounts = list(trading_accounts_collection.find(query))
+        
+        # Convert ObjectId to string
+        for acc in accounts:
+            acc['_id'] = str(acc['_id'])
+        
+        return {"status": "success", "count": len(accounts), "accounts": accounts}
+    
+    except Exception as e:
+        logger.error(f"Error fetching accounts: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/v1/accounts/{account_id}")
+async def update_account(account_id: str, update_data: dict):
+    """
+    Update account
+    
+    Allowed updates: fund_id, asset_classes, status
+    Cannot update: account_id, broker (immutable)
+    """
+    try:
+        account = trading_accounts_collection.find_one({"account_id": account_id})
+        if not account:
+            raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found")
+        
+        # Allowed fields to update
+        allowed_fields = ['fund_id', 'asset_classes', 'status', 'broker_account_number']
+        update_doc = {}
+        
+        for field in allowed_fields:
+            if field in update_data:
+                # If changing fund_id, verify new fund exists
+                if field == 'fund_id' and update_data[field]:
+                    fund = funds_collection.find_one({"fund_id": update_data[field]})
+                    if not fund:
+                        raise HTTPException(status_code=400, detail=f"Fund '{update_data[field]}' not found")
+                
+                update_doc[field] = update_data[field]
+        
+        if not update_doc:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+        
+        update_doc['updated_at'] = datetime.utcnow()
+        
+        # Remove from old fund's accounts array
+        old_fund_id = account.get('fund_id')
+        if old_fund_id and 'fund_id' in update_doc and update_doc['fund_id'] != old_fund_id:
+            funds_collection.update_one(
+                {"fund_id": old_fund_id},
+                {
+                    "$pull": {"accounts": account_id},
+                    "$set": {"updated_at": datetime.utcnow()}
+                }
+            )
+        
+        # Add to new fund's accounts array
+        new_fund_id = update_doc.get('fund_id')
+        if new_fund_id and new_fund_id != old_fund_id:
+            funds_collection.update_one(
+                {"fund_id": new_fund_id},
+                {
+                    "$addToSet": {"accounts": account_id},
+                    "$set": {"updated_at": datetime.utcnow()}
+                }
+            )
+        
+        trading_accounts_collection.update_one(
+            {"account_id": account_id},
+            {"$set": update_doc}
+        )
+        
+        logger.info(f"Updated account {account_id}: {update_doc}")
+        
+        # Return updated account
+        updated_account = trading_accounts_collection.find_one({"account_id": account_id})
+        updated_account['_id'] = str(updated_account['_id'])
+        
+        return {"status": "success", "account": updated_account}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating account {account_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/v1/accounts/{account_id}")
+async def delete_account(account_id: str):
+    """
+    Delete account
+    
+    Validation: No open positions
+    """
+    try:
+        account = trading_accounts_collection.find_one({"account_id": account_id})
+        if not account:
+            raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found")
+        
+        # Check for open positions
+        if account.get('open_positions') and len(account['open_positions']) > 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot delete account with open positions"
+            )
+        
+        fund_id = account.get('fund_id')
+        
+        # Remove from fund's accounts array
+        if fund_id:
+            funds_collection.update_one(
+                {"fund_id": fund_id},
+                {
+                    "$pull": {"accounts": account_id},
+                    "$set": {"updated_at": datetime.utcnow()}
+                }
+            )
+        
+        # Delete account
+        trading_accounts_collection.delete_one({"account_id": account_id})
+        
+        logger.info(f"Deleted account: {account_id}")
+        return {"status": "success", "message": f"Account '{account_id}' deleted"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting account {account_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Strategy-Account Mapping API (v5)
+# ============================================================================
+
+@app.put("/api/v1/strategies/{strategy_id}/accounts")
+async def update_strategy_accounts(strategy_id: str, data: dict):
+    """
+    Update allowed accounts for a strategy
+    
+    Request body:
+    {
+        "accounts": ["IBKR_Main", "IBKR_Futures"]
+    }
+    """
+    try:
+        strategy = strategies_collection.find_one({"strategy_id": strategy_id})
+        if not strategy:
+            raise HTTPException(status_code=404, detail=f"Strategy '{strategy_id}' not found")
+        
+        accounts = data.get('accounts', [])
+        
+        # Validate all accounts exist
+        for acc_id in accounts:
+            acc = trading_accounts_collection.find_one({"account_id": acc_id})
+            if not acc:
+                raise HTTPException(status_code=400, detail=f"Account '{acc_id}' not found")
+            
+            # Validate asset class compatibility
+            strategy_asset_class = strategy.get('asset_class', '').lower()
+            acc_asset_classes = acc.get('asset_classes', {})
+            
+            if strategy_asset_class == 'equity' and not acc_asset_classes.get('equity'):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Account '{acc_id}' does not support equity trading (required by strategy)"
+                )
+            elif strategy_asset_class == 'futures' and not acc_asset_classes.get('futures'):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Account '{acc_id}' does not support futures trading (required by strategy)"
+                )
+            elif strategy_asset_class == 'crypto' and not acc_asset_classes.get('crypto'):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Account '{acc_id}' does not support crypto trading (required by strategy)"
+                )
+            elif strategy_asset_class == 'forex' and not acc_asset_classes.get('forex'):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Account '{acc_id}' does not support forex trading (required by strategy)"
+                )
+        
+        # Update strategy
+        strategies_collection.update_one(
+            {"strategy_id": strategy_id},
+            {
+                "$set": {
+                    "accounts": accounts,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        
+        logger.info(f"Updated strategy {strategy_id} accounts: {accounts}")
+        
+        # Return updated strategy
+        updated_strategy = strategies_collection.find_one({"strategy_id": strategy_id})
+        updated_strategy['_id'] = str(updated_strategy['_id'])
+        
+        return {"status": "success", "strategy": updated_strategy}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating strategy accounts: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/strategies/{strategy_id}/accounts")
+async def get_strategy_accounts(strategy_id: str):
+    """Get account mapping for a strategy"""
+    try:
+        strategy = strategies_collection.find_one({"strategy_id": strategy_id})
+        if not strategy:
+            raise HTTPException(status_code=404, detail=f"Strategy '{strategy_id}' not found")
+        
+        return {
+            "status": "success",
+            "strategy_id": strategy_id,
+            "accounts": strategy.get('accounts', []),
+            "asset_class": strategy.get('asset_class', '')
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching strategy accounts: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
 # Startup
 # ============================================================================
 
@@ -779,3 +1311,4 @@ if __name__ == "__main__":
     import uvicorn
     logger.info("Starting PortfolioBuilder Service on port 8003")
     uvicorn.run(app, host="0.0.0.0", port=8003, log_level="info")
+
