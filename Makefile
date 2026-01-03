@@ -1,4 +1,4 @@
-.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard clean-old-logs
+.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard clean-old-logs export-seed-data
 
 # Default target
 help:
@@ -20,6 +20,7 @@ help:
 	@echo "make rebuild       - Rebuild all containers"
 	@echo "make clean         - Stop and remove all containers and volumes (DATA LOSS!)"
 	@echo "make clean-old-logs - Truncate Docker container logs (keeps containers running)"
+	@echo "make export-seed-data - Export current MongoDB data as seed data"
 
 start:
 	docker-compose up -d
@@ -94,4 +95,12 @@ clean-old-logs:
 	@echo "Note: This preserves container state but clears log buffers"
 	docker-compose restart
 	@echo "✅ Logs cleared. Containers restarted with fresh log buffers."
+
+clean:
+	@echo "WARNING: This will remove all containers and volumes."
+	@echo "Press Ctrl+C to cancel or wait 5 seconds..."
+	@sleep 5
 	docker-compose down -v
+
+export-seed-data:
+	@bash scripts/export_seed_data.sh
