@@ -33,7 +33,7 @@ status:
 	docker-compose ps
 
 logs:
-	docker-compose logs -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator ib-gateway frontend pubsub-emulator
+	docker-compose logs -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator frontend pubsub-emulator
 
 logs-cerebro:
 	docker-compose logs -f cerebro-service
