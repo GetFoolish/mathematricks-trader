@@ -14,6 +14,7 @@ export const Allocations: React.FC = () => {
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
   const [targetTotalAllocation, setTargetTotalAllocation] = useState<number | null>(null);
   const [isEditingTotal, setIsEditingTotal] = useState(false);
+  const [selectedFundId, setSelectedFundId] = useState<string>('');
 
   // State for Part 3: Table sorting
   const [sortField, setSortField] = useState<string>('created_at');
@@ -34,6 +35,12 @@ export const Allocations: React.FC = () => {
     queryFn: () => apiClient.getCurrentAllocation(),
   });
 
+  // Fetch all funds (for Part 2: Fund selector)
+  const { data: funds } = useQuery({
+    queryKey: ['funds'],
+    queryFn: () => apiClient.getFunds(),
+  });
+
   // Fetch all strategies (for Part 4: Research Lab)
   const { data: strategiesData } = useQuery({
     queryKey: ['strategies'],
@@ -52,12 +59,13 @@ export const Allocations: React.FC = () => {
 
   // Approve allocation (Part 2 -> Part 1)
   const approveMutation = useMutation({
-    mutationFn: (allocations: Record<string, number>) =>
-      apiClient.approveAllocation(allocations),
+    mutationFn: ({ allocations, fund_id }: { allocations: Record<string, number>; fund_id: string }) =>
+      apiClient.approveAllocation(allocations, fund_id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['currentAllocation'] });
       setEditorAllocations({});
       setSelectedTestId(null);
+      setSelectedFundId('');
     },
   });
 
@@ -98,6 +106,10 @@ export const Allocations: React.FC = () => {
       const sortedAllocations = Object.fromEntries(sortedEntries);
       setEditorAllocations(sortedAllocations);
       setSelectedTestId(null);
+      // Set the fund_id from current allocation
+      if (currentAllocation.allocation.fund_id) {
+        setSelectedFundId(currentAllocation.allocation.fund_id);
+      }
       setIsEditingCurrent(true);
     }
   };
@@ -106,11 +118,16 @@ export const Allocations: React.FC = () => {
     setIsEditingCurrent(false);
     setEditorAllocations({});
     setSelectedTestId(null);
+    setSelectedFundId('');
   };
 
   const handleSaveEdit = () => {
+    if (!selectedFundId) {
+      alert('Please select a fund before saving the allocation');
+      return;
+    }
     if (Object.keys(editorAllocations).length > 0) {
-      approveMutation.mutate(editorAllocations);
+      approveMutation.mutate({ allocations: editorAllocations, fund_id: selectedFundId });
       setIsEditingCurrent(false);
     }
   };
@@ -142,8 +159,12 @@ export const Allocations: React.FC = () => {
   };
 
   const handleApprove = () => {
+    if (!selectedFundId) {
+      alert('Please select a fund before approving the allocation');
+      return;
+    }
     if (Object.keys(editorAllocations).length > 0) {
-      approveMutation.mutate(editorAllocations);
+      approveMutation.mutate({ allocations: editorAllocations, fund_id: selectedFundId });
     }
   };
 
@@ -265,7 +286,7 @@ export const Allocations: React.FC = () => {
 
         {(isEditingCurrent ? Object.keys(editorAllocations).length > 0 : currentAllocation?.allocation?.allocations) ? (
           <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-700">
+            <div className="grid grid-cols-4 gap-4 pb-4 border-b border-gray-700">
               <div>
                 <p className="text-sm text-gray-400">Total Allocation</p>
                 <p className="text-white font-bold text-xl">
@@ -283,6 +304,30 @@ export const Allocations: React.FC = () => {
                     : Object.keys(currentAllocation.allocation.allocations).length
                   }
                 </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-400">Fund</p>
+                {isEditingCurrent ? (
+                  <select
+                    value={selectedFundId}
+                    onChange={(e) => setSelectedFundId(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                    required
+                  >
+                    <option value="">Select Fund</option>
+                    {funds?.map((fund) => (
+                      <option key={fund.fund_id} value={fund.fund_id}>
+                        {fund.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="text-white font-medium">
+                    {currentAllocation.allocation.fund_id 
+                      ? funds?.find(f => f.fund_id === currentAllocation.allocation.fund_id)?.name || currentAllocation.allocation.fund_id
+                      : 'N/A'}
+                  </p>
+                )}
               </div>
               <div>
                 <p className="text-sm text-gray-400">Last Updated</p>
@@ -364,7 +409,7 @@ export const Allocations: React.FC = () => {
           {Object.keys(editorAllocations).length > 0 ? (
             <div className="space-y-4">
               {/* Total Allocation Display */}
-              <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-700">
+              <div className="grid grid-cols-4 gap-4 pb-4 border-b border-gray-700">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <p className="text-sm text-gray-400">Total Allocation</p>
@@ -439,6 +484,22 @@ export const Allocations: React.FC = () => {
                   <p className="text-white font-bold text-xl">
                     {Object.keys(editorAllocations).length}
                   </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">Assign to Fund</p>
+                  <select
+                    value={selectedFundId}
+                    onChange={(e) => setSelectedFundId(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                    required
+                  >
+                    <option value="">Select Fund</option>
+                    {funds?.map((fund) => (
+                      <option key={fund.fund_id} value={fund.fund_id}>
+                        {fund.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <p className="text-sm text-gray-400">Source</p>

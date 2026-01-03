@@ -1,6 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tantml:invoke>
-<invoke name="react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Layout } from './components/Layout';
@@ -9,7 +8,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Allocations } from './pages/Allocations';
 import { Activity } from './pages/Activity';
 import { Strategies } from './pages/Strategies';
-import FundSetup from './pages/FundSetup';
+import HedgedFunds from './pages/FundSetup';
 
 // Create a client
 const queryClient = new QueryClient({
@@ -45,7 +44,7 @@ function App() {
               <Route path="allocations" element={<Allocations />} />
               <Route path="activity" element={<Activity />} />
               <Route path="strategies" element={<Strategies />} />
-              <Route path="fund-setup" element={<FundSetup />} />
+              <Route path="fund-setup" element={<HedgedFunds />} />
             </Route>
 
             {/* Catch all - redirect to dashboard */}

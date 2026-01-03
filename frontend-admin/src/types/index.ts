@@ -199,7 +199,7 @@ export interface AssetClasses {
 
 export interface TradingAccount {
   account_id: string;
-  broker: 'IBKR' | 'Binance' | 'Alpaca' | 'Mock' | 'Mock_Paper';
+  broker: 'IBKR' | 'Binance' | 'Alpaca' | 'Mock';
   fund_id: string;
   asset_classes: AssetClasses;
   equity: number;

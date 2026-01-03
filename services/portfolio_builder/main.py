@@ -679,7 +679,7 @@ async def get_recent_signals(limit: int = 50, environment: str = None):
             query['environment'] = environment
 
         # Query signal_store - serialize all documents to handle ObjectIds and datetimes
-        signal_store_docs = list(signal_store_collection.find(query).sort('received_at', -1).limit(limit))
+        signal_store_docs = list(signal_store_collection.find(query).sort('created_at', -1).limit(limit))
 
         # Serialize all documents to handle ObjectIds and datetimes
         signal_store_docs = [serialize_mongo_document(doc) for doc in signal_store_docs]
@@ -706,8 +706,8 @@ async def get_recent_signals(limit: int = 50, environment: str = None):
             formatted_signal = {
                 'signal_id': doc.get('signal_id') or signal_data.get('signalID') or signal_data.get('signal_id'),
                 'strategy_id': signal_data.get('strategy_name', 'Unknown'),
-                'timestamp': doc.get('received_at'),
-                'created_at': doc.get('received_at'),
+                'timestamp': doc.get('created_at'),
+                'created_at': doc.get('created_at'),
                 'instrument': signal_details.get('ticker') or signal_details.get('instrument'),
                 'action': signal_details.get('action'),
                 'direction': signal_details.get('direction'),

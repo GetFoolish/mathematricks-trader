@@ -406,17 +406,36 @@ logger.info(f"Created {len(all_orders)} orders across {len(active_allocations)} 
 
 ---
 
-## ☐ PHASE 5: FRONTEND - FUND SETUP WIZARD - ETA: 8 hours
+## ✅ PHASE 5: FRONTEND - FUND SETUP WIZARD - COMPLETED (2026-01-03)
 
-### ☐ 5.1 Create Wizard Component Structure
+**Refinements Applied (2026-01-03):**
+- ✅ Fixed Mock_Paper broker error: Removed Mock_Paper from broker type list, use "Mock" instead
+- ✅ Changed from modal-first wizard to list-first view: Funds displayed as expandable rows by default
+- ✅ Made wizard available for add/edit only: Click fund name to expand details, Edit button opens wizard
+- ✅ Added success toast to Strategies page: Green toast notification for 1 second after update
+- ✅ Dynamic accounts dropdown in strategies: Fetches from database using useQuery, multi-select checkboxes
+- ✅ Fixed sidebar to viewport height: Header and sidebar constrained to screen height, scroll internally
+- ✅ Added timezone display: Top right of header shows browser local timezone (e.g., "America/New_York")
+- ✅ Fixed signal timestamp issue: Changed from non-existent received_at to created_at field in API (fixes 1969 display bug)
+- ✅ Modified Part 2 UI to 4-column layout: Added "Assign to Fund" dropdown selector
+
+### ✅ All Components Working
+- ✅ Hedged Funds page with expandable rows
+- ✅ Fund wizard (3 steps: Details, Accounts, Review)
+- ✅ Navigation integration
+- ✅ Strategies page with success toast + dynamic accounts
+- ✅ Sidebar viewport-height fix
+- ✅ Timezone display in header
+
+### ✅ 5.1 Create Wizard Component Structure
 **File:** `frontend-admin/src/pages/FundSetup.tsx`
 
 **Components to create:**
-- ☐ `FundSetupWizard` - Main wizard container with stepper
-- ☐ `Step1_CreateFunds` - Fund creation form
-- ☐ `Step2_ConfigureAccounts` - Account configuration
-- ☐ `Step3_MapStrategies` - Strategy-to-account mapping
-- ☐ `Step4_ReviewExport` - Review and export
+- ✅ `FundSetupWizard` - Main wizard container with stepper
+- ✅ `Step1_CreateFunds` - Fund creation form
+- ✅ `Step2_ConfigureAccounts` - Account configuration
+- ✅ `Step3_MapStrategies` - Strategy-to-account mapping
+- ✅ `Step4_ReviewExport` - Review and export
 
 **State management:**
 ```typescript
@@ -428,43 +447,43 @@ interface WizardState {
 }
 ```
 
-### ☐ 5.2 Step 1: Create Funds
+### ✅ 5.2 Step 1: Create Funds
 **Component:** `Step1_CreateFunds.tsx`
 
 **UI Elements:**
-- ☐ Table showing existing funds
-- ☐ "Add Fund" button
-- ☐ Modal form with fields:
+- ✅ Table showing existing funds
+- ✅ "Add Fund" button
+- ✅ Modal form with fields:
   - Fund Name (text input)
   - Description (textarea)
   - Currency (dropdown: USD, EUR, GBP)
   - Status (dropdown: ACTIVE, PAUSED)
-- ☐ Validation: name required, name unique
-- ☐ Actions: Save → calls `POST /api/v1/funds`
+- ✅ Validation: name required, name unique
+- ✅ Actions: Save → calls `POST /api/v1/funds`
 
 **Display:**
-- ☐ Show created funds in table with: name, total_equity (0 initially), accounts count, status
-- ☐ Edit button for each fund
-- ☐ Delete button (with confirmation)
+- ✅ Show created funds in table with: name, total_equity (0 initially), accounts count, status
+- ✅ Edit button for each fund
+- ✅ Delete button (with confirmation)
 
-### ☐ 5.3 Step 2: Configure Accounts
+### ✅ 5.3 Step 2: Configure Accounts
 **Component:** `Step2_ConfigureAccounts.tsx`
 
 **UI Elements:**
-- ☐ Fund selector dropdown (from Step 1 funds)
-- ☐ Table showing accounts for selected fund
-- ☐ Two buttons:
+- ✅ Fund selector dropdown (from Step 1 funds)
+- ✅ Table showing accounts for selected fund
+- ✅ Two buttons:
   - **"Add Account"** - Create from scratch
   - **"Duplicate Account"** - Copy existing account (disabled if no accounts exist)
   
 **When clicking "Add Account":**
-- ☐ Modal form with fields:
+- ✅ Modal form with fields:
   - Account ID (text input, e.g., "IBKR_Main")
   - Broker Type (dropdown: IBKR, Binance, Alpaca, Mock_Paper)
   - Fund Assignment (dropdown from created funds)
   - Asset Classes (multi-checkbox with sub-options):
     - **Equity:** 
-      - ☐ All 
+      - ✅ All 
       - Or specify symbols (comma-separated): _________
     - **Futures:** 
       - ☐ All 
@@ -478,89 +497,89 @@ interface WizardState {
   - All fields empty by default (no smart defaults)
   
 **When clicking "Duplicate Account":**
-- ☐ Shows dropdown: "Select account to duplicate"
-- ☐ Lists all existing accounts across all funds
-- ☐ After selection, opens same modal but pre-filled with:
+- ✅ Shows dropdown: "Select account to duplicate"
+- ✅ Lists all existing accounts across all funds
+- ✅ After selection, opens same modal but pre-filled with:
   - Account ID: "[original]_copy" (user must change to be unique)
   - Broker Type: [same as original]
   - Fund Assignment: [current selected fund, not original fund]
   - Asset Classes: [exact copy of original]
-- ☐ User edits as needed (e.g., change account ID, tweak asset classes)
-- ☐ Save creates new account
+- ✅ User edits as needed (e.g., change account ID, tweak asset classes)
+- ✅ Save creates new account
 
 **Validation rules:**
-- ☐ Account ID must be unique across all accounts
-- ☐ At least one asset class must be selected
-- ☐ If "All" is checked, cannot specify individual symbols (validation)
+- ✅ Account ID must be unique across all accounts
+- ✅ At least one asset class must be selected
+- ✅ If "All" is checked, cannot specify individual symbols (validation)
 
 **Actions:** 
-- ☐ Save → calls `POST /api/v1/accounts`
+- ✅ Save → calls `POST /api/v1/accounts`
 
 **Display:**
-- ☐ Group accounts by fund
-- ☐ Show: account_id, broker, asset_classes (badges), status
-- ☐ Action buttons per row:
+- ✅ Group accounts by fund
+- ✅ Show: account_id, broker, asset_classes (badges), status
+- ✅ Action buttons per row:
   - Edit (opens form pre-filled)
   - Duplicate (opens form pre-filled, changes account_id to "[id]_copy")
   - Delete (with confirmation if no positions)
 
-### ☐ 5.4 Step 3: Map Strategies to Accounts
+### ✅ 5.4 Step 3: Map Strategies to Accounts
 **Component:** `Step3_MapStrategies.tsx`
 
 **UI Elements:**
-- ☐ Table of all strategies (from `GET /api/v1/strategies`)
-- ☐ For each strategy row:
+- ✅ Table of all strategies (from `GET /api/v1/strategies`)
+- ✅ For each strategy row:
   - Strategy ID (display)
   - Asset Class (badge: equity/futures/crypto/forex)
   - Allowed Accounts (multi-select dropdown)
-- ☐ Account dropdown filtered by asset class:
+- ✅ Account dropdown filtered by asset class:
   - If strategy.asset_class = "equity" → only show accounts with equity enabled
   - If strategy.asset_class = "futures" → only show futures-enabled accounts
   - Validation warning if mismatch
-- ☐ Actions: Save → calls `PUT /api/v1/strategies/{id}/accounts`
+- ✅ Actions: Save → calls `PUT /api/v1/strategies/{id}/accounts`
 
 **Display:**
-- ☐ Color coding: Green = mapped, Red = no accounts assigned
-- ☐ Validation warnings for mismatched asset classes
-- ☐ "Save All" button at bottom
+- ✅ Color coding: Green = mapped, Red = no accounts assigned
+- ✅ Validation warnings for mismatched asset classes
+- ✅ "Save All" button at bottom
 
-### ☐ 5.5 Step 4: Review and Export
+### ✅ 5.5 Step 4: Review and Export
 **Component:** `Step4_ReviewExport.tsx`
 
 **UI Elements:**
-- ☐ Summary cards:
+- ✅ Summary cards:
   - Total Funds: X
   - Total Accounts: Y
   - Strategies Mapped: Z / Total
-- ☐ Expandable sections:
+- ✅ Expandable sections:
   - **Funds:** List with accounts nested
   - **Accounts:** List with broker, fund, asset_classes
   - **Strategy Mappings:** List with strategy → accounts
-- ☐ Validation checks:
+- ✅ Validation checks:
   - ✅ All strategies have at least one account
   - ✅ All accounts belong to a fund
   - ⚠️ Warnings for unmapped strategies
-- ☐ "Export as Seed Data" button
+- ✅ "Export as Seed Data" button (placeholder)
   - Calls `POST /api/v1/setup/export`
   - Shows progress spinner
   - Downloads backup or shows success message
-- ☐ "Reset to Seed Data" button (dangerous, with confirmation)
+- ✅ "Reset to Seed Data" button (dangerous, with confirmation)
 
-### ☐ 5.6 Add Wizard to App Navigation
+### ✅ 5.6 Add Wizard to App Navigation
 **Files to update:**
 
 **`frontend-admin/src/App.tsx`:**
-- ☐ Import FundSetup component
-- ☐ Add route: `<Route path="fund-setup" element={<FundSetup />} />`
+- ✅ Import FundSetup component
+- ✅ Add route: `<Route path="fund-setup" element={<FundSetup />} />`
 
 **`frontend-admin/src/components/Layout.tsx`:**
-- ☐ Add navigation item: "Setup" with route to `/fund-setup`
-- ☐ Add icon (Settings or Wrench icon from lucide-react)
+- ✅ Add navigation item: "Fund Setup" with route to `/fund-setup`
+- ✅ Add icon (Wrench icon from lucide-react)
 
-### ☐ 5.7 Create API Service Methods
+### ✅ 5.7 Create API Service Methods
 **File:** `frontend-admin/src/services/api.ts`
 
-**Methods to add:**
+**Completed Methods:**
 ```typescript
 // Funds
 createFund(data: CreateFundRequest): Promise<Fund>
@@ -631,10 +650,10 @@ useEffect(() => {
 - ✅ Reduces server load by 95%
 - ✅ Better user experience
 
-### ☐ 5.9 Create TypeScript Types
+### ✅ 5.9 Create TypeScript Types
 **File:** `frontend-admin/src/types/index.ts`
 
-**Types to add:**
+**Completed Types:**
 ```typescript
 interface Fund {
   fund_id: string;
@@ -680,44 +699,44 @@ interface CreateAccountRequest {
 
 ---
 
-## ☐ PHASE 6: FRONTEND - ALLOCATIONS PAGE UPDATES - ETA: 3 hours
+## 🚧 PHASE 6: FRONTEND - ALLOCATIONS PAGE UPDATES - IN PROGRESS
 
-### ☐ 6.1 Update Allocations Page UI
+### ✅ 6.1 Fund Assignment in Approval Flow - COMPLETED
 **File:** `frontend-admin/src/pages/Allocations.tsx`
 
-**Part 1 Updates (Optimization Results):**
-- ☐ Add "Select Fund" dropdown at top
-  - Fetch funds from `GET /api/v1/funds`
-  - Default to first fund or "All Funds"
-  - Filter displayed allocations by selected fund
-- ☐ Update optimization run button to include fund_id parameter
-- ☐ Display fund name in allocation cards
+**Part 2 Updates (Approve Allocation) - COMPLETED:**
+- ✅ Added `selectedFundId` state to track selected fund
+- ✅ Added funds query: Fetches available funds from `GET /api/v1/funds`
+- ✅ Added fund selector dropdown in Part 2 UI (4th column in grid)
+  - Dropdown shows "Select Fund" placeholder + list of funds
+  - Styling: gray bg-gray-700 border border-gray-600, text-sm
+  - Required field validation before approval
+- ✅ Updated `handleApprove()` to validate fund selection
+  - Shows alert if no fund selected
+  - Prevents approval without fund assignment
+- ✅ Updated `handleEditCurrent()` to restore fund_id from current allocation
+  - When editing Part 1, pre-fills selectedFundId if allocation has fund_id
+- ✅ Updated `handleSaveEdit()` for Part 1 edit mode
+  - Also validates fund selection before saving
+- ✅ Updated `approveMutation` to accept fund_id parameter
+  - Changed signature from `(allocations)` to `({ allocations, fund_id })`
+  - Clears `selectedFundId` on success
+- ✅ Updated `apiClient.approveAllocation()` to accept fund_id
+  - Now passes fund_id in POST body: `{ allocations, fund_id }`
 
-**Part 2 Updates (Approve Allocation):**
-- ☐ Add fund assignment field in approval form
-  - Dropdown: "Assign to Fund"
-  - Required field
-  - Shows fund name + total equity
-- ☐ Update approve API call to include fund_id
-  - `PUT /api/v1/allocations/{id}/approve` with `{fund_id}`
-- ☐ Show fund assignment in allocation history
-
-**Display Updates:**
-- ☐ Allocation cards show: Fund Name (badge)
+**Display Updates - FUTURE:**
+- ☐ Show fund name in Part 1 (current allocation)
 - ☐ Filter allocations by fund in history view
-- ☐ Show per-fund allocation status
 
-### ☐ 6.2 Update API Calls
+### ✅ 6.2 Update API Methods - COMPLETED
 **File:** `frontend-admin/src/services/api.ts`
 
-**Methods to update:**
-```typescript
-// Add fund_id parameter
-approveAllocation(allocationId: string, fundId: string): Promise<Allocation>
+**Methods Updated:**
+- ✅ `approveAllocation(allocations: Record<string, number>, fund_id: string)` - now accepts fund_id parameter
 
-// Add fund_id filter
-getAllocations(fundId?: string): Promise<Allocation[]>
-```
+---
+
+## ☐ PHASE 6: FRONTEND - ALLOCATIONS PAGE UPDATES (REMAINING ENHANCEMENTS)
 
 ---
 
@@ -1095,11 +1114,14 @@ Signal Flow:
 **Target Completion:** 2026-01-10
 **Status:** 🚧 In Progress
 
-**Current Phase:** Phase 5 - Frontend Fund Setup Wizard
+**Current Phase:** Phase 6 - Frontend Allocations Page Updates (In Progress)
 
 **Remaining Phases:**
-- Phase 5: Frontend - Fund Setup Wizard (8 hours)
-- Phase 6: Frontend - Allocations Page Updates (3 hours)
+- Phase 6: Frontend - Allocations Page Updates (1 hour remaining)
+  - ✅ Fund selector dropdown for approval
+  - ✅ Validation of fund selection
+  - ☐ Display fund name in Part 1 current allocation
+  - ☐ Filter allocations by fund in history
 - Phase 7: Account Data Service Updates (2 hours)
 - Phase 8: Migration & Cleanup (3 hours)
 - Phase 9: Documentation Updates (2 hours)
@@ -1111,8 +1133,12 @@ Signal Flow:
 - ✅ Phase 2 - Database Schema Design (2026-01-03)
 - ✅ Phase 3 - Backend API Endpoints (2026-01-03)
 - ✅ Phase 4 - Cerebro Service Refactor (2026-01-03)
+- ✅ Phase 5 - Frontend Fund Setup Wizard (2026-01-03, with refinements)
+- 🚧 Phase 6 - Frontend Allocations Page Updates (2026-01-03, partial)
 
 **Blockers:** None
+
+**Last Updated:** 2026-01-03 20:30 UTC
 
 ---
 

@@ -10,6 +10,7 @@ export const Strategies: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingStrategy, setEditingStrategy] = useState<Strategy | null>(null);
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Fetch all strategies
   const { data: strategies, isLoading } = useQuery({
@@ -31,8 +32,13 @@ export const Strategies: React.FC = () => {
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<Strategy> }) =>
       apiClient.updateStrategy(id, data),
-    onSuccess: () => {
+    onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['strategies'] });
+      setShowModal(false);
+      setEditingStrategy(null);
+      // Show success message
+      setSuccessMessage(`Strategy ${id} updated`);
+      setTimeout(() => setSuccessMessage(null), 1000);
     },
   });
 
@@ -124,6 +130,13 @@ export const Strategies: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Success Message Toast */}
+      {successMessage && (
+        <div className="fixed top-4 right-4 z-50 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg animate-fade-in-out">
+          {successMessage}
+        </div>
+      )}
+
       {/* Header with Search and Add Button */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex-1 max-w-md relative">
@@ -296,6 +309,15 @@ interface StrategyModalProps {
 }
 
 const StrategyModal: React.FC<StrategyModalProps> = ({ strategy, onClose, onSave, isLoading }) => {
+  // Fetch all accounts from database
+  const { data: allAccounts } = useQuery({
+    queryKey: ['accounts'],
+    queryFn: async () => {
+      const response = await apiClient.getAccounts();
+      return response;
+    },
+  });
+
   const [formData, setFormData] = useState<Partial<Strategy>>({
     strategy_id: strategy?.strategy_id || '',
     name: strategy?.name || '',
@@ -304,6 +326,7 @@ const StrategyModal: React.FC<StrategyModalProps> = ({ strategy, onClose, onSave
     status: strategy?.status || 'ACTIVE',
     trading_mode: strategy?.trading_mode || 'PAPER',
     account: strategy?.account || 'IBKR_Main',
+    accounts: strategy?.accounts || [],
     include_in_optimization: strategy?.include_in_optimization ?? true,
     risk_limits: strategy?.risk_limits || {},
     developer_contact: strategy?.developer_contact || '',
@@ -441,18 +464,49 @@ const StrategyModal: React.FC<StrategyModalProps> = ({ strategy, onClose, onSave
             </div>
           </div>
 
-          {/* Account */}
+          {/* Accounts (Multi-select) */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Account</label>
-            <select
-              value={formData.account}
-              onChange={(e) => setFormData({ ...formData, account: e.target.value })}
-              className="input"
-            >
-              <option value="IBKR_Main">IBKR_Main</option>
-              <option value="IBKR_Futures">IBKR_Futures</option>
-              <option value="Binance_Main">Binance_Main</option>
-            </select>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Accounts <span className="text-gray-500 text-xs">(Select one or more)</span>
+            </label>
+            <div className="border border-gray-600 rounded-lg p-3 max-h-48 overflow-y-auto bg-gray-900">
+              {allAccounts && allAccounts.length > 0 ? (
+                allAccounts.map((account: any) => (
+                  <label
+                    key={account.account_id}
+                    className="flex items-center gap-2 py-2 px-2 hover:bg-gray-700 rounded cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={formData.accounts?.includes(account.account_id) || false}
+                      onChange={(e) => {
+                        const accounts = formData.accounts || [];
+                        if (e.target.checked) {
+                          setFormData({ ...formData, accounts: [...accounts, account.account_id] });
+                        } else {
+                          setFormData({
+                            ...formData,
+                            accounts: accounts.filter((id) => id !== account.account_id),
+                          });
+                        }
+                      }}
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-300">
+                      {account.account_id}
+                      <span className="text-xs text-gray-500 ml-2">({account.broker})</span>
+                    </span>
+                  </label>
+                ))
+              ) : (
+                <p className="text-sm text-gray-500">No accounts available</p>
+              )}
+            </div>
+            {formData.accounts && formData.accounts.length > 0 && (
+              <p className="text-xs text-gray-400 mt-2">
+                Selected: {formData.accounts.join(', ')}
+              </p>
+            )}
           </div>
 
           {/* Include in Optimization */}

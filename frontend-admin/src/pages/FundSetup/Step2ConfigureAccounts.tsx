@@ -42,12 +42,6 @@ const BROKER_DEFAULT_ASSET_CLASSES: Record<string, AssetClasses> = {
     forex: ['all'],
     crypto: ['all'],
   },
-  Mock_Paper: {
-    equity: ['all'],
-    futures: ['all'],
-    forex: ['all'],
-    crypto: ['all'],
-  },
 };
 
 export default function Step2ConfigureAccounts({ funds, accounts, setAccounts }: Props) {
@@ -410,7 +404,6 @@ export default function Step2ConfigureAccounts({ funds, accounts, setAccounts }:
                     <option value="Binance">Binance</option>
                     <option value="Alpaca">Alpaca</option>
                     <option value="Mock">Mock</option>
-                    <option value="Mock_Paper">Mock_Paper</option>
                   </select>
                 </div>
               </div>

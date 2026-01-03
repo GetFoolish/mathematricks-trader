@@ -1,14 +1,18 @@
-import { CheckCircle2, XCircle, AlertTriangle, Download } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle, Download, Check } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../../services/api';
 import type { Fund, TradingAccount, Strategy } from '../../types';
 
 interface Props {
   funds: Fund[];
   accounts: TradingAccount[];
+  onFinish?: () => void;
 }
 
-export default function Step4ReviewExport({ funds, accounts }: Props) {
+export default function Step4ReviewExport({ funds, accounts, onFinish }: Props) {
+  const navigate = useNavigate();
+  
   // Fetch strategies to check mappings
   const { data: strategies } = useQuery({
     queryKey: ['strategies'],
@@ -29,6 +33,15 @@ export default function Step4ReviewExport({ funds, accounts }: Props) {
     } catch (error) {
       console.error('Export failed:', error);
       alert('Failed to export seed data');
+    }
+  };
+
+  const handleFinish = () => {
+    // Call onFinish callback if provided, otherwise navigate to dashboard
+    if (onFinish) {
+      onFinish();
+    } else {
+      navigate('/dashboard');
     }
   };
 
@@ -223,15 +236,23 @@ export default function Step4ReviewExport({ funds, accounts }: Props) {
         </div>
       </div>
 
-      {/* Export Button */}
-      <div className="mt-8 flex justify-center">
+      {/* Action Buttons */}
+      <div className="mt-8 flex justify-center gap-4">
         <button
           onClick={handleExportSeedData}
           disabled={funds.length === 0 || accounts.length === 0}
-          className="flex items-center px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg font-semibold"
+          className="flex items-center px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-semibold"
         >
-          <Download className="w-6 h-6 mr-2" />
+          <Download className="w-5 h-5 mr-2" />
           Export as Seed Data
+        </button>
+        
+        <button
+          onClick={handleFinish}
+          className="flex items-center px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold text-lg"
+        >
+          <Check className="w-6 h-6 mr-2" />
+          Finish Setup
         </button>
       </div>
 
