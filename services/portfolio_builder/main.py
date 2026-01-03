@@ -1024,6 +1024,7 @@ async def create_account(account_data: dict):
                 "crypto": [],
                 "forex": []
             }),
+            "authentication_details": account_data.get('authentication_details', {}),  # For broker authentication
             "equity": 0.0,
             "cash_balance": 0.0,
             "margin_used": 0.0,
