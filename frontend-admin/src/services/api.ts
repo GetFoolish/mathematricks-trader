@@ -8,6 +8,13 @@ import type {
   BacktestData,
   LoginRequest,
   LoginResponse,
+  Fund,
+  TradingAccount,
+  CreateFundRequest,
+  UpdateFundRequest,
+  CreateAccountRequest,
+  UpdateAccountRequest,
+  StrategyAccountMapping,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
@@ -199,6 +206,73 @@ class ApiClient {
     const params: any = { limit };
     if (environment) params.environment = environment;
     const response = await this.portfolioBuilderClient.get('/api/v1/activity/decisions', { params });
+    return response.data;
+  }
+
+  // ============================================================================
+  // Fund Management APIs (v5)
+  // ============================================================================
+
+  async createFund(data: CreateFundRequest): Promise<Fund> {
+    const response = await this.portfolioBuilderClient.post('/api/v1/funds', data);
+    return response.data;
+  }
+
+  async getFunds(status?: string): Promise<Fund[]> {
+    const params = status ? { status } : {};
+    const response = await this.portfolioBuilderClient.get('/api/v1/funds', { params });
+    return response.data.funds || response.data;
+  }
+
+  async getFund(fundId: string): Promise<Fund> {
+    const response = await this.portfolioBuilderClient.get(`/api/v1/funds/${fundId}`);
+    return response.data;
+  }
+
+  async updateFund(fundId: string, data: UpdateFundRequest): Promise<Fund> {
+    const response = await this.portfolioBuilderClient.put(`/api/v1/funds/${fundId}`, data);
+    return response.data;
+  }
+
+  async deleteFund(fundId: string): Promise<void> {
+    await this.portfolioBuilderClient.delete(`/api/v1/funds/${fundId}`);
+  }
+
+  // ============================================================================
+  // Account Management APIs (v5)
+  // ============================================================================
+
+  async createAccount(data: CreateAccountRequest): Promise<TradingAccount> {
+    const response = await this.portfolioBuilderClient.post('/api/v1/accounts', data);
+    return response.data;
+  }
+
+  async getAccounts(fundId?: string): Promise<TradingAccount[]> {
+    const params = fundId ? { fund_id: fundId } : {};
+    const response = await this.portfolioBuilderClient.get('/api/v1/accounts', { params });
+    return response.data.accounts || response.data;
+  }
+
+  async updateAccount(accountId: string, data: UpdateAccountRequest): Promise<TradingAccount> {
+    const response = await this.portfolioBuilderClient.put(`/api/v1/accounts/${accountId}`, data);
+    return response.data;
+  }
+
+  async deleteAccount(accountId: string): Promise<void> {
+    await this.portfolioBuilderClient.delete(`/api/v1/accounts/${accountId}`);
+  }
+
+  // ============================================================================
+  // Strategy-Account Mapping APIs (v5)
+  // ============================================================================
+
+  async updateStrategyAccounts(strategyId: string, accounts: string[]): Promise<Strategy> {
+    const response = await this.portfolioBuilderClient.put(`/api/v1/strategies/${strategyId}/accounts`, { accounts });
+    return response.data;
+  }
+
+  async getStrategyAccounts(strategyId: string): Promise<StrategyAccountMapping> {
+    const response = await this.portfolioBuilderClient.get(`/api/v1/strategies/${strategyId}/accounts`);
     return response.data;
   }
 

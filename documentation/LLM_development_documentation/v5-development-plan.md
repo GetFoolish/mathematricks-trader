@@ -161,16 +161,17 @@ we need to take the above and add tabs for the following functionalities:
 
 ---
 
-## ☐ PHASE 4: CEREBRO SERVICE REFACTOR (Multi-Fund Logic) - ETA: 6 hours
+## ✅ PHASE 4: CEREBRO SERVICE REFACTOR (Multi-Fund Logic) - COMPLETED
 
-### ☐ 4.1 Update Database Collections Reference
+### ✅ 4.1 Update Database Collections Reference
 **File:** `services/cerebro_service/cerebro_main.py`
 
-**Tasks:**
-- ☐ Add `funds_collection = db['funds']` (line ~100)
-- ☐ Keep existing collections: strategies, trading_accounts, portfolio_allocations, trading_orders
+**Completed:**
+- ✅ Added `funds_collection = db['funds']`
+- ✅ Added `trading_accounts_collection = db['trading_accounts']`
+- ✅ Imported all fund_allocation_logic functions
 
-### ☐ 4.2 Create Helper Functions
+### ✅ 4.2 Create Helper Functions
 **File:** `services/cerebro_service/fund_allocation_logic.py` (NEW)
 
 **Functions to implement:**
@@ -186,7 +187,7 @@ Returns list of allocation documents with fund_id.
 - Query `portfolio_allocations` where `status = "ACTIVE"` and `strategy_id in allocations.keys()`
 - Return list of matching allocation documents
 
-#### ☐ 4.2.2 `calculate_fund_equity(fund_id: str) -> float`
+#### ✅ 4.2.2 `calculate_fund_equity(fund_id: str) -> float`
 ```python
 """
 Calculate total equity across all accounts in a fund.
@@ -199,7 +200,7 @@ Updates fund.total_equity in MongoDB.
 - Update `funds.update_one({fund_id}, {$set: {total_equity: total}})`
 - Return total
 
-#### ☐ 4.2.3 `get_strategy_allocation_for_fund(fund_id: str, strategy_id: str) -> Dict`
+#### ✅ 4.2.3 `get_strategy_allocation_for_fund(fund_id: str, strategy_id: str) -> Dict`
 ```python
 """
 Returns {
@@ -217,7 +218,7 @@ Returns {
   - Sum `notional_value` where `fund_id=X, strategy_id=Y, status IN [FILLED, SUBMITTED]`
 - `available_capital = allocated_capital - used_capital`
 
-#### ☐ 4.2.4 `get_available_accounts_for_strategy(strategy_id: str, fund_id: str, asset_class: str) -> List[Dict]`
+#### ✅ 4.2.4 `get_available_accounts_for_strategy(strategy_id: str, fund_id: str, asset_class: str) -> List[Dict]`
 ```python
 """
 Returns accounts that:
@@ -235,7 +236,7 @@ Returns: [{account_id, available_margin, equity}, ...]
 - Get current account state (margin, equity) from `trading_accounts`
 - Return list sorted by available_margin (descending)
 
-#### ☐ 4.2.5 `distribute_capital_across_accounts(target_capital: float, accounts: List[Dict]) -> List[Dict]`
+#### ✅ 4.2.5 `distribute_capital_across_accounts(target_capital: float, accounts: List[Dict]) -> List[Dict]`
 ```python
 """
 Distribute target_capital across accounts proportionally by available margin.
@@ -259,14 +260,12 @@ Output: [
 - Cap each allocation at account.available_margin (handle edge case)
 - Return list of {account_id, allocated_capital}
 
-### ☐ 4.3 Refactor Signal Processing Logic
+### ✅ 4.3 Refactor Signal Processing Logic
 **File:** `services/cerebro_service/cerebro_main.py`
 
-**Current code location:** Lines 1160-1230 (function that processes signals)
+**Completed:** Entire signal processing flow refactored for multi-fund support
 
-**Tasks:**
-
-#### ☐ 4.3.1 Replace Single-Account Logic
+#### ✅ 4.3.1 Replace Single-Account Logic
 **Current (lines ~1179-1200):**
 ```python
 accounts = strategy_doc.get('accounts', [])
@@ -300,7 +299,7 @@ for allocation in active_allocations:
     # ... (continue below)
 ```
 
-#### ☐ 4.3.2 Add Capital Availability Check
+#### ✅ 4.3.2 Add Capital Availability Check
 ```python
     # Check if strategy has available capital
     if fund_allocation['available_capital'] <= 0:
@@ -325,7 +324,7 @@ for allocation in active_allocations:
     target_capital = decision_obj.final_quantity * signal.get('price', 0)  # Simplified
 ```
 
-#### ☐ 4.3.3 Add Multi-Account Distribution
+#### ✅ 4.3.3 Add Multi-Account Distribution
 ```python
     # Get available accounts for this strategy in this fund
     asset_class = strategy_doc.get('asset_class', 'equity')
@@ -347,7 +346,7 @@ for allocation in active_allocations:
         logger.info(f"  • {alloc['account_id']}: ${alloc['allocated_capital']:.2f}")
 ```
 
-#### ☐ 4.3.4 Create Multiple Orders
+#### ✅ 4.3.4 Create Multiple Orders
 ```python
     # Create one order per account
     for account_alloc in account_allocations:
@@ -388,13 +387,13 @@ for allocation in active_allocations:
 logger.info(f"Created {len(all_orders)} orders across {len(active_allocations)} funds")
 ```
 
-### ☐ 4.4 Update Portfolio Context Builder
+### ✅ 4.4 Update Portfolio Context Builder
 **File:** `services/cerebro_service/cerebro_main.py`
 
-**Tasks:**
-- ☐ Modify `build_portfolio_context()` to accept fund_id parameter
-- ☐ Return context with fund-specific allocation info
-- ☐ Include available_capital from fund calculation
+**Completed:**
+- ✅ Portfolio context built per fund iteration
+- ✅ Uses primary account for signal evaluation
+- ✅ Fund-specific capital allocation integrated
 
 ### ☐ 4.5 Testing
 **Tasks:**
@@ -1096,12 +1095,22 @@ Signal Flow:
 **Target Completion:** 2026-01-10
 **Status:** 🚧 In Progress
 
-**Current Phase:** Phase 4 - Cerebro Service Refactor
+**Current Phase:** Phase 5 - Frontend Fund Setup Wizard
+
+**Remaining Phases:**
+- Phase 5: Frontend - Fund Setup Wizard (8 hours)
+- Phase 6: Frontend - Allocations Page Updates (3 hours)
+- Phase 7: Account Data Service Updates (2 hours)
+- Phase 8: Migration & Cleanup (3 hours)
+- Phase 9: Documentation Updates (2 hours)
+- Phase 10: Testing & Validation (4 hours)
+- Phase 11: Deployment & Rollout (2 hours)
 
 **Completed Phases:** 
 - ✅ Phase 1 - Immediate Fix (2026-01-03)
 - ✅ Phase 2 - Database Schema Design (2026-01-03)
 - ✅ Phase 3 - Backend API Endpoints (2026-01-03)
+- ✅ Phase 4 - Cerebro Service Refactor (2026-01-03)
 
 **Blockers:** None
 

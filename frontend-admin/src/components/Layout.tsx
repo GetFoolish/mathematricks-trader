@@ -8,6 +8,7 @@ import {
   Settings,
   LogOut,
   TrendingUp,
+  Wrench,
 } from 'lucide-react';
 
 export const Layout: React.FC = () => {
@@ -19,6 +20,7 @@ export const Layout: React.FC = () => {
     { name: 'Activity', href: '/activity', icon: Activity },
     { name: 'Allocations', href: '/allocations', icon: PieChart },
     { name: 'Strategies', href: '/strategies', icon: Settings },
+    { name: 'Fund Setup', href: '/fund-setup', icon: Wrench },
   ];
 
   const isActive = (path: string) => location.pathname === path;

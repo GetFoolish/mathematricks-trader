@@ -177,6 +177,79 @@ export interface ApiResponse<T> {
   error?: string;
 }
 
+// Fund Architecture Types (v5)
+export interface Fund {
+  fund_id: string;
+  name: string;
+  description?: string;
+  total_equity: number;
+  currency: string;
+  accounts: string[];
+  status: 'ACTIVE' | 'PAUSED' | 'CLOSED';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssetClasses {
+  equity: string[];  // ['all'] or specific symbols
+  futures: string[];
+  crypto: string[];
+  forex: string[];
+}
+
+export interface TradingAccount {
+  account_id: string;
+  broker: 'IBKR' | 'Binance' | 'Alpaca' | 'Mock' | 'Mock_Paper';
+  fund_id: string;
+  asset_classes: AssetClasses;
+  equity: number;
+  cash_balance: number;
+  margin_used: number;
+  margin_available: number;
+  available_margin: number;
+  unrealized_pnl: number;
+  open_positions: Position[];
+  status: 'ACTIVE' | 'INACTIVE';
+  authentication_details?: Record<string, any>;
+  last_updated?: string;
+  created_at?: string;
+}
+
+export interface CreateFundRequest {
+  name: string;
+  description?: string;
+  currency: string;
+  accounts?: string[];
+}
+
+export interface UpdateFundRequest {
+  name?: string;
+  description?: string;
+  accounts?: string[];
+  status?: 'ACTIVE' | 'PAUSED' | 'CLOSED';
+}
+
+export interface CreateAccountRequest {
+  account_id: string;
+  broker: string;
+  fund_id: string;
+  asset_classes: AssetClasses;
+  authentication_details?: Record<string, any>;
+}
+
+export interface UpdateAccountRequest {
+  fund_id?: string;
+  asset_classes?: AssetClasses;
+  authentication_details?: Record<string, any>;
+  status?: 'ACTIVE' | 'INACTIVE';
+}
+
+export interface StrategyAccountMapping {
+  strategy_id: string;
+  accounts: string[];
+  asset_class: string;
+}
+
 // Auth Types
 export interface User {
   username: string;
