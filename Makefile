@@ -60,7 +60,7 @@ logs-mongodb:
 	docker-compose logs -f mongodb
 
 send-test-signal:
-	./venv/bin/python tests/signals_testing/send_test_signal.py --file tests/signals_testing/sample_signals/equity_simple_signal_1.json
+	python3 ./tests/signals_testing/send_test_signal.py --file ./tests/signals_testing/sample_signals/equity_simple_signal_1.json
 
 restart-cerebro:
 	docker-compose restart cerebro-service
