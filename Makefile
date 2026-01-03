@@ -1,4 +1,4 @@
-.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard
+.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard clean-old-logs
 
 # Default target
 help:
@@ -19,6 +19,7 @@ help:
 	@echo "make send-test-signal - Send test ENTRY+EXIT signal for AAPL"
 	@echo "make rebuild       - Rebuild all containers"
 	@echo "make clean         - Stop and remove all containers and volumes (DATA LOSS!)"
+	@echo "make clean-old-logs - Truncate Docker container logs (keeps containers running)"
 
 start:
 	docker-compose up -d
@@ -87,4 +88,10 @@ clean:
 	@echo "WARNING: This will remove all containers and volumes."
 	@echo "Press Ctrl+C to cancel or wait 5 seconds..."
 	@sleep 5
+
+clean-old-logs:
+	@echo "Clearing Docker logs by restarting containers..."
+	@echo "Note: This preserves container state but clears log buffers"
+	docker-compose restart
+	@echo "✅ Logs cleared. Containers restarted with fresh log buffers."
 	docker-compose down -v

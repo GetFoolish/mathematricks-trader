@@ -2083,7 +2083,7 @@ if __name__ == "__main__":
     logger.info("Starting Cerebro Service (Pub/Sub Only)")
 
     # Initialize Pub/Sub clients
-    project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
+    project_id = os.getenv('PUBSUB_PROJECT_ID', 'mathematricks-trader')
     subscriber = pubsub_v1.SubscriberClient()
     publisher = pubsub_v1.PublisherClient()
     signals_subscription = subscriber.subscription_path(project_id, 'standardized-signals-sub')

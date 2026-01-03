@@ -114,7 +114,7 @@ class SignalIngestionService:
         self.pubsub_topic_path = None
         if PUBSUB_AVAILABLE:
             try:
-                project_id = os.getenv('GCP_PROJECT_ID', 'mathematricks-trader')
+                project_id = os.getenv('PUBSUB_PROJECT_ID', 'mathematricks-trader')
                 self.pubsub_publisher = pubsub_v1.PublisherClient()
                 self.pubsub_topic_path = self.pubsub_publisher.topic_path(project_id, 'standardized-signals')
                 logger.info("✅ Pub/Sub bridge enabled - signals will route to microservices")
