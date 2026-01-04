@@ -20,7 +20,7 @@ export const Layout: React.FC = () => {
     { name: 'Activity', href: '/activity', icon: Activity },
     { name: 'Allocations', href: '/allocations', icon: PieChart },
     { name: 'Strategies', href: '/strategies', icon: Settings },
-    { name: 'Hedged Funds', href: '/fund-setup', icon: Wrench },
+    { name: 'Hedged Funds', href: '/hedged-funds', icon: Wrench },
   ];
 
   const isActive = (path: string) => location.pathname === path;

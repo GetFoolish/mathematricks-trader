@@ -14,6 +14,7 @@ import subprocess
 import shutil
 import glob
 import re
+import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -339,18 +340,25 @@ async def refresh_strategy_cache(strategy_id: str):
 @app.get("/api/v1/allocations/current")
 async def get_current_allocation():
     """
-    Get current active allocation
-    Returns the single "approved" allocation that the system is currently using
+    Get all current active allocations (one per fund)
+    Returns all approved allocations indexed by fund_id
     """
     try:
-        allocation = current_allocation_collection.find_one({}, {'_id': 0})
+        # Fetch all allocations (one per fund)
+        allocations = list(current_allocation_collection.find({}, {'_id': 0}))
+        
+        # Index by fund_id for easy lookup
+        allocations_by_fund = {alloc['fund_id']: alloc for alloc in allocations if 'fund_id' in alloc}
+        
         return {
             "status": "success",
-            "allocation": allocation
+            "allocations": allocations_by_fund,
+            "allocation": allocations[0] if allocations else None  # For backward compatibility
         }
     except Exception as e:
         logger.error(f"Error fetching current allocation: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.post("/api/v1/allocations/approve")
@@ -362,8 +370,12 @@ async def approve_allocation(request: Dict[str, Any]):
     """
     try:
         allocations = request.get('allocations')
+        fund_id = request.get('fund_id')
+        
         if not allocations:
             raise HTTPException(status_code=400, detail="allocations field is required")
+        if not fund_id:
+            raise HTTPException(status_code=400, detail="fund_id field is required")
 
         # Calculate total allocation (or use provided value)
         total_allocation_pct = sum(allocations.values())
@@ -371,15 +383,19 @@ async def approve_allocation(request: Dict[str, Any]):
         # Create new current allocation document
         new_allocation = {
             "allocations": allocations,
+            "fund_id": fund_id,
             "total_allocation_pct": total_allocation_pct,
             "approved_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
             "mode": "approved"
         }
 
-        # Replace the current allocation (upsert - insert if doesn't exist)
-        current_allocation_collection.delete_many({})  # Remove all existing
-        current_allocation_collection.insert_one(new_allocation)
+        # Update or insert allocation for this specific fund (don't delete other funds)
+        current_allocation_collection.update_one(
+            {"fund_id": fund_id},
+            {"$set": new_allocation},
+            upsert=True
+        )
 
         # Save to local JSON cache for Cerebro
         cerebro_cache_path = os.path.join(
@@ -394,9 +410,11 @@ async def approve_allocation(request: Dict[str, Any]):
             "_metadata": {
                 "approved_at": new_allocation["approved_at"].isoformat(),
                 "updated_at": new_allocation["updated_at"].isoformat(),
-                "num_strategies": len(allocations)
+                "num_strategies": len(allocations),
+                "fund_id": fund_id
             },
             "allocations": allocations,
+            "fund_id": fund_id,
             "total_allocation_pct": sum(allocations.values()),
             "mode": "approved_downloaded_from_mongo",
             "last_updated": datetime.utcnow().isoformat(),

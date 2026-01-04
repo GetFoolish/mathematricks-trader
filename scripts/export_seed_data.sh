@@ -1,5 +1,5 @@
 #!/bin/bash
-# Export current MongoDB data as timestamped tar.gz seed file
+# Export last 50 documents from each collection in mathematricks_trading as seed file
 # Run this after applying fixes to create versioned seed data
 
 set -e
@@ -12,7 +12,7 @@ SEED_FILE="seed_${TIMESTAMP}.tar.gz"
 TEMP_DIR="/tmp/mongodb_export_$$"
 
 echo "============================================================"
-echo "MongoDB Seed Data Export"
+echo "MongoDB Seed Data Export (Last 50 docs per collection)"
 echo "============================================================"
 echo "Container: $CONTAINER_NAME"
 echo "Database: $DATABASE"
@@ -32,27 +32,47 @@ mkdir -p "$SEED_DIR"
 # Create temp directory
 mkdir -p "$TEMP_DIR"
 
-# Export current database to container
-echo "📤 Exporting database from MongoDB..."
-docker exec "$CONTAINER_NAME" mongodump \
-    --db "$DATABASE" \
-    --out /seed_data_export
+# Get list of collections in the database
+echo "📋 Fetching collection list..."
+COLLECTIONS=$(docker exec "$CONTAINER_NAME" mongosh "$DATABASE" --quiet --eval "db.getCollectionNames().join('\n')")
 
-# Copy from container to temp directory
-echo "📥 Copying to temp directory..."
-docker cp "$CONTAINER_NAME:/seed_data_export/$DATABASE" "$TEMP_DIR/"
+if [ -z "$COLLECTIONS" ]; then
+    echo "❌ Error: Could not fetch collections from $DATABASE"
+    exit 1
+fi
 
-# Clean up container export
-docker exec "$CONTAINER_NAME" rm -rf /seed_data_export
+echo "📤 Exporting using mongodump (last 50 docs per collection)..."
+echo ""
+
+# Use mongodump with query to limit to last 50 documents per collection
+for COLLECTION in $COLLECTIONS; do
+    echo "  ↳ Dumping $COLLECTION..."
+    # Get count of documents
+    COUNT=$(docker exec "$CONTAINER_NAME" mongosh "$DATABASE" --quiet --eval "db.$COLLECTION.countDocuments()")
+    
+    # Calculate skip to get last 50 docs
+    SKIP=$((COUNT > 50 ? COUNT - 50 : 0))
+    
+    # Use mongodump to dump with skip to get last 50 documents
+    docker exec "$CONTAINER_NAME" mongodump \
+        --db "$DATABASE" \
+        --collection "$COLLECTION" \
+        --out "$TEMP_DIR/dump" \
+        --query "{}" \
+        --skip "$SKIP" \
+        --quiet
+done
+
+echo ""
 
 # Create compressed archive (exclude macOS metadata files)
-echo "🗜️  Creating compressed archive..."
-cd "$TEMP_DIR"
+echo "🗜️  Creating compressed tar.gz archive..."
 
 # Set COPYFILE_DISABLE to prevent macOS metadata files in tar
 export COPYFILE_DISABLE=1
 
-tar -czf "$SEED_FILE" "$DATABASE"
+cd "$TEMP_DIR"
+tar -czf "$SEED_FILE" dump/
 mv "$SEED_FILE" "$OLDPWD/$SEED_DIR/"
 cd "$OLDPWD"
 

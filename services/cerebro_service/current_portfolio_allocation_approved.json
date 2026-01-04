@@ -1,20 +1,23 @@
 {
-  "_comment": "Current approved portfolio allocation (downloaded from MongoDB)",
-  "_source": "MongoDB current_allocation collection",
+  "_comment": "Current approved portfolio allocation (cached from MongoDB)",
+  "_source": "Frontend approval via PortfolioBuilder API",
   "_metadata": {
-    "approved_at": "2025-11-11T15:16:51.330000",
-    "num_strategies": 6
+    "approved_at": "2026-01-04T17:17:15.202714",
+    "updated_at": "2026-01-04T17:17:15.202717",
+    "num_strategies": 6,
+    "fund_id": "mock-fund-1"
   },
   "allocations": {
-    "SPX_1-D_Opt": 89.35793382849425,
-    "Com1-Met": 66.62802160702229,
-    "Com3-Mkt": 26.39453072248481,
-    "Com2-Ag": 16.050101282916952,
-    "SPY": 10.11249155975692,
-    "FloridaForex": 20.456920999324783
+    "SPX_1-D_Opt": 57.79,
+    "Com1-Met": 43.09,
+    "Com3-Mkt": 17.07,
+    "FloridaForex": 13.23,
+    "Com2-Ag": 10.38,
+    "SPY": 6.54
   },
-  "total_allocation_pct": 229.0,
+  "fund_id": "mock-fund-1",
+  "total_allocation_pct": 148.09999999999997,
   "mode": "approved_downloaded_from_mongo",
-  "last_updated": "2026-01-03T22:22:41.282298",
-  "update_action": "cerebro_restart"
+  "last_updated": "2026-01-04T17:17:15.206677",
+  "update_action": "allocation_changed_by_user"
 }

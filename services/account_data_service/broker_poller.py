@@ -398,6 +398,10 @@ class BrokerPoller:
                     "ERROR",
                     False
                 )
+        
+        # PHASE 7: Log fund-level summary after all accounts are polled
+        self._log_fund_summary(accounts)
+
 
     def poll_account(self, account: Dict, poll_type: str = "SCHEDULED"):
         """
@@ -650,6 +654,60 @@ class BrokerPoller:
         ]
 
         return hashlib.md5(json.dumps(position_data, sort_keys=True).encode()).hexdigest()
+
+    def _log_fund_summary(self, accounts: List[Dict]):
+        """
+        PHASE 7: Log aggregated fund-level summary
+        Shows total equity and breakdown by account for each fund
+        
+        Args:
+            accounts: List of account documents with fund_id and balances
+        """
+        # Group accounts by fund
+        funds_data = {}
+        
+        for account in accounts:
+            fund_id = account.get('fund_id', 'NO_FUND')
+            balances = account.get('balances', {})
+            equity = balances.get('equity', 0)
+            margin_used = balances.get('margin_used', 0)
+            unrealized_pnl = balances.get('unrealized_pnl', 0)
+            
+            if fund_id not in funds_data:
+                funds_data[fund_id] = {
+                    'total_equity': 0,
+                    'total_margin_used': 0,
+                    'total_unrealized_pnl': 0,
+                    'accounts': []
+                }
+            
+            funds_data[fund_id]['total_equity'] += equity
+            funds_data[fund_id]['total_margin_used'] += margin_used
+            funds_data[fund_id]['total_unrealized_pnl'] += unrealized_pnl
+            funds_data[fund_id]['accounts'].append({
+                'account_id': account.get('account_id'),
+                'broker': account.get('broker'),
+                'equity': equity
+            })
+        
+        # Log fund-level summaries
+        if funds_data:
+            logger.info("=" * 70)
+            logger.info("💰 FUND-LEVEL SUMMARY (After Account Polling)")
+            logger.info("=" * 70)
+            
+            for fund_id, data in sorted(funds_data.items()):
+                logger.info(f"\nFund: {fund_id}")
+                logger.info(f"  Total Equity: ${data['total_equity']:,.2f}")
+                logger.info(f"  Margin Used: ${data['total_margin_used']:,.2f}")
+                pnl_str = f"+${data['total_unrealized_pnl']:,.2f}" if data['total_unrealized_pnl'] >= 0 else f"-${abs(data['total_unrealized_pnl']):,.2f}"
+                logger.info(f"  Unrealized P&L: {pnl_str}")
+                logger.info(f"  Accounts: {len(data['accounts'])}")
+                
+                for acc in data['accounts']:
+                    logger.info(f"    • {acc['account_id']} ({acc['broker']}): ${acc['equity']:,.2f}")
+            
+            logger.info("=" * 70)
 
     def _log_account_summary(self, account_id: str, balances: Dict, positions: list, position_changed: bool, poll_type: str = "SCHEDULED"):
         """
