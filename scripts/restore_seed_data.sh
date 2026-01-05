@@ -46,6 +46,10 @@ find "$TEMP_DIR" -name ".DS_Store" -delete 2>/dev/null || true
 echo "📤 Copying to MongoDB container..."
 docker cp "$TEMP_DIR/dump" "$CONTAINER_NAME:/seed_restore_data"
 
+# Drop existing database to avoid duplicate key errors
+echo "🗑️  Dropping existing database..."
+docker exec "$CONTAINER_NAME" mongosh mathematricks_trading --quiet --eval "db.dropDatabase()"
+
 # Restore using mongorestore
 echo "🔄 Running mongorestore..."
 docker exec "$CONTAINER_NAME" mongorestore /seed_restore_data

@@ -12,13 +12,16 @@ TEMP_DIR="/tmp/mongodb_seed_$$"
 
 echo "Checking if database needs seeding..."
 
-# Check if database has any collections
-COLLECTIONS=$(mongosh "$MONGODB_URI/$DATABASE" --quiet --eval 'db.getCollectionNames().length')
+# Check if database has any user data (not system collections)
+# Look for the 'strategies' collection as an indicator of seed data
+STRATEGY_COUNT=$(mongosh "$MONGODB_URI/$DATABASE" --quiet --eval 'db.strategies.countDocuments()' 2>/dev/null || echo "0")
 
-if [ "$COLLECTIONS" -gt 0 ]; then
-    echo "✓ Database already has $COLLECTIONS collections. Skipping seed."
+if [ "$STRATEGY_COUNT" -gt 0 ]; then
+    echo "✓ Database already has $STRATEGY_COUNT strategies. Skipping seed."
     exit 0
 fi
+
+echo "📦 Database is empty (0 strategies found). Restoring from seed..."
 
 # Find latest seed file
 LATEST_SEED=$(ls -t "$SEED_DIR"/seed_*.tar.gz 2>/dev/null | head -1)
@@ -40,8 +43,13 @@ tar -xzf "$LATEST_SEED" -C "$TEMP_DIR"
 find "$TEMP_DIR" -name "._*" -delete
 find "$TEMP_DIR" -name ".DS_Store" -delete
 
+# Drop existing database (if any) to ensure clean restore
+echo "🗑️  Ensuring clean database..."
+mongosh "$MONGODB_URI/$DATABASE" --quiet --eval "db.dropDatabase()" > /dev/null 2>&1 || true
+
 # Restore from extracted data
-mongorestore --uri "$MONGODB_URI" "$TEMP_DIR"
+echo "📥 Restoring collections..."
+mongorestore --uri "$MONGODB_URI" "$TEMP_DIR/dump"
 
 # Clean up
 rm -rf "$TEMP_DIR"

@@ -1,6 +1,7 @@
 #!/bin/bash
-# Export last 50 documents from each collection in mathematricks_trading as seed file
-# Run this after applying fixes to create versioned seed data
+# Export complete database snapshot as seed file for testing
+# Captures entire mathematricks_trading database state for deterministic test restoration
+# Run this after database is in desired clean state (e.g., after Phase 7 setup, before Phase 8 testing)
 
 set -e
 
@@ -12,87 +13,140 @@ SEED_FILE="seed_${TIMESTAMP}.tar.gz"
 TEMP_DIR="/tmp/mongodb_export_$$"
 
 echo "============================================================"
-echo "MongoDB Seed Data Export (Last 50 docs per collection)"
+echo "MongoDB Seed Data Export - Full Database Snapshot"
 echo "============================================================"
-echo "Container: $CONTAINER_NAME"
-echo "Database: $DATABASE"
-echo "Output: $SEED_DIR/$SEED_FILE"
+echo "Container:  $CONTAINER_NAME"
+echo "Database:   $DATABASE"
+echo "Output:     $SEED_DIR/$SEED_FILE"
+echo "Timestamp:  $TIMESTAMP"
 echo ""
 
-# Check if container is running
+# Verify container is running
 if ! docker ps | grep -q "$CONTAINER_NAME"; then
     echo "❌ Error: Container $CONTAINER_NAME is not running"
-    echo "   Run 'make start' first"
+    echo "   Start services with: make start"
     exit 1
 fi
 
-# Create seed directory if it doesn't exist
-mkdir -p "$SEED_DIR"
+# Verify MongoDB is accessible
+if ! docker exec "$CONTAINER_NAME" mongosh "$DATABASE" --quiet --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+    echo "❌ Error: Cannot connect to MongoDB in container"
+    echo "   Verify container is healthy: docker ps"
+    exit 1
+fi
 
-# Create temp directory
+# Create directories
+mkdir -p "$SEED_DIR"
 mkdir -p "$TEMP_DIR"
 
-# Get list of collections in the database
-echo "📋 Fetching collection list..."
-COLLECTIONS=$(docker exec "$CONTAINER_NAME" mongosh "$DATABASE" --quiet --eval "db.getCollectionNames().join('\n')")
+# Use a predictable path in the container for the dump
+CONTAINER_DUMP_PATH="/tmp/mongo_dump_$$"
 
-if [ -z "$COLLECTIONS" ]; then
-    echo "❌ Error: Could not fetch collections from $DATABASE"
+# Export database using mongodump
+echo "📤 Exporting entire database..."
+echo ""
+
+docker exec "$CONTAINER_NAME" mongodump \
+    --db "$DATABASE" \
+    --out "$CONTAINER_DUMP_PATH/dump"
+
+if [ $? -ne 0 ]; then
+    echo "❌ Error: mongodump failed"
+    docker exec "$CONTAINER_NAME" rm -rf "$CONTAINER_DUMP_PATH"
     exit 1
 fi
 
-echo "📤 Exporting using mongodump (last 50 docs per collection)..."
-echo ""
+# Copy dump from container to host
+echo "📋 Copying dump from container to host..."
+docker cp "$CONTAINER_NAME:$CONTAINER_DUMP_PATH/dump" "$TEMP_DIR/"
 
-# Use mongodump with query to limit to last 50 documents per collection
-for COLLECTION in $COLLECTIONS; do
-    echo "  ↳ Dumping $COLLECTION..."
-    # Get count of documents
-    COUNT=$(docker exec "$CONTAINER_NAME" mongosh "$DATABASE" --quiet --eval "db.$COLLECTION.countDocuments()")
-    
-    # Calculate skip to get last 50 docs
-    SKIP=$((COUNT > 50 ? COUNT - 50 : 0))
-    
-    # Use mongodump to dump with skip to get last 50 documents
-    docker exec "$CONTAINER_NAME" mongodump \
-        --db "$DATABASE" \
-        --collection "$COLLECTION" \
-        --out "$TEMP_DIR/dump" \
-        --query "{}" \
-        --skip "$SKIP" \
-        --quiet
+if [ $? -ne 0 ]; then
+    echo "❌ Error: Failed to copy dump from container"
+    docker exec "$CONTAINER_NAME" rm -rf "$CONTAINER_DUMP_PATH"
+    exit 1
+fi
+
+# Clean up inside container
+docker exec "$CONTAINER_NAME" rm -rf "$CONTAINER_DUMP_PATH"
+
+# Verify dump directory was created and has content
+if [ ! -d "$TEMP_DIR/dump/$DATABASE" ]; then
+    echo "❌ Error: dump directory not found at $TEMP_DIR/dump/$DATABASE"
+    echo "   Contents of $TEMP_DIR/dump/:"
+    ls -la "$TEMP_DIR/dump/" || echo "   (empty)"
+    rm -rf "$TEMP_DIR"
+    exit 1
+fi
+
+# Count exported collections by BSON files
+COLLECTION_COUNT=$(find "$TEMP_DIR/dump/$DATABASE" -type f -name "*.bson" 2>/dev/null | wc -l)
+echo "✅ Exported $COLLECTION_COUNT collections:"
+
+# List each collection with document count
+for bson_file in "$TEMP_DIR/dump/$DATABASE"/*.bson; do
+    if [ -f "$bson_file" ]; then
+        collection_name=$(basename "$bson_file" .bson)
+        file_size=$(du -h "$bson_file" | cut -f1)
+        echo "   • $collection_name ($file_size)"
+    fi
 done
-
 echo ""
 
-# Create compressed archive (exclude macOS metadata files)
-echo "🗜️  Creating compressed tar.gz archive..."
-
-# Set COPYFILE_DISABLE to prevent macOS metadata files in tar
+# Create compressed archive (exclude macOS metadata)
+echo "🗜️  Creating compressed archive..."
 export COPYFILE_DISABLE=1
 
-cd "$TEMP_DIR"
-tar -czf "$SEED_FILE" dump/
-mv "$SEED_FILE" "$OLDPWD/$SEED_DIR/"
-cd "$OLDPWD"
+cd "$TEMP_DIR" || exit 1
+tar -czf "$SEED_FILE" dump/ 2>/dev/null
 
-# Clean up temp directory
+if [ $? -ne 0 ]; then
+    echo "❌ Error: tar compression failed"
+    cd "$OLDPWD"
+    rm -rf "$TEMP_DIR"
+    exit 1
+fi
+
+# Move to seed directory
+mv "$SEED_FILE" "$OLDPWD/$SEED_DIR/"
+cd "$OLDPWD" || exit 1
+
+# Cleanup temp directory
 rm -rf "$TEMP_DIR"
 
-# List recent seed files
+# Verify archive was created
+SEED_PATH="$SEED_DIR/$SEED_FILE"
+if [ ! -f "$SEED_PATH" ]; then
+    echo "❌ Error: Seed file was not created at $SEED_PATH"
+    exit 1
+fi
+
+SEED_SIZE=$(du -h "$SEED_PATH" | cut -f1)
+
+# Success summary
 echo ""
 echo "============================================================"
 echo "✅ SEED DATA EXPORT COMPLETE"
 echo "============================================================"
-echo "Seed file: $SEED_DIR/$SEED_FILE"
+echo "Seed File:  $SEED_PATH"
+echo "File Size:  $SEED_SIZE"
+echo "Created:    $(date)"
 echo ""
-echo "📦 Recent seed files:"
-ls -lht "$SEED_DIR"/seed_*.tar.gz 2>/dev/null | head -5 || echo "   (none)"
+
+# Show recent seed files
+echo "📦 Recent Backups:"
+ls -lh "$SEED_DIR"/seed_*.tar.gz 2>/dev/null | tail -5 | awk '{printf "   %s  %s\n", $5, $9}' || echo "   (none)"
 echo ""
-echo "📋 Next steps:"
-echo "1. Review: tar -tzf $SEED_DIR/$SEED_FILE | head -20"
-echo "2. Commit: git add $SEED_DIR/$SEED_FILE && git commit -m 'Add seed data $TIMESTAMP'"
-echo "3. Test: make clean && make start"
+
+# Next steps
+echo "📋 Next Steps:"
+echo "   1. Commit to git:"
+echo "      git add $SEED_PATH"
+echo "      git commit -m \"Add seed snapshot $TIMESTAMP\""
 echo ""
-echo "💡 Old seed files can be deleted manually if needed"
+echo "   2. Test restoration:"
+echo "      bash scripts/restore_seed_data.sh"
+echo ""
+echo "   3. Before each test run:"
+echo "      bash scripts/restore_seed_data.sh"
+echo "      cd tests/signals_testing && python run_full_test.py --folder sample_signals"
 echo ""
