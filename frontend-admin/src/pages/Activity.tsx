@@ -118,7 +118,10 @@ export const Activity: React.FC = () => {
               <table className="w-full">
                 <thead>
                   <tr>
-                    <th className="table-header">Timestamp</th>
+                    <th className="table-header">Signal Sent</th>
+                    <th className="table-header">Signal Received (Lag)</th>
+                    <th className="table-header">Execution Complete (Lag)</th>
+                    <th className="table-header">Type</th>
                     <th className="table-header">Signal ID</th>
                     <th className="table-header">Strategy</th>
                     <th className="table-header">Symbol</th>
@@ -134,14 +137,60 @@ export const Activity: React.FC = () => {
                     const isExpanded = expandedSignalId === signal.signal_id;
                     const hasDecision = signal.cerebro_decision && signal.decision_status;
 
+                    // Format timestamps
+                    const formatTimestamp = (ts: string | null) => {
+                      if (!ts) return 'N/A';
+                      return new Date(ts).toLocaleString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit'
+                      });
+                    };
+
+                    const formatLag = (seconds: number | null) => {
+                      if (seconds === null || seconds === undefined) return '';
+                      return `(${seconds.toFixed(2)}s)`;
+                    };
+
                     return (
                       <React.Fragment key={signal.signal_id}>
                         <tr className="hover:bg-gray-700/50">
                           <td className="table-cell text-sm">
                             <div className="flex items-center gap-2">
-                              <Clock className="h-4 w-4 text-gray-400" />
-                              {new Date(signal.created_at || signal.timestamp).toLocaleString()}
+                              <Clock className="h-4 w-4 text-blue-400" />
+                              {formatTimestamp(signal.signal_sent_timestamp)}
                             </div>
+                          </td>
+                          <td className="table-cell text-sm">
+                            <div>
+                              <div>{formatTimestamp(signal.signal_received_timestamp)}</div>
+                              {signal.receive_lag_seconds !== null && (
+                                <span className="text-xs text-gray-400">
+                                  {formatLag(signal.receive_lag_seconds)}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="table-cell text-sm">
+                            <div>
+                              <div>{formatTimestamp(signal.execution_completed_timestamp)}</div>
+                              {signal.execution_lag_seconds !== null && (
+                                <span className="text-xs text-gray-400">
+                                  {formatLag(signal.execution_lag_seconds)}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="table-cell">
+                            <span className={`px-2 py-1 rounded text-xs font-medium ${
+                              signal.signal_type === 'ENTRY' ? 'bg-green-900/30 text-green-400' : 
+                              signal.signal_type === 'EXIT' ? 'bg-red-900/30 text-red-400' :
+                              'bg-gray-700/30 text-gray-400'
+                            }`}>
+                              {signal.signal_type || 'UNKNOWN'}
+                            </span>
                           </td>
                           <td className="table-cell font-mono text-xs">{signal.signal_id}</td>
                           <td className="table-cell">
@@ -211,7 +260,7 @@ export const Activity: React.FC = () => {
                         {/* Expanded JSON viewer row */}
                         {isExpanded && hasDecision && (
                           <tr>
-                            <td colSpan={9} className="bg-gray-800/50 p-4">
+                            <td colSpan={12} className="bg-gray-800/50 p-4">
                               <div className="max-w-full overflow-x-auto">
                                 <h4 className="text-sm font-semibold text-white mb-2">Cerebro Decision Details</h4>
                                 <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-x-auto">

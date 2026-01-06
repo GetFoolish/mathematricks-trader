@@ -8,6 +8,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Allocations } from './pages/Allocations';
 import { Activity } from './pages/Activity';
 import { Strategies } from './pages/Strategies';
+import FundSetup from './pages/FundSetup';
 
 // Create a client
 const queryClient = new QueryClient({
@@ -43,6 +44,7 @@ function App() {
               <Route path="allocations" element={<Allocations />} />
               <Route path="activity" element={<Activity />} />
               <Route path="strategies" element={<Strategies />} />
+              <Route path="hedged-funds" element={<FundSetup />} />
             </Route>
 
             {/* Catch all - redirect to dashboard */}

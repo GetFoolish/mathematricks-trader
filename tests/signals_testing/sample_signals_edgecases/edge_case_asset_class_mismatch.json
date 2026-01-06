@@ -1,0 +1,27 @@
+[
+  {
+    "strategy_name": "Com1 - Met",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1736000100,
+    "signalID": "sig_edge_asset_mismatch_001",
+    "entry_name": "$ENTRY_1",
+    "account_equity": 500000,
+    "signal_legs": [
+      {
+        "instrument": "GC",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 2,
+        "order_type": "MARKET",
+        "price": 2050.0,
+        "stop_loss": 2040.0,
+        "take_profit": 2065.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "account_override": "binance_crypto_only",
+    "wait": 0
+  }
+]

@@ -1,19 +1,21 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../services/api';
-import { Check, Edit, Trash2, Play, TrendingUp, X, FileText } from 'lucide-react';
+import { Check, Edit, Trash2, Play, TrendingUp, X, FileText, ChevronDown, ChevronRight } from 'lucide-react';
 
 export const Allocations: React.FC = () => {
   const queryClient = useQueryClient();
 
-  // State for Part 1: Edit mode
-  const [isEditingCurrent, setIsEditingCurrent] = useState(false);
+  // State for Part 1: Edit mode (track which fund is being edited)
+  const [editingFundId, setEditingFundId] = useState<string | null>(null);
+  const [expandedAllocationId, setExpandedAllocationId] = useState<string | null>(null);
 
   // State for Part 2: Allocation Editor
   const [editorAllocations, setEditorAllocations] = useState<Record<string, number>>({});
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
   const [targetTotalAllocation, setTargetTotalAllocation] = useState<number | null>(null);
   const [isEditingTotal, setIsEditingTotal] = useState(false);
+  const [selectedFundId, setSelectedFundId] = useState<string>('');
 
   // State for Part 3: Table sorting
   const [sortField, setSortField] = useState<string>('created_at');
@@ -34,6 +36,12 @@ export const Allocations: React.FC = () => {
     queryFn: () => apiClient.getCurrentAllocation(),
   });
 
+  // Fetch all funds (for Part 2: Fund selector)
+  const { data: funds } = useQuery({
+    queryKey: ['funds'],
+    queryFn: () => apiClient.getFunds(),
+  });
+
   // Fetch all strategies (for Part 4: Research Lab)
   const { data: strategiesData } = useQuery({
     queryKey: ['strategies'],
@@ -52,12 +60,13 @@ export const Allocations: React.FC = () => {
 
   // Approve allocation (Part 2 -> Part 1)
   const approveMutation = useMutation({
-    mutationFn: (allocations: Record<string, number>) =>
-      apiClient.approveAllocation(allocations),
+    mutationFn: ({ allocations, fund_id }: { allocations: Record<string, number>; fund_id: string }) =>
+      apiClient.approveAllocation(allocations, fund_id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['currentAllocation'] });
       setEditorAllocations({});
       setSelectedTestId(null);
+      setSelectedFundId('');
     },
   });
 
@@ -90,28 +99,38 @@ export const Allocations: React.FC = () => {
   // HANDLERS
   // ============================================================================
 
-  const handleEditCurrent = () => {
-    if (currentAllocation?.allocation?.allocations) {
+  const handleEditCurrent = (fundId: string) => {
+    const allocationsByFund = currentAllocation?.allocations || {};
+    const fundAllocation = allocationsByFund[fundId];
+    
+    if (fundAllocation?.allocations) {
       // Sort once when entering edit mode, preserve order during editing
-      const sortedEntries = Object.entries(currentAllocation.allocation.allocations)
+      const sortedEntries = Object.entries(fundAllocation.allocations)
         .sort(([, a], [, b]) => (b as number) - (a as number));
       const sortedAllocations = Object.fromEntries(sortedEntries);
       setEditorAllocations(sortedAllocations);
       setSelectedTestId(null);
-      setIsEditingCurrent(true);
+      // Set the fund_id
+      setSelectedFundId(fundId);
+      setEditingFundId(fundId);
     }
   };
 
   const handleCancelEdit = () => {
-    setIsEditingCurrent(false);
+    setEditingFundId(null);
     setEditorAllocations({});
     setSelectedTestId(null);
+    setSelectedFundId('');
   };
 
   const handleSaveEdit = () => {
+    if (!selectedFundId) {
+      alert('Please select a fund before saving the allocation');
+      return;
+    }
     if (Object.keys(editorAllocations).length > 0) {
-      approveMutation.mutate(editorAllocations);
-      setIsEditingCurrent(false);
+      approveMutation.mutate({ allocations: editorAllocations, fund_id: selectedFundId });
+      setEditingFundId(null);
     }
   };
 
@@ -133,7 +152,7 @@ export const Allocations: React.FC = () => {
     const sortedAllocations = Object.fromEntries(sortedEntries);
     setEditorAllocations(sortedAllocations);
     setSelectedTestId(test.test_id);
-    setIsEditingCurrent(false);
+    setEditingFundId(null);
   };
 
   const handleAllocationChange = (strategyId: string, value: string) => {
@@ -142,8 +161,12 @@ export const Allocations: React.FC = () => {
   };
 
   const handleApprove = () => {
+    if (!selectedFundId) {
+      alert('Please select a fund before approving the allocation');
+      return;
+    }
     if (Object.keys(editorAllocations).length > 0) {
-      approveMutation.mutate(editorAllocations);
+      approveMutation.mutate({ allocations: editorAllocations, fund_id: selectedFundId });
     }
   };
 
@@ -228,111 +251,218 @@ export const Allocations: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* ====================================================================== */}
-      {/* PART 1: CURRENT ALLOCATION                                            */}
+      {/* PART 1: FUND ALLOCATIONS (All Funds with Summaries)                  */}
       {/* ====================================================================== */}
       <div className="card">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xl font-bold text-white">Part 1: Current Allocation</h3>
-          {currentAllocation?.allocation && !isEditingCurrent && (
-            <button
-              onClick={handleEditCurrent}
-              className="btn-secondary flex items-center gap-2"
-            >
-              <Edit className="h-4 w-4" />
-              Edit
-            </button>
-          )}
-          {isEditingCurrent && (
-            <div className="flex gap-2">
-              <button
-                onClick={handleCancelEdit}
-                className="btn-secondary flex items-center gap-2"
-              >
-                <X className="h-4 w-4" />
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveEdit}
-                disabled={approveMutation.isPending || getTotalAllocation() === 0}
-                className="btn-success flex items-center gap-2"
-              >
-                <Check className="h-4 w-4" />
-                {approveMutation.isPending ? 'Saving...' : 'Save'}
-              </button>
-            </div>
-          )}
+        <div className="mb-4">
+          <h3 className="text-xl font-bold text-white">Part 1: Fund Allocations</h3>
         </div>
 
-        {(isEditingCurrent ? Object.keys(editorAllocations).length > 0 : currentAllocation?.allocation?.allocations) ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-700">
-              <div>
-                <p className="text-sm text-gray-400">Total Allocation</p>
-                <p className="text-white font-bold text-xl">
-                  {isEditingCurrent
-                    ? getTotalAllocation().toFixed(1)
-                    : Object.values(currentAllocation.allocation.allocations).reduce((sum, val) => sum + val, 0).toFixed(1)
-                  }%
-                </p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-400">Number of Strategies</p>
-                <p className="text-white font-bold text-xl">
-                  {isEditingCurrent
-                    ? Object.keys(editorAllocations).length
-                    : Object.keys(currentAllocation.allocation.allocations).length
-                  }
-                </p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-400">Last Updated</p>
-                <p className="text-white font-medium">
-                  {new Date(currentAllocation.allocation.updated_at).toLocaleString()}
-                </p>
-              </div>
-            </div>
+        {/* Display all funds */}
+        {funds && funds.length > 0 ? (
+          <div className="space-y-3">
+            {funds.map((fund) => {
+              // Check if this fund has an active allocation from the allocations_by_fund object
+              const allocationsByFund = currentAllocation?.allocations || {};
+              const fundAllocation = allocationsByFund[fund.fund_id] || null;
+              const isEditingThisFund = editingFundId === fund.fund_id;
+              
+              const totalAllocation = fundAllocation
+                ? Object.values(fundAllocation.allocations).reduce((sum, val) => sum + val, 0)
+                : 0;
+              
+              const strategiesCount = fundAllocation
+                ? Object.keys(fundAllocation.allocations).length
+                : 0;
 
-            {isEditingCurrent && (
-              <button
-                onClick={handleNormalize}
-                className="btn-secondary text-sm"
-              >
-                Normalize to 100%
-              </button>
-            )}
-
-            <div className="space-y-3">
-              {Object.entries(isEditingCurrent ? editorAllocations : currentAllocation.allocation.allocations)
-                .sort(isEditingCurrent ? () => 0 : ([, a], [, b]) => (b as number) - (a as number))
-                .map(([strategyId, allocation]) => (
-                  <div key={strategyId}>
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-white font-medium">{strategyId}</p>
-                      <span className="text-white font-semibold w-20 text-right">
-                        {(allocation as number).toFixed(1)}%
-                      </span>
+              return (
+                <div
+                  key={fund.fund_id}
+                  className={`border border-gray-700 rounded-lg overflow-hidden transition-colors ${
+                    expandedAllocationId === fund.fund_id
+                      ? 'bg-gray-800 border-gray-600'
+                      : 'bg-gray-800/50 hover:bg-gray-800'
+                  }`}
+                >
+                  {/* Fund Header */}
+                  <div className="p-4 flex items-center justify-between">
+                    {/* Left side: expandable content */}
+                    <div
+                      onClick={() => setExpandedAllocationId(
+                        expandedAllocationId === fund.fund_id ? null : fund.fund_id
+                      )}
+                      className="cursor-pointer flex items-center gap-3 flex-1"
+                    >
+                      {expandedAllocationId === fund.fund_id ? (
+                        <ChevronDown className="h-5 w-5 text-blue-400 flex-shrink-0" />
+                      ) : (
+                        <ChevronRight className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                      )}
+                      <div>
+                        <p className="text-white font-bold text-lg">{fund.name}</p>
+                        <p className="text-sm text-gray-400">{fund.fund_id}</p>
+                      </div>
                     </div>
-                    {isEditingCurrent ? (
-                      <input
-                        type="range"
-                        value={allocation as number}
-                        onChange={(e) => handleAllocationChange(strategyId, e.target.value)}
-                        min="0"
-                        max="100"
-                        step="0.1"
-                        className="w-full h-2.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-blue-500"
-                      />
-                    ) : (
-                      <div className="bg-gray-700 rounded-full h-2.5 overflow-hidden">
-                        <div
-                          className="bg-green-500 h-full transition-all"
-                          style={{ width: `${(allocation as number)}%` }}
-                        />
+
+                    {/* Summary Stats (Collapsed View) */}
+                    {expandedAllocationId !== fund.fund_id && (
+                      <div className="flex items-center gap-6">
+                        <div className="text-right">
+                          <p className="text-gray-400 text-xs">Total Allocation</p>
+                          <p className="text-white font-bold">
+                            {fundAllocation ? `${totalAllocation.toFixed(1)}%` : 'NA'}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-gray-400 text-xs">Strategies</p>
+                          <p className="text-white font-bold">
+                            {fundAllocation ? strategiesCount : 'NA'}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-gray-400 text-xs">Updated</p>
+                          <p className="text-white font-bold text-sm">
+                            {fundAllocation 
+                              ? new Date(fundAllocation.updated_at).toLocaleDateString()
+                              : 'NA'}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Action Buttons (Right side) */}
+                    {fundAllocation && !isEditingThisFund && (
+                      <button
+                        onClick={() => handleEditCurrent(fund.fund_id)}
+                        className="btn-secondary flex items-center gap-2 ml-4"
+                      >
+                        <Edit className="h-4 w-4" />
+                        Edit
+                      </button>
+                    )}
+                    {isEditingThisFund && (
+                      <div className="flex gap-2 ml-4">
+                        <button
+                          onClick={handleCancelEdit}
+                          className="btn-secondary flex items-center gap-2"
+                        >
+                          <X className="h-4 w-4" />
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleSaveEdit}
+                          disabled={approveMutation.isPending || getTotalAllocation() === 0}
+                          className="btn-success flex items-center gap-2"
+                        >
+                          <Check className="h-4 w-4" />
+                          {approveMutation.isPending ? 'Saving...' : 'Save'}
+                        </button>
                       </div>
                     )}
                   </div>
-                ))}
-            </div>
+
+                  {/* Expanded Details */}
+                  {expandedAllocationId === fund.fund_id && fundAllocation && (
+                    <div className="bg-gray-900 border-t border-gray-700 p-4 space-y-4">
+                      {/* Summary Grid */}
+                      <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-700">
+                        <div>
+                          <p className="text-sm text-gray-400">Total Allocation</p>
+                          <p className="text-white font-bold text-lg">
+                            {isEditingThisFund
+                              ? getTotalAllocation().toFixed(1)
+                              : totalAllocation.toFixed(1)}%
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-sm text-gray-400">Number of Strategies</p>
+                          <p className="text-white font-bold text-lg">
+                            {isEditingThisFund
+                              ? Object.keys(editorAllocations).length
+                              : strategiesCount}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-sm text-gray-400">Last Updated</p>
+                          <p className="text-white font-medium">
+                            {new Date(fundAllocation.updated_at).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Fund Selector (Edit Mode) */}
+                      {isEditingThisFund && (
+                        <div className="pb-4 border-b border-gray-700">
+                          <p className="text-sm text-gray-400 mb-2">Assign to Fund</p>
+                          <select
+                            value={selectedFundId}
+                            onChange={(e) => setSelectedFundId(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                            required
+                          >
+                            <option value="">Select Fund</option>
+                            {funds?.map((f) => (
+                              <option key={f.fund_id} value={f.fund_id}>
+                                {f.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Normalize Button (Edit Mode) */}
+                      {isEditingThisFund && (
+                        <button
+                          onClick={handleNormalize}
+                          className="btn-secondary text-sm w-full"
+                        >
+                          Normalize to 100%
+                        </button>
+                      )}
+
+                      {/* Strategy Allocations */}
+                      <div className="space-y-3">
+                        <p className="text-sm text-gray-400 font-semibold">Strategy Allocations</p>
+                        {Object.entries(isEditingThisFund
+                          ? editorAllocations 
+                          : fundAllocation.allocations)
+                          .sort(isEditingThisFund
+                            ? () => 0 
+                            : ([, a], [, b]) => (b as number) - (a as number))
+                          .map(([strategyId, allocation]) => (
+                            <div key={strategyId}>
+                              <div className="flex items-center justify-between mb-2">
+                                <p className="text-white font-medium">{strategyId}</p>
+                                <span className="text-white font-semibold w-20 text-right">
+                                  {(allocation as number).toFixed(1)}%
+                                </span>
+                              </div>
+                              {isEditingThisFund ? (
+                                <input
+                                  type="range"
+                                  value={allocation as number}
+                                  onChange={(e) => handleAllocationChange(strategyId, e.target.value)}
+                                  min="0"
+                                  max="100"
+                                  step="0.1"
+                                  className="w-full h-2.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-blue-500"
+                                />
+                              ) : (
+                                <div className="bg-gray-700 rounded-full h-2.5 overflow-hidden">
+                                  <div
+                                    className="bg-green-500 h-full transition-all"
+                                    style={{ width: `${(allocation as number)}%` }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div className="text-center py-12">
@@ -345,7 +475,7 @@ export const Allocations: React.FC = () => {
       {/* ====================================================================== */}
       {/* PART 2: ALLOCATION EDITOR                                             */}
       {/* ====================================================================== */}
-      {!isEditingCurrent && (
+      {!editingFundId && (
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-xl font-bold text-white">Part 2: Allocation Editor</h3>
@@ -364,7 +494,7 @@ export const Allocations: React.FC = () => {
           {Object.keys(editorAllocations).length > 0 ? (
             <div className="space-y-4">
               {/* Total Allocation Display */}
-              <div className="grid grid-cols-3 gap-4 pb-4 border-b border-gray-700">
+              <div className="grid grid-cols-4 gap-4 pb-4 border-b border-gray-700">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <p className="text-sm text-gray-400">Total Allocation</p>
@@ -439,6 +569,22 @@ export const Allocations: React.FC = () => {
                   <p className="text-white font-bold text-xl">
                     {Object.keys(editorAllocations).length}
                   </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">Assign to Fund</p>
+                  <select
+                    value={selectedFundId}
+                    onChange={(e) => setSelectedFundId(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                    required
+                  >
+                    <option value="">Select Fund</option>
+                    {funds?.map((fund) => (
+                      <option key={fund.fund_id} value={fund.fund_id}>
+                        {fund.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <p className="text-sm text-gray-400">Source</p>

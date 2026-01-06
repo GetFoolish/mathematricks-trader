@@ -1,0 +1,26 @@
+[
+  {
+    "strategy_name": "Com1 - Met",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1736000000,
+    "signalID": "sig_edge_insufficient_margin_001",
+    "entry_name": "$ENTRY_1",
+    "account_equity": 500000,
+    "signal_legs": [
+      {
+        "instrument": "GC",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 100,
+        "order_type": "MARKET",
+        "price": 2050.0,
+        "stop_loss": 2040.0,
+        "take_profit": 2065.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 0
+  }
+]

@@ -21,12 +21,47 @@ import os
 import sys
 import random
 import time
+import logging
 from pymongo import MongoClient
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+
+def setup_logging():
+    """Setup dual logging to console and file"""
+    # Create logs directory if it doesn't exist
+    os.makedirs('logs', exist_ok=True)
+    
+    # Create logger
+    logger = logging.getLogger('send_test_signal')
+    logger.setLevel(logging.INFO)
+    
+    # Remove existing handlers
+    logger.handlers = []
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(message)s')
+    console_handler.setFormatter(console_formatter)
+    
+    # File handler
+    file_handler = logging.FileHandler('logs/testing.log', mode='a')
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter('%(message)s')
+    file_handler.setFormatter(file_formatter)
+    
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    
+    return logger
+
+
+# Initialize logger
+logger = setup_logging()
 
 
 def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None):
@@ -83,8 +118,8 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
     }
 
     # Auto-generate fields if missing
-    if "signal_sent_EPOCH" not in signal_doc:
-        signal_doc["signal_sent_EPOCH"] = int(now_utc.timestamp())
+    # ALWAYS use current timestamp (override any hardcoded values from JSON)
+    signal_doc["signal_sent_EPOCH"] = int(now_utc.timestamp())
 
     if "signalID" not in signal_doc:
         # Simple auto-generated ID: just timestamp_random
@@ -208,6 +243,141 @@ def list_strategies():
     client.close()
 
 
+def process_folder(folder_path: str, seed: int = 1, delay_override: int = None):
+    """
+    Load and send all JSON signal files from a folder
+    
+    Args:
+        folder_path: Path to folder containing *.json signal files
+        seed: Seed for shuffling (0=random, positive=reproducible, negative=no shuffle)
+        delay_override: Override wait time between signals (seconds). None = use signal's wait value
+    """
+    import glob
+    
+    # Log separator for new test run
+    logger.info("\n" + "-" * 100)
+    logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] NEW SIGNAL SEND STARTED")
+    logger.info("-" * 100 + "\n")
+    
+    # Validate folder exists
+    if not os.path.isdir(folder_path):
+        logger.info(f"❌ Folder not found: {folder_path}")
+        sys.exit(1)
+    
+    # Find all .json files in folder
+    json_files = sorted(glob.glob(os.path.join(folder_path, "*.json")))
+    
+    if not json_files:
+        logger.info(f"❌ No .json files found in: {folder_path}")
+        sys.exit(1)
+    
+    logger.info("\n" + "=" * 80)
+    logger.info(f"📁 Loading signals from folder: {folder_path}")
+    logger.info(f"   Found {len(json_files)} signal files")
+    logger.info("=" * 80)
+    
+    # Load all signals from all files
+    all_signals = []
+    signal_sources = {}  # Track which file each signal came from
+    
+    for json_file in json_files:
+        try:
+            with open(json_file, 'r') as f:
+                file_signals = json.load(f)
+            
+            # Handle both array and single signal formats
+            if isinstance(file_signals, list):
+                for sig in file_signals:
+                    all_signals.append(sig)
+                    signal_sources[len(all_signals) - 1] = os.path.basename(json_file)
+            else:
+                all_signals.append(file_signals)
+                signal_sources[len(all_signals) - 1] = os.path.basename(json_file)
+            
+            print(f"✓ Loaded {len(file_signals) if isinstance(file_signals, list) else 1} signal(s) from {os.path.basename(json_file)}")
+        
+        except json.JSONDecodeError as e:
+            print(f"❌ Invalid JSON in {os.path.basename(json_file)}: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"❌ Error reading {os.path.basename(json_file)}: {e}")
+            sys.exit(1)
+    
+    print(f"\n📊 Total signals loaded: {len(all_signals)}")
+    
+    # Apply shuffling if seed provided
+    if seed >= 0:
+        random.seed(seed)
+        random.shuffle(all_signals)
+        shuffle_type = "reproducible" if seed > 0 else "randomized"
+        print(f"🔀 Shuffled signals ({shuffle_type}, seed={seed})")
+    else:
+        print(f"📌 Signal order preserved (seed={seed})")
+    
+    print("=" * 80 + "\n")
+    
+    # Send all signals
+    total_wait_time = 0
+    entry_id_registry = {}
+    
+    for i, signal_payload in enumerate(all_signals, 1):
+        # Validate signal
+        _validate_signal_payload(signal_payload, allow_signal_type=True)
+        
+        # Get signal type for display
+        signal_type = signal_payload.get("signal_type", "UNKNOWN").upper()
+        source_file = signal_sources.get(i - 1, "unknown")
+        logger.info(f"{'🔵' if signal_type == 'ENTRY' else '🔴'} [{source_file}] Signal {i}/{len(all_signals)} ({signal_type})...")
+        
+        # For EXIT signals, resolve variable reference before sending
+        resolved_entry_id = None
+        if signal_type == "EXIT":
+            entry_ref = signal_payload.get("entry_signal_id", "$PREVIOUS")
+            if entry_ref and entry_ref.startswith("$"):
+                if entry_ref in entry_id_registry:
+                    resolved_entry_id = entry_id_registry[entry_ref]
+                    logger.info(f"   ✓ Resolved {entry_ref} → {resolved_entry_id[:12]}...")
+                elif entry_ref != "$PREVIOUS":
+                    logger.info(f"   ⚠️  WARNING: Variable {entry_ref} not found in registry")
+        
+        # Send signal
+        result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id)
+        
+        # Capture ENTRY signal_store ID and register named variable
+        if signal_type == "ENTRY" and result and result.get("signal_store_id"):
+            entry_store_id = result["signal_store_id"]
+            
+            # Register named variable if provided (e.g., "$ENTRY_1")
+            entry_name = signal_payload.get("entry_name")
+            if entry_name:
+                entry_id_registry[entry_name] = entry_store_id
+                print(f"   ✓ Registered {entry_name} → {entry_store_id[:12]}...")
+            
+            # Always keep $PREVIOUS for backward compatibility
+            entry_id_registry["$PREVIOUS"] = entry_store_id
+        
+        # Wait if specified
+        wait_seconds = signal_payload.get("wait", 0)
+        
+        # Apply delay override if provided
+        if delay_override is not None:
+            wait_seconds = delay_override
+        
+        if wait_seconds > 0 and i < len(all_signals):  # Don't wait after last signal
+            print(f"   ⏳ Waiting {wait_seconds} seconds before next signal...")
+            time.sleep(wait_seconds)
+            total_wait_time += wait_seconds
+        
+        print()  # Blank line between signals
+    
+    print("\n" + "=" * 80)
+    print(f"✅ All {len(all_signals)} Signals Sent Successfully")
+    print("=" * 80)
+    if total_wait_time > 0:
+        print(f"⏱️  Total wait time: {total_wait_time} seconds")
+    print("")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Send test signal directly to MongoDB (mimics webhook)",
@@ -223,7 +393,14 @@ Examples:
   3. Pairs trading signal (multi-leg):
      python send_test_signal.py @pairs_signal_equity_1.json
 
-  4. List available strategies:
+  4. Send all signals from folder (with reproducible shuffle):
+     python send_test_signal.py --folder sample_signals/
+     python send_test_signal.py --folder sample_signals/ --seed 42
+
+  5. Send signals with randomized order each run:
+     python send_test_signal.py --folder sample_signals/ --seed 0
+
+  6. List available strategies:
      python send_test_signal.py --list-strategies
 
 Signal Format (Array):
@@ -282,6 +459,23 @@ See sample files in services/signal_ingestion/sample_signals/
         help="Path to JSON signal file (alternative to @filename syntax)"
     )
     parser.add_argument(
+        "--folder",
+        dest="folder_path",
+        help="Path to folder containing JSON signal files (*.json) - all files processed in order"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        dest="seed",
+        help="Seed for signal shuffling (positive=reproducible, 0=randomized). Overrides SIGNAL_TEST_SEED env var"
+    )
+    parser.add_argument(
+        "--delay",
+        type=int,
+        dest="delay_override",
+        help="Override wait time between signals in seconds (default: use signal's wait value)"
+    )
+    parser.add_argument(
         "--list-strategies",
         action="store_true",
         help="List available strategies from MongoDB"
@@ -292,6 +486,19 @@ See sample files in services/signal_ingestion/sample_signals/
     # List strategies mode
     if args.list_strategies:
         list_strategies()
+        return
+
+    # Handle --folder option
+    if args.folder_path:
+        # Get seed from CLI override or environment variable
+        seed = args.seed
+        if seed is None:
+            try:
+                seed = int(os.getenv('SIGNAL_TEST_SEED', '1'))
+            except ValueError:
+                seed = 1
+        
+        process_folder(args.folder_path, seed, delay_override=args.delay_override)
         return
 
     # Handle --file option

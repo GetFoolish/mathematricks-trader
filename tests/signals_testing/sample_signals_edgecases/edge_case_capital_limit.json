@@ -1,0 +1,31 @@
+[
+  {
+    "strategy_name": "SPX 1 - D Opt",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1736000200,
+    "signalID": "sig_edge_capital_limit_001",
+    "entry_name": "$ENTRY_1",
+    "account_equity": 500000,
+    "allocation_usage_pct": 90,
+    "signal_legs": [
+      {
+        "instrument": "SPY",
+        "instrument_type": "OPTION",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 50,
+        "order_type": "MARKET",
+        "price": 2.0,
+        "underlying": "SPY",
+        "strike": 580.0,
+        "expiry": "20260106",
+        "right": "C",
+        "stop_loss": 1.0,
+        "take_profit": 3.5
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 0
+  }
+]

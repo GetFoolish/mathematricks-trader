@@ -13,8 +13,10 @@ services:
     ports:
       - "5678:5678" # Debug port
     depends_on:
-      - mongodb-init
-      - pubsub-emulator
+      mongodb:
+        condition: service_healthy
+      pubsub-emulator:
+        condition: service_started
     environment:
       - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
       - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
@@ -34,9 +36,12 @@ services:
     ports:
       - "5679:5679" # Debug port
     depends_on:
-      - mongodb-init
-      - pubsub-emulator
-      - pubsub-init
+      mongodb:
+        condition: service_healthy
+      pubsub-emulator:
+        condition: service_started
+      pubsub-init:
+        condition: service_completed_successfully
     environment:
       - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
       - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
@@ -53,8 +58,10 @@ services:
     volumes:
       - ./services:/app/services
     depends_on:
-      - mongodb-init
-      - pubsub-emulator
+      mongodb:
+        condition: service_healthy
+      pubsub-emulator:
+        condition: service_started
     environment:
       - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
       - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
@@ -97,9 +104,12 @@ services:
     volumes:
       - ./services:/app/services
     depends_on:
-      - mongodb-init
-      - pubsub-emulator
-      - pubsub-init
+      mongodb:
+        condition: service_healthy
+      pubsub-emulator:
+        condition: service_started
+      pubsub-init:
+        condition: service_completed_successfully
     environment:
       - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
       - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
@@ -118,7 +128,8 @@ services:
     ports:
       - "8003:8003"
     depends_on:
-      - mongodb-init
+      mongodb:
+        condition: service_healthy
     environment:
       - MONGODB_URI=${MONGODB_URI}
       - PYTHONPATH=/app/services/portfolio_builder:/app
@@ -136,7 +147,8 @@ services:
     ports:
       - "8004:8004"
     depends_on:
-      - mongodb-init
+      mongodb:
+        condition: service_healthy
     environment:
       - MONGODB_URI=${MONGODB_URI}
       - PYTHONPATH=/app/services/dashboard_creator:/app
