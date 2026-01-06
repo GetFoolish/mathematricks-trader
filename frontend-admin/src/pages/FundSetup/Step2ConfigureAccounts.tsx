@@ -13,34 +13,44 @@ interface Props {
 const DEFAULT_ASSET_CLASSES: AssetClasses = {
   equity: [],
   futures: [],
+  options: [],
   crypto: [],
   forex: [],
+  commodities: [],
 };
 
 const BROKER_DEFAULT_ASSET_CLASSES: Record<string, AssetClasses> = {
   IBKR: {
     equity: ['all'],
     futures: ['all'],
-    forex: ['all'],
+    options: ['all'],
     crypto: [],
+    forex: ['all'],
+    commodities: [],
   },
   Binance: {
     equity: [],
     futures: [],
-    forex: [],
+    options: [],
     crypto: ['all'],
+    forex: [],
+    commodities: [],
   },
   Alpaca: {
     equity: ['all'],
     futures: [],
-    forex: [],
+    options: [],
     crypto: [],
+    forex: [],
+    commodities: [],
   },
   Mock: {
     equity: ['all'],
     futures: ['all'],
-    forex: ['all'],
+    options: ['all'],
     crypto: ['all'],
+    forex: ['all'],
+    commodities: ['all'],
   },
 };
 
@@ -132,28 +142,43 @@ export default function Step2ConfigureAccounts({ funds, accounts, setAccounts }:
   };
 
   const handleAssetClassSymbols = (assetClass: keyof AssetClasses, symbols: string) => {
-    const symbolArray = symbols.split(',').map((s) => s.trim()).filter(Boolean);
+    // Don't split yet - just store the raw input
+    // We'll split on submit or when validating
     setFormData({
       ...formData,
       asset_classes: {
         ...formData.asset_classes,
-        [assetClass]: symbolArray.length > 0 ? symbolArray : [],
+        [assetClass]: symbols ? [symbols] : [''],
       },
     });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Transform asset_classes: split comma-separated strings into arrays
+    const processedAssetClasses: AssetClasses = {
+      equity: formData.asset_classes.equity?.[0] === 'all' ? ['all'] : (formData.asset_classes.equity?.[0]?.split(',').map(s => s.trim()).filter(Boolean) || []),
+      futures: formData.asset_classes.futures?.[0] === 'all' ? ['all'] : (formData.asset_classes.futures?.[0]?.split(',').map(s => s.trim()).filter(Boolean) || []),
+      options: formData.asset_classes.options?.[0] === 'all' ? ['all'] : (formData.asset_classes.options?.[0]?.split(',').map(s => s.trim()).filter(Boolean) || []),
+      crypto: formData.asset_classes.crypto?.[0] === 'all' ? ['all'] : (formData.asset_classes.crypto?.[0]?.split(',').map(s => s.trim()).filter(Boolean) || []),
+      forex: formData.asset_classes.forex?.[0] === 'all' ? ['all'] : (formData.asset_classes.forex?.[0]?.split(',').map(s => s.trim()).filter(Boolean) || []),
+      commodities: formData.asset_classes.commodities?.[0] === 'all' ? ['all'] : (formData.asset_classes.commodities?.[0]?.split(',').map(s => s.trim()).filter(Boolean) || []),
+    };
+    
     if (editingAccount) {
       updateMutation.mutate({
         accountId: editingAccount.account_id,
         data: {
           fund_id: formData.fund_id,
-          asset_classes: formData.asset_classes,
+          asset_classes: processedAssetClasses,
         },
       });
     } else {
-      createMutation.mutate(formData);
+      createMutation.mutate({
+        ...formData,
+        asset_classes: processedAssetClasses,
+      });
     }
   };
 
@@ -430,33 +455,85 @@ export default function Step2ConfigureAccounts({ funds, accounts, setAccounts }:
                   Asset Classes *
                 </label>
                 <div className="space-y-3 p-4 border border-gray-300 dark:border-gray-600 rounded-lg">
-                  {(['equity', 'futures', 'crypto', 'forex'] as const).map((assetClass) => {
-                    const isAll = formData.asset_classes[assetClass]?.[0] === 'all';
-                    const isEnabled = formData.asset_classes[assetClass]?.length > 0;
-                    const symbols = isAll ? '' : formData.asset_classes[assetClass]?.join(', ') || '';
+                  {(['equity', 'futures', 'options', 'crypto', 'forex', 'commodities'] as const).map((assetClass) => {
+                    const values = formData.asset_classes[assetClass] || [];
+                    const isAll = values[0] === 'all';
+                    const isSpecific = values.length > 0 && !isAll;
+                    const isEnabled = isAll || isSpecific;
+                    // For display, show the raw string (not split by comma)
+                    const symbols = isSpecific ? values[0] || '' : '';
 
                     return (
                       <div key={assetClass} className="border-b border-gray-200 dark:border-gray-700 pb-3 last:border-0">
                         <div className="flex items-center mb-2">
                           <input
                             type="checkbox"
-                            id={`${assetClass}-all`}
-                            checked={isAll}
-                            onChange={(e) => handleAssetClassToggle(assetClass, e.target.checked)}
-                            className="mr-2"
+                            id={`${assetClass}-enabled`}
+                            checked={isEnabled}
+                            onChange={(e) => {
+                              if (!e.target.checked) {
+                                // Disabling the asset class
+                                handleAssetClassToggle(assetClass, false);
+                              } else {
+                                // Enabling - set to 'all' by default
+                                handleAssetClassToggle(assetClass, true);
+                              }
+                            }}
+                            className="mr-2 h-4 w-4"
                           />
-                          <label htmlFor={`${assetClass}-all`} className="font-medium capitalize">
-                            {assetClass} - All
+                          <label htmlFor={`${assetClass}-enabled`} className="font-medium capitalize text-sm">
+                            {assetClass}
                           </label>
                         </div>
-                        {isEnabled && !isAll && (
-                          <input
-                            type="text"
-                            value={symbols}
-                            onChange={(e) => handleAssetClassSymbols(assetClass, e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                            placeholder="Comma-separated symbols (e.g., SPY, QQQ, AAPL)"
-                          />
+                        {isEnabled && (
+                          <div className="ml-6 space-y-2">
+                            <div className="flex items-center">
+                              <input
+                                type="radio"
+                                id={`${assetClass}-all-radio`}
+                                name={`${assetClass}-mode`}
+                                checked={isAll}
+                                onChange={() => handleAssetClassToggle(assetClass, true)}
+                                className="mr-2 h-4 w-4"
+                              />
+                              <label htmlFor={`${assetClass}-all-radio`} className="text-sm text-gray-700 dark:text-gray-300">
+                                All symbols
+                              </label>
+                            </div>
+                            <div className="flex items-start">
+                              <input
+                                type="radio"
+                                id={`${assetClass}-specific-radio`}
+                                name={`${assetClass}-mode`}
+                                checked={isSpecific}
+                                onChange={() => {
+                                  // Set to empty array with a placeholder to keep it "enabled"
+                                  setFormData({
+                                    ...formData,
+                                    asset_classes: {
+                                      ...formData.asset_classes,
+                                      [assetClass]: [''], // Placeholder to keep enabled
+                                    },
+                                  });
+                                }}
+                                className="mr-2 h-4 w-4 mt-1"
+                              />
+                              <div className="flex-1">
+                                <label htmlFor={`${assetClass}-specific-radio`} className="text-sm text-gray-700 dark:text-gray-300 block mb-1">
+                                  Specific symbols
+                                </label>
+                                {isSpecific && (
+                                  <input
+                                    type="text"
+                                    value={symbols}
+                                    onChange={(e) => handleAssetClassSymbols(assetClass, e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                                    placeholder={`e.g., ${assetClass === 'equity' ? 'SPY, QQQ, AAPL' : assetClass === 'crypto' ? 'BTC, ETH, USDT' : assetClass === 'forex' ? 'EURUSD, GBPUSD' : assetClass === 'options' ? 'SPY_C_580' : assetClass === 'commodities' ? 'XAUUSD, XAGUSD' : 'GC, SI, CL'}`}
+                                  />
+                                )}
+                              </div>
+                            </div>
+                          </div>
                         )}
                       </div>
                     );

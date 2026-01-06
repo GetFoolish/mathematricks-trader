@@ -193,8 +193,10 @@ export interface Fund {
 export interface AssetClasses {
   equity: string[];  // ['all'] or specific symbols
   futures: string[];
+  options: string[];
   crypto: string[];
   forex: string[];
+  commodities: string[];
 }
 
 export interface TradingAccount {
