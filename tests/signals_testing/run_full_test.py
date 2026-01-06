@@ -30,19 +30,23 @@ import argparse
 import json
 import os
 import sys
-import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Add current directory to path to import send_test_signal
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import send_test_signal
 
-def run_test(folder_path: str = "sample_signals", seed: int = None, output_dir: str = "test_results"):
+
+def run_test(folder_path: str = "sample_signals", seed: int = None, delay: int = None, output_dir: str = "test_results"):
     """
     Run full test suite from a signal folder
     
     Args:
         folder_path: Path to folder containing signal JSON files
         seed: Random seed (None=use SIGNAL_TEST_SEED from .env)
+        delay: Delay between signals in seconds (None=use signal's wait value)
         output_dir: Directory to save test results
     """
     # Create output directory
@@ -68,93 +72,53 @@ def run_test(folder_path: str = "sample_signals", seed: int = None, output_dir: 
             seed = 1
     
     print(f"🔀 Seed:           {seed} ({'reproducible' if seed > 0 else 'randomized' if seed == 0 else 'ordered'})")
+    
+    if delay is not None:
+        print(f"⏱️  Delay:          {delay} seconds between signals")
+    
     print("=" * 80 + "\n")
     
-    # Build send_test_signal.py command
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    send_script = os.path.join(script_dir, "send_test_signal.py")
-    
-    if not os.path.exists(send_script):
-        print(f"❌ Error: send_test_signal.py not found at {send_script}")
-        sys.exit(1)
-    
-    # Run send_test_signal.py with folder and seed
-    cmd = [
-        sys.executable,
-        send_script,
-        "--folder", folder_path,
-        "--seed", str(seed)
-    ]
-    
-    print(f"📡 Running: {' '.join(cmd)}\n")
-    
-    # Capture results
-    test_results = {
-        "run_id": run_id,
-        "timestamp": now.isoformat(),
-        "folder": folder_path,
-        "seed": seed,
-        "command": " ".join(cmd),
-        "status": "running",
-        "signals_sent": 0,
-        "signals_failed": 0,
-        "duration_seconds": 0,
-        "start_time": now.isoformat()
-    }
-    
-    # Execute send_test_signal.py
+    # Run send_test_signal.process_folder directly
     start_time = time.time()
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=script_dir,
-            capture_output=True,
-            text=True,
-            timeout=600  # 10 minute timeout
-        )
+        # Call the function directly instead of subprocess
+        send_test_signal.process_folder(folder_path, seed, delay_override=delay)
         
         elapsed = time.time() - start_time
-        test_results["duration_seconds"] = elapsed
-        test_results["end_time"] = datetime.now(timezone.utc).isoformat()
         
-        # Process output
-        stdout = result.stdout
-        stderr = result.stderr
+        # Build test results
+        test_results = {
+            "run_id": run_id,
+            "timestamp": now.isoformat(),
+            "folder": folder_path,
+            "seed": seed,
+            "delay": delay,
+            "status": "success",
+            "duration_seconds": elapsed,
+            "start_time": now.isoformat(),
+            "end_time": datetime.now(timezone.utc).isoformat()
+        }
         
-        # Save raw output
-        with open(os.path.join(output_dir, f"{run_id}_output.txt"), 'w') as f:
-            f.write("=== STDOUT ===\n")
-            f.write(stdout)
-            f.write("\n\n=== STDERR ===\n")
-            f.write(stderr)
-        
-        # Parse results from output
-        # Count successful signals (look for "✅ Test Signal Inserted")
-        success_count = stdout.count("✅ Test Signal Inserted Successfully")
-        test_results["signals_sent"] = success_count
-        
-        if result.returncode == 0:
-            test_results["status"] = "success"
-            print(f"\n✅ Test suite completed successfully")
-        else:
-            test_results["status"] = "failed"
-            print(f"\n❌ Test suite failed with exit code {result.returncode}")
-            if stderr:
-                print(f"\nErrors:\n{stderr}")
-        
-        # Print summary from output
+        print(f"\n✅ Test suite completed successfully")
         print(f"\n📊 Results Summary:")
-        print(f"   Signals sent: {test_results['signals_sent']}")
-        print(f"   Duration:     {test_results['duration_seconds']:.2f} seconds")
+        print(f"   Duration:     {elapsed:.2f} seconds")
         
-    except subprocess.TimeoutExpired:
-        test_results["status"] = "timeout"
-        test_results["error"] = "Test suite timeout (10 minutes)"
-        print(f"\n❌ Test suite timed out after 10 minutes")
     except Exception as e:
-        test_results["status"] = "error"
-        test_results["error"] = str(e)
+        test_results = {
+            "run_id": run_id,
+            "timestamp": now.isoformat(),
+            "folder": folder_path,
+            "seed": seed,
+            "delay": delay,
+            "status": "error",
+            "error": str(e),
+            "duration_seconds": time.time() - start_time,
+            "start_time": now.isoformat(),
+            "end_time": datetime.now(timezone.utc).isoformat()
+        }
         print(f"\n❌ Error running test suite: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Save test results JSON
     results_file = os.path.join(output_dir, f"{run_id}_results.json")
@@ -222,6 +186,14 @@ Test Results:
     )
     
     parser.add_argument(
+        "--delay",
+        type=int,
+        dest="delay",
+        default=6,
+        help="Delay between signals in seconds (default: 6). Use 0 for signal's wait value"
+    )
+    
+    parser.add_argument(
         "--output-dir",
         dest="output_dir",
         default="test_results",
@@ -235,10 +207,14 @@ Test Results:
         print(f"❌ Folder not found: {args.folder_path}")
         sys.exit(1)
     
+    # Convert delay=0 to None (use signal's wait value)
+    delay = None if args.delay == 0 else args.delay
+    
     # Run test
     exit_code = run_test(
         folder_path=args.folder_path,
         seed=args.seed,
+        delay=delay,
         output_dir=args.output_dir
     )
     

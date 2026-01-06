@@ -721,6 +721,45 @@ async def get_recent_signals(limit: int = 50, environment: str = None):
                     cerebro_decision.pop('_id', None)
                 decision_status = cerebro_decision.get('decision', 'PENDING')
 
+            # Extract timestamp information
+            signal_sent_epoch = signal_data.get('signal_sent_EPOCH')
+            signal_sent_timestamp = None
+            if signal_sent_epoch:
+                from datetime import datetime as dt, timezone
+                signal_sent_timestamp = dt.fromtimestamp(signal_sent_epoch, tz=timezone.utc).isoformat()
+
+            signal_received_timestamp = doc.get('created_at')
+            
+            # Calculate receive lag (signal sent -> signal received)
+            receive_lag_seconds = None
+            if signal_sent_epoch and signal_received_timestamp:
+                if isinstance(signal_received_timestamp, str):
+                    from dateutil import parser as date_parser
+                    signal_received_timestamp = date_parser.parse(signal_received_timestamp)
+                receive_lag_seconds = (signal_received_timestamp.replace(tzinfo=timezone.utc).timestamp() - signal_sent_epoch)
+
+            # Extract execution timestamp and calculate execution lag
+            execution = doc.get('execution')
+            execution_completed_timestamp = None
+            execution_lag_seconds = None
+            if execution and execution.get('filled_at'):
+                execution_completed_timestamp = execution.get('filled_at')
+                if signal_sent_epoch:
+                    if isinstance(execution_completed_timestamp, str):
+                        from dateutil import parser as date_parser
+                        execution_completed_timestamp = date_parser.parse(execution_completed_timestamp)
+                    execution_lag_seconds = (execution_completed_timestamp.replace(tzinfo=timezone.utc).timestamp() - signal_sent_epoch)
+
+            # Determine entry/exit type
+            signal_type = signal_data.get('signal_type', 'UNKNOWN')
+            if signal_type == 'UNKNOWN':
+                # Infer from action
+                action = signal_details.get('action', '').upper()
+                if action in ['ENTRY', 'BUY']:
+                    signal_type = 'ENTRY'
+                elif action in ['EXIT', 'SELL', 'CLOSE']:
+                    signal_type = 'EXIT'
+
             formatted_signal = {
                 'signal_id': doc.get('signal_id') or signal_data.get('signalID') or signal_data.get('signal_id'),
                 'strategy_id': signal_data.get('strategy_name', 'Unknown'),
@@ -735,7 +774,14 @@ async def get_recent_signals(limit: int = 50, environment: str = None):
                 'processed_by_cerebro': cerebro_decision is not None,
                 'receive_lag_ms': doc.get('receive_lag_ms', 0),
                 'cerebro_decision': cerebro_decision,
-                'decision_status': decision_status
+                'decision_status': decision_status,
+                # New timestamp fields
+                'signal_sent_timestamp': signal_sent_timestamp,
+                'signal_received_timestamp': signal_received_timestamp.isoformat() if signal_received_timestamp else None,
+                'execution_completed_timestamp': execution_completed_timestamp.isoformat() if execution_completed_timestamp else None,
+                'receive_lag_seconds': receive_lag_seconds,
+                'execution_lag_seconds': execution_lag_seconds,
+                'signal_type': signal_type
             }
             signals.append(formatted_signal)
 

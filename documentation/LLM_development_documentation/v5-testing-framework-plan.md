@@ -1,9 +1,28 @@
 # V5 TESTING FRAMEWORK PLAN
 
-**Status:** ✅ COMPLETE
+**Status:** ✅ COMPLETE (Testing Ready)
 **Created:** 2026-01-04
-**Last Updated:** 2026-01-05
+**Last Updated:** 2026-01-05 13:55 EST
 **Completed:** 2026-01-05
+
+---
+
+## CURRENT STATUS
+
+✅ **Framework Complete** - All 98 signal files created, scripts enhanced, seed data management working
+⚠️ **Pending:** Install venv dependencies and add --delay parameter before first test run
+
+### Quick Start (After fixing dependencies)
+```bash
+# Install dependencies
+.venv/bin/pip install -r requirements.txt
+
+# Run full test suite
+make test-signals
+
+# Or manual control
+make reseed-db && .venv/bin/python tests/signals_testing/run_full_test.py --folder tests/signals_testing/sample_signals --delay 2
+```
 
 ---
 
@@ -301,55 +320,74 @@ This testing framework enables reproducible, controlled testing of the multi-fun
 
 ## PROGRESS TRACKING
 
-### ✅ COMPLETED
-- [x] Step 1: Strategy Discovery & Documentation
-  - [x] Query MongoDB for all 9 strategies
-  - [x] Create STRATEGY_INVENTORY.md
-  - [x] Document asset classes and instruments
-  - [x] Answer 4 clarifying questions
+### ✅ ALL PHASES COMPLETE
 
-- [x] Step 2: Create Realistic Signal Templates
-  - [x] Design template structures for 4 asset classes
-  - [x] Created reusable templates for commodities, forex, options, equity
+**Phase 1-3: Signal Generation (COMPLETE)**
+- ✅ 9 realistic signal files (90 signals total)
+- ✅ 8 edge-case signal files
+- ✅ All positions perfectly balanced (zero final position)
+- ✅ All signals tagged with fund_id="Mock-Fund-1"
 
-- [x] Step 3: Generate 9 Realistic Signal JSON Files - COMPLETED ✅
-  - [x] com1_met_realistic.json (GC, SI, HG metals futures)
-  - [x] com2_ag_realistic.json (ZC, ZW, ZS agriculture futures)
-  - [x] com3_mkt_realistic.json (CL, GC, NG mixed commodities)
-  - [x] com4_misc_realistic.json (CC, SB, KC misc commodities)
-  - [x] florida_forex_realistic.json (EURUSD, GBPUSD, AUDCAD forex pairs)
-  - [x] spx_0de_opt_realistic.json (SPY 0DTE calls and puts)
-  - [x] spx_1d_opt_realistic.json (SPY 1D calls and puts)
-  - [x] spy_realistic.json (SPY, QQQ, AAPL equity)
-  - [x] tlt_realistic.json (TLT, IEF, BND fixed income)
+**Phase 4-5: Environment & Scripts (COMPLETE)**
+- ✅ SIGNAL_TEST_SEED=1 added to .env
+- ✅ send_test_signal.py enhanced (--folder, --seed)
+- ✅ run_full_test.py created (automated test runner)
+- ✅ Makefile updated (make reseed-db, make test-signals)
 
-### 🚧 IN PROGRESS
-- [x] Step 4: Generate edge-case signals (COMPLETE ✅)
-  - [x] edge_case_insufficient_margin.json - 100 GC contracts (margin rejection)
-  - [x] edge_case_asset_class_mismatch.json - commodity to crypto account
-  - [x] edge_case_capital_limit.json - 90% allocation used (capital rejection)
-  - [x] edge_case_stop_loss.json - entry @ 580, exit @ 574.50 (< 575 stop)
-  - [x] edge_case_partial_fills.json - 3 GC split across accounts
-  - [x] edge_case_order_rejection.json - invalid price → retry → exit
-  - [x] edge_case_multi_fund.json - same strategy in 2 funds
-  - [x] edge_case_account_failover.json - primary unavailable, route to secondary
+**Phase 6: Seed Data Management (COMPLETE)**
+- ✅ export_seed_data.sh fixed (container→host copy)
+- ✅ restore_seed_data.sh fixed (drops DB before restore)
+- ✅ init_mongodb.sh fixed (auto-restore on make start)
+- ✅ Seed file created: seed_20260105_130235.tar.gz (108 docs)
 
-### ⏳ NOT STARTED
-- [x] Step 5: Update .env with SIGNAL_TEST_SEED (COMPLETE ✅)
-  - Added SIGNAL_TEST_SEED=1 to .env
-  - 0=randomized, positive=reproducible seed
-  
-- [x] Step 6: Enhance send_test_signal.py (COMPLETE ✅)
-  - Added --folder parameter to load all *.json files from directory
-  - Added --seed parameter for CLI override of SIGNAL_TEST_SEED
-  - Implemented seed-based shuffling: seed >= 0 applies shuffle, < 0 preserves order
-  - Maintains backward compatibility with --file and @filename syntax
-  
-- [x] Step 7: Create run_full_test.py runner (COMPLETE ✅)
-  - Wrapper script to execute all signals from a folder
-  - Captures results, tracks execution time, generates JSON reports
-  - Saves output and results to test_results/ folder with timestamped run IDs
-  - Usage: python run_full_test.py [--folder FOLDER] [--seed SEED]
+**Phase 7: Documentation (COMPLETE)**
+- ✅ TESTING_QUICKSTART.md created
+- ✅ STRATEGY_INVENTORY.md created
+- ✅ v5-testing-framework-plan.md (this document)
+
+### ⚠️ PRE-TEST CHECKLIST
+
+Before first test run:
+- [ ] Install venv dependencies: `.venv/bin/pip install -r requirements.txt`
+- [ ] Add --delay parameter to send_test_signal.py (optional enhancement)
+- [ ] Remove duplicate venv folder (keep .venv only)
+- [ ] Run first test: `make test-signals`
+
+### 📊 DELIVERABLES SUMMARY
+
+**Signal Files:** 98 total
+- 9 realistic strategy files (90 signals)
+- 8 edge-case scenario files (8 signals)
+
+**Scripts Enhanced:**
+- send_test_signal.py (--folder, --seed support)
+- run_full_test.py (test automation)
+- export_seed_data.sh (fixed container copy)
+- restore_seed_data.sh (drops DB first)
+- init_mongodb.sh (auto-restore on empty DB)
+
+**Makefile Commands:**
+- `make reseed-db` - Restore clean database
+- `make export-seed-data` - Export current DB state
+- `make test-signals` - Full automated test run
+
+**Seed Data:**
+- seed_20260105_130235.tar.gz (736KB)
+- 12 collections, 108 documents
+- 9 strategies, 44 signals, 40 signal_store entries
+
+---
+
+## KNOWN ISSUES TO RESOLVE
+
+1. **Missing venv dependencies** - ModuleNotFoundError: dotenv
+   - Fix: `.venv/bin/pip install -r requirements.txt`
+
+2. **Duplicate venv folders** - Both venv/ and .venv/ exist
+   - Fix: Remove venv/, keep .venv/
+
+3. **No signal delay visibility** - Hard to observe signals in logs
+   - Enhancement: Add --delay parameter to scripts (optional)
 
 ---
 

@@ -1,4 +1,4 @@
-.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard clean-old-logs export-seed-data
+.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard clean-old-logs export-seed-data reseed-db test-signals
 
 # Default target
 help:
@@ -21,6 +21,8 @@ help:
 	@echo "make clean         - Stop and remove all containers and volumes (DATA LOSS!)"
 	@echo "make clean-old-logs - Truncate Docker container logs (keeps containers running)"
 	@echo "make export-seed-data - Export current MongoDB data as seed data"
+	@echo "make reseed-db     - Restore MongoDB from latest seed data"
+	@echo "make test-signals  - Reseed DB, start services, and run all test signals"
 
 start:
 	docker-compose up -d
@@ -104,3 +106,19 @@ clean:
 
 export-seed-data:
 	@bash scripts/export_seed_data.sh
+
+reseed-db:
+	@bash scripts/restore_seed_data.sh
+
+test-signals:
+	@echo "🔄 Reseeding database..."
+	@bash scripts/restore_seed_data.sh
+	@echo ""
+	@echo "🚀 Starting services..."
+	@$(MAKE) start
+	@echo ""
+	@echo "⏳ Waiting 15 seconds for services to initialize..."
+	@sleep 15
+	@echo ""
+	@echo "🧪 Running test signals..."
+	@.venv/bin/python tests/signals_testing/run_full_test.py --folder tests/signals_testing/sample_signals

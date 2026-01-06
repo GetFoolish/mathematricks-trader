@@ -21,12 +21,47 @@ import os
 import sys
 import random
 import time
+import logging
 from pymongo import MongoClient
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+
+def setup_logging():
+    """Setup dual logging to console and file"""
+    # Create logs directory if it doesn't exist
+    os.makedirs('logs', exist_ok=True)
+    
+    # Create logger
+    logger = logging.getLogger('send_test_signal')
+    logger.setLevel(logging.INFO)
+    
+    # Remove existing handlers
+    logger.handlers = []
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(message)s')
+    console_handler.setFormatter(console_formatter)
+    
+    # File handler
+    file_handler = logging.FileHandler('logs/testing.log', mode='a')
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter('%(message)s')
+    file_handler.setFormatter(file_formatter)
+    
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    
+    return logger
+
+
+# Initialize logger
+logger = setup_logging()
 
 
 def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None):
@@ -83,8 +118,8 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
     }
 
     # Auto-generate fields if missing
-    if "signal_sent_EPOCH" not in signal_doc:
-        signal_doc["signal_sent_EPOCH"] = int(now_utc.timestamp())
+    # ALWAYS use current timestamp (override any hardcoded values from JSON)
+    signal_doc["signal_sent_EPOCH"] = int(now_utc.timestamp())
 
     if "signalID" not in signal_doc:
         # Simple auto-generated ID: just timestamp_random
@@ -208,32 +243,38 @@ def list_strategies():
     client.close()
 
 
-def process_folder(folder_path: str, seed: int = 1):
+def process_folder(folder_path: str, seed: int = 1, delay_override: int = None):
     """
     Load and send all JSON signal files from a folder
     
     Args:
         folder_path: Path to folder containing *.json signal files
         seed: Seed for shuffling (0=random, positive=reproducible, negative=no shuffle)
+        delay_override: Override wait time between signals (seconds). None = use signal's wait value
     """
     import glob
     
+    # Log separator for new test run
+    logger.info("\n" + "-" * 100)
+    logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] NEW SIGNAL SEND STARTED")
+    logger.info("-" * 100 + "\n")
+    
     # Validate folder exists
     if not os.path.isdir(folder_path):
-        print(f"❌ Folder not found: {folder_path}")
+        logger.info(f"❌ Folder not found: {folder_path}")
         sys.exit(1)
     
     # Find all .json files in folder
     json_files = sorted(glob.glob(os.path.join(folder_path, "*.json")))
     
     if not json_files:
-        print(f"❌ No .json files found in: {folder_path}")
+        logger.info(f"❌ No .json files found in: {folder_path}")
         sys.exit(1)
     
-    print("\n" + "=" * 80)
-    print(f"📁 Loading signals from folder: {folder_path}")
-    print(f"   Found {len(json_files)} signal files")
-    print("=" * 80)
+    logger.info("\n" + "=" * 80)
+    logger.info(f"📁 Loading signals from folder: {folder_path}")
+    logger.info(f"   Found {len(json_files)} signal files")
+    logger.info("=" * 80)
     
     # Load all signals from all files
     all_signals = []
@@ -286,7 +327,7 @@ def process_folder(folder_path: str, seed: int = 1):
         # Get signal type for display
         signal_type = signal_payload.get("signal_type", "UNKNOWN").upper()
         source_file = signal_sources.get(i - 1, "unknown")
-        print(f"{'🔵' if signal_type == 'ENTRY' else '🔴'} [{source_file}] Signal {i}/{len(all_signals)} ({signal_type})...")
+        logger.info(f"{'🔵' if signal_type == 'ENTRY' else '🔴'} [{source_file}] Signal {i}/{len(all_signals)} ({signal_type})...")
         
         # For EXIT signals, resolve variable reference before sending
         resolved_entry_id = None
@@ -295,9 +336,9 @@ def process_folder(folder_path: str, seed: int = 1):
             if entry_ref and entry_ref.startswith("$"):
                 if entry_ref in entry_id_registry:
                     resolved_entry_id = entry_id_registry[entry_ref]
-                    print(f"   ✓ Resolved {entry_ref} → {resolved_entry_id[:12]}...")
+                    logger.info(f"   ✓ Resolved {entry_ref} → {resolved_entry_id[:12]}...")
                 elif entry_ref != "$PREVIOUS":
-                    print(f"   ⚠️  WARNING: Variable {entry_ref} not found in registry")
+                    logger.info(f"   ⚠️  WARNING: Variable {entry_ref} not found in registry")
         
         # Send signal
         result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id)
@@ -317,6 +358,11 @@ def process_folder(folder_path: str, seed: int = 1):
         
         # Wait if specified
         wait_seconds = signal_payload.get("wait", 0)
+        
+        # Apply delay override if provided
+        if delay_override is not None:
+            wait_seconds = delay_override
+        
         if wait_seconds > 0 and i < len(all_signals):  # Don't wait after last signal
             print(f"   ⏳ Waiting {wait_seconds} seconds before next signal...")
             time.sleep(wait_seconds)
@@ -424,6 +470,12 @@ See sample files in services/signal_ingestion/sample_signals/
         help="Seed for signal shuffling (positive=reproducible, 0=randomized). Overrides SIGNAL_TEST_SEED env var"
     )
     parser.add_argument(
+        "--delay",
+        type=int,
+        dest="delay_override",
+        help="Override wait time between signals in seconds (default: use signal's wait value)"
+    )
+    parser.add_argument(
         "--list-strategies",
         action="store_true",
         help="List available strategies from MongoDB"
@@ -446,7 +498,7 @@ See sample files in services/signal_ingestion/sample_signals/
             except ValueError:
                 seed = 1
         
-        process_folder(args.folder_path, seed)
+        process_folder(args.folder_path, seed, delay_override=args.delay_override)
         return
 
     # Handle --file option

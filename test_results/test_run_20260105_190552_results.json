@@ -1,0 +1,13 @@
+{
+  "run_id": "test_run_20260105_190552",
+  "timestamp": "2026-01-05T19:05:52.799223+00:00",
+  "folder": "tests/signals_testing/sample_signals",
+  "seed": 1,
+  "command": "/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks/mathematricks-trader/.venv/bin/python /Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks/mathematricks-trader/tests/signals_testing/send_test_signal.py --folder tests/signals_testing/sample_signals --seed 1",
+  "status": "failed",
+  "signals_sent": 0,
+  "signals_failed": 0,
+  "duration_seconds": 2.0671708583831787,
+  "start_time": "2026-01-05T19:05:52.799223+00:00",
+  "end_time": "2026-01-05T19:05:54.866578+00:00"
+}

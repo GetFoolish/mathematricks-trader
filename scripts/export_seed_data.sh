@@ -80,16 +80,7 @@ fi
 
 # Count exported collections by BSON files
 COLLECTION_COUNT=$(find "$TEMP_DIR/dump/$DATABASE" -type f -name "*.bson" 2>/dev/null | wc -l)
-echo "✅ Exported $COLLECTION_COUNT collections:"
-
-# List each collection with document count
-for bson_file in "$TEMP_DIR/dump/$DATABASE"/*.bson; do
-    if [ -f "$bson_file" ]; then
-        collection_name=$(basename "$bson_file" .bson)
-        file_size=$(du -h "$bson_file" | cut -f1)
-        echo "   • $collection_name ($file_size)"
-    fi
-done
+echo "✅ Exported $COLLECTION_COUNT collections"
 echo ""
 
 # Create compressed archive (exclude macOS metadata)

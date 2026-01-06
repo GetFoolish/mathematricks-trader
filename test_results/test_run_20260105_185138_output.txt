@@ -1,0 +1,5 @@
+=== STDOUT ===
+❌ Folder not found: tests/signals_testing/sample_signals
+
+
+=== STDERR ===
