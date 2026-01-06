@@ -18,6 +18,7 @@ services:
       pubsub-emulator:
         condition: service_started
     environment:
+      - TZ=${TZ}
       - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
       - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
       - MONGODB_URI=${MONGODB_URI}
@@ -43,6 +44,7 @@ services:
       pubsub-init:
         condition: service_completed_successfully
     environment:
+      - TZ=${TZ}
       - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
       - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
       - MONGODB_URI=${MONGODB_URI}
@@ -63,6 +65,7 @@ services:
       pubsub-emulator:
         condition: service_started
     environment:
+      - TZ=${TZ}
       - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
       - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
       - MONGODB_URI=${MONGODB_URI}
@@ -111,6 +114,7 @@ services:
       pubsub-init:
         condition: service_completed_successfully
     environment:
+      - TZ=${TZ}
       - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
       - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
       - MONGODB_URI=${MONGODB_URI}
@@ -131,6 +135,7 @@ services:
       mongodb:
         condition: service_healthy
     environment:
+      - TZ=${TZ}
       - MONGODB_URI=${MONGODB_URI}
       - PYTHONPATH=/app/services/portfolio_builder:/app
     command: python -m services.portfolio_builder.main
@@ -150,6 +155,7 @@ services:
       mongodb:
         condition: service_healthy
     environment:
+      - TZ=${TZ}
       - MONGODB_URI=${MONGODB_URI}
       - PYTHONPATH=/app/services/dashboard_creator:/app
     command: python -m services.dashboard_creator.dashboard_creator_main
