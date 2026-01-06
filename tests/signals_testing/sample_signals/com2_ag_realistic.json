@@ -1,6 +1,6 @@
 [
   {
-    "strategy_name": "Com2 - Ag",
+    "strategy_name": "Com2-Ag",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735981000,
     "signalID": "sig_com2_ag_001",
@@ -21,11 +21,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com2 - Ag",
+    "strategy_name": "Com2-Ag",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735981060,
     "signalID": "sig_com2_ag_002",
@@ -46,11 +45,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "Com2 - Ag",
+    "strategy_name": "Com2-Ag",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735981180,
     "signalID": "sig_com2_ag_003",
@@ -69,11 +67,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com2 - Ag",
+    "strategy_name": "Com2-Ag",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735981240,
     "signalID": "sig_com2_ag_004",
@@ -92,11 +89,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 90
+    "wait": 6
   },
   {
-    "strategy_name": "Com2 - Ag",
+    "strategy_name": "Com2-Ag",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735981330,
     "signalID": "sig_com2_ag_005",
@@ -110,18 +106,17 @@
         "direction": "LONG",
         "quantity": 2,
         "order_type": "MARKET",
-        "price": 5.80,
-        "stop_loss": 5.70,
+        "price": 5.8,
+        "stop_loss": 5.7,
         "take_profit": 5.95
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com2 - Ag",
+    "strategy_name": "Com2-Ag",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735981390,
     "signalID": "sig_com2_ag_006",
@@ -136,17 +131,16 @@
         "quantity": 1,
         "order_type": "MARKET",
         "price": 5.82,
-        "stop_loss": 5.70,
+        "stop_loss": 5.7,
         "take_profit": 5.97
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "Com2 - Ag",
+    "strategy_name": "Com2-Ag",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735981510,
     "signalID": "sig_com2_ag_007",
@@ -160,16 +154,15 @@
         "direction": "LONG",
         "quantity": 2,
         "order_type": "MARKET",
-        "price": 5.90
+        "price": 5.9
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com2 - Ag",
+    "strategy_name": "Com2-Ag",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735981570,
     "signalID": "sig_com2_ag_008",
@@ -188,11 +181,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 90
+    "wait": 6
   },
   {
-    "strategy_name": "Com2 - Ag",
+    "strategy_name": "Com2-Ag",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735981660,
     "signalID": "sig_com2_ag_009",
@@ -206,18 +198,17 @@
         "direction": "LONG",
         "quantity": 2,
         "order_type": "MARKET",
-        "price": 11.20,
+        "price": 11.2,
         "stop_loss": 11.05,
-        "take_profit": 11.40
+        "take_profit": 11.4
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "Com2 - Ag",
+    "strategy_name": "Com2-Ag",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735981780,
     "signalID": "sig_com2_ag_010",
@@ -236,7 +227,6 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
     "wait": 0
   }
 ]

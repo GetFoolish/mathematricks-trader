@@ -1,6 +1,6 @@
 [
   {
-    "strategy_name": "Com1 - Met",
+    "strategy_name": "Com1-Met",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735980000,
     "signalID": "sig_com1_met_001",
@@ -14,18 +14,17 @@
         "direction": "LONG",
         "quantity": 2,
         "order_type": "MARKET",
-        "price": 2050.00,
-        "stop_loss": 2040.00,
-        "take_profit": 2065.00
+        "price": 2050.0,
+        "stop_loss": 2040.0,
+        "take_profit": 2065.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com1 - Met",
+    "strategy_name": "Com1-Met",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735980060,
     "signalID": "sig_com1_met_002",
@@ -39,18 +38,17 @@
         "direction": "LONG",
         "quantity": 1,
         "order_type": "MARKET",
-        "price": 2052.00,
-        "stop_loss": 2040.00,
-        "take_profit": 2070.00
+        "price": 2052.0,
+        "stop_loss": 2040.0,
+        "take_profit": 2070.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "Com1 - Met",
+    "strategy_name": "Com1-Met",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735980180,
     "signalID": "sig_com1_met_003",
@@ -64,16 +62,15 @@
         "direction": "LONG",
         "quantity": 2,
         "order_type": "MARKET",
-        "price": 2060.00
+        "price": 2060.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com1 - Met",
+    "strategy_name": "Com1-Met",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735980240,
     "signalID": "sig_com1_met_004",
@@ -87,16 +84,15 @@
         "direction": "LONG",
         "quantity": 1,
         "order_type": "MARKET",
-        "price": 2062.00
+        "price": 2062.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 90
+    "wait": 6
   },
   {
-    "strategy_name": "Com1 - Met",
+    "strategy_name": "Com1-Met",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735980330,
     "signalID": "sig_com1_met_005",
@@ -110,18 +106,17 @@
         "direction": "LONG",
         "quantity": 5,
         "order_type": "MARKET",
-        "price": 29.50,
-        "stop_loss": 29.20,
-        "take_profit": 30.10
+        "price": 29.5,
+        "stop_loss": 29.2,
+        "take_profit": 30.1
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com1 - Met",
+    "strategy_name": "Com1-Met",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735980390,
     "signalID": "sig_com1_met_006",
@@ -135,18 +130,17 @@
         "direction": "LONG",
         "quantity": 3,
         "order_type": "MARKET",
-        "price": 29.60,
-        "stop_loss": 29.20,
-        "take_profit": 30.20
+        "price": 29.6,
+        "stop_loss": 29.2,
+        "take_profit": 30.2
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "Com1 - Met",
+    "strategy_name": "Com1-Met",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735980510,
     "signalID": "sig_com1_met_007",
@@ -165,11 +159,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com1 - Met",
+    "strategy_name": "Com1-Met",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735980570,
     "signalID": "sig_com1_met_008",
@@ -183,16 +176,15 @@
         "direction": "LONG",
         "quantity": 3,
         "order_type": "MARKET",
-        "price": 29.90
+        "price": 29.9
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 90
+    "wait": 6
   },
   {
-    "strategy_name": "Com1 - Met",
+    "strategy_name": "Com1-Met",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735980660,
     "signalID": "sig_com1_met_009",
@@ -206,18 +198,17 @@
         "direction": "LONG",
         "quantity": 3,
         "order_type": "MARKET",
-        "price": 4.20,
+        "price": 4.2,
         "stop_loss": 4.15,
-        "take_profit": 4.30
+        "take_profit": 4.3
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "Com1 - Met",
+    "strategy_name": "Com1-Met",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735980780,
     "signalID": "sig_com1_met_010",
@@ -236,7 +227,6 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
     "wait": 0
   }
 ]

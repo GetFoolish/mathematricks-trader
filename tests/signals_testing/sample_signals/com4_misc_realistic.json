@@ -1,6 +1,6 @@
 [
   {
-    "strategy_name": "Com4 - Misc",
+    "strategy_name": "Com4-Misc",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735983000,
     "signalID": "sig_com4_misc_001",
@@ -14,18 +14,17 @@
         "direction": "LONG",
         "quantity": 1,
         "order_type": "MARKET",
-        "price": 3200.00,
-        "stop_loss": 3150.00,
-        "take_profit": 3300.00
+        "price": 3200.0,
+        "stop_loss": 3150.0,
+        "take_profit": 3300.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com4 - Misc",
+    "strategy_name": "Com4-Misc",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735983060,
     "signalID": "sig_com4_misc_002",
@@ -39,18 +38,17 @@
         "direction": "LONG",
         "quantity": 1,
         "order_type": "MARKET",
-        "price": 3210.00,
-        "stop_loss": 3150.00,
-        "take_profit": 3310.00
+        "price": 3210.0,
+        "stop_loss": 3150.0,
+        "take_profit": 3310.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "Com4 - Misc",
+    "strategy_name": "Com4-Misc",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735983180,
     "signalID": "sig_com4_misc_003",
@@ -64,16 +62,15 @@
         "direction": "LONG",
         "quantity": 1,
         "order_type": "MARKET",
-        "price": 3260.00
+        "price": 3260.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com4 - Misc",
+    "strategy_name": "Com4-Misc",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735983240,
     "signalID": "sig_com4_misc_004",
@@ -87,16 +84,15 @@
         "direction": "LONG",
         "quantity": 1,
         "order_type": "MARKET",
-        "price": 3270.00
+        "price": 3270.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 90
+    "wait": 6
   },
   {
-    "strategy_name": "Com4 - Misc",
+    "strategy_name": "Com4-Misc",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735983330,
     "signalID": "sig_com4_misc_005",
@@ -117,11 +113,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com4 - Misc",
+    "strategy_name": "Com4-Misc",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735983390,
     "signalID": "sig_com4_misc_006",
@@ -142,11 +137,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "Com4 - Misc",
+    "strategy_name": "Com4-Misc",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735983510,
     "signalID": "sig_com4_misc_007",
@@ -165,11 +159,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "Com4 - Misc",
+    "strategy_name": "Com4-Misc",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735983570,
     "signalID": "sig_com4_misc_008",
@@ -188,11 +181,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 90
+    "wait": 6
   },
   {
-    "strategy_name": "Com4 - Misc",
+    "strategy_name": "Com4-Misc",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735983660,
     "signalID": "sig_com4_misc_009",
@@ -206,18 +198,17 @@
         "direction": "LONG",
         "quantity": 1,
         "order_type": "MARKET",
-        "price": 220.00,
-        "stop_loss": 215.00,
-        "take_profit": 230.00
+        "price": 220.0,
+        "stop_loss": 215.0,
+        "take_profit": 230.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "Com4 - Misc",
+    "strategy_name": "Com4-Misc",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735983780,
     "signalID": "sig_com4_misc_010",
@@ -231,12 +222,11 @@
         "direction": "LONG",
         "quantity": 1,
         "order_type": "MARKET",
-        "price": 226.00
+        "price": 226.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
     "wait": 0
   }
 ]

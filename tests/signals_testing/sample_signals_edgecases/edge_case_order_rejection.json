@@ -18,14 +18,13 @@
         "secType": "STK",
         "exchange": "NYSE",
         "currency": "USD",
-        "stop_loss": 575.00,
-        "take_profit": 590.00
+        "stop_loss": 575.0,
+        "take_profit": 590.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
     "strategy_name": "SPY",
@@ -42,18 +41,17 @@
         "direction": "LONG",
         "quantity": 50,
         "order_type": "MARKET",
-        "price": 580.00,
+        "price": 580.0,
         "secType": "STK",
         "exchange": "NYSE",
         "currency": "USD",
-        "stop_loss": 575.00,
-        "take_profit": 590.00
+        "stop_loss": 575.0,
+        "take_profit": 590.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
     "strategy_name": "SPY",
@@ -70,7 +68,7 @@
         "direction": "LONG",
         "quantity": 50,
         "order_type": "MARKET",
-        "price": 586.00,
+        "price": 586.0,
         "secType": "STK",
         "exchange": "NYSE",
         "currency": "USD"
@@ -78,7 +76,6 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
     "wait": 0
   }
 ]

@@ -1,6 +1,6 @@
 [
   {
-    "strategy_name": "SPX 1 - D Opt",
+    "strategy_name": "SPX_1-D_Opt",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735986000,
     "signalID": "sig_spx_1d_001",
@@ -14,22 +14,21 @@
         "direction": "LONG",
         "quantity": 2,
         "order_type": "MARKET",
-        "price": 1.50,
+        "price": 1.5,
         "underlying": "SPY",
         "strike": 580.0,
         "expiry": "20260106",
         "right": "C",
-        "stop_loss": 0.80,
-        "take_profit": 2.50
+        "stop_loss": 0.8,
+        "take_profit": 2.5
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "SPX 1 - D Opt",
+    "strategy_name": "SPX_1-D_Opt",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735986060,
     "signalID": "sig_spx_1d_002",
@@ -48,17 +47,16 @@
         "strike": 582.0,
         "expiry": "20260106",
         "right": "C",
-        "stop_loss": 0.90,
+        "stop_loss": 0.9,
         "take_profit": 2.75
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "SPX 1 - D Opt",
+    "strategy_name": "SPX_1-D_Opt",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735986180,
     "signalID": "sig_spx_1d_003",
@@ -81,11 +79,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "SPX 1 - D Opt",
+    "strategy_name": "SPX_1-D_Opt",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735986240,
     "signalID": "sig_spx_1d_004",
@@ -99,7 +96,7 @@
         "direction": "LONG",
         "quantity": 2,
         "order_type": "MARKET",
-        "price": 2.30,
+        "price": 2.3,
         "underlying": "SPY",
         "strike": 582.0,
         "expiry": "20260106",
@@ -108,11 +105,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 90
+    "wait": 6
   },
   {
-    "strategy_name": "SPX 1 - D Opt",
+    "strategy_name": "SPX_1-D_Opt",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735986330,
     "signalID": "sig_spx_1d_005",
@@ -131,17 +127,16 @@
         "strike": 575.0,
         "expiry": "20260106",
         "right": "P",
-        "stop_loss": 0.60,
-        "take_profit": 2.00
+        "stop_loss": 0.6,
+        "take_profit": 2.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "SPX 1 - D Opt",
+    "strategy_name": "SPX_1-D_Opt",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735986390,
     "signalID": "sig_spx_1d_006",
@@ -155,22 +150,21 @@
         "direction": "LONG",
         "quantity": 2,
         "order_type": "MARKET",
-        "price": 1.40,
+        "price": 1.4,
         "underlying": "SPY",
         "strike": 578.0,
         "expiry": "20260106",
         "right": "P",
-        "stop_loss": 0.70,
-        "take_profit": 2.20
+        "stop_loss": 0.7,
+        "take_profit": 2.2
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "SPX 1 - D Opt",
+    "strategy_name": "SPX_1-D_Opt",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735986510,
     "signalID": "sig_spx_1d_007",
@@ -193,11 +187,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
-    "strategy_name": "SPX 1 - D Opt",
+    "strategy_name": "SPX_1-D_Opt",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735986570,
     "signalID": "sig_spx_1d_008",
@@ -220,11 +213,10 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 90
+    "wait": 6
   },
   {
-    "strategy_name": "SPX 1 - D Opt",
+    "strategy_name": "SPX_1-D_Opt",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735986660,
     "signalID": "sig_spx_1d_009",
@@ -238,22 +230,21 @@
         "direction": "LONG",
         "quantity": 1,
         "order_type": "MARKET",
-        "price": 2.00,
+        "price": 2.0,
         "underlying": "SPY",
         "strike": 585.0,
         "expiry": "20260106",
         "right": "C",
-        "stop_loss": 1.00,
+        "stop_loss": 1.0,
         "take_profit": 3.25
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
-    "strategy_name": "SPX 1 - D Opt",
+    "strategy_name": "SPX_1-D_Opt",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735986780,
     "signalID": "sig_spx_1d_010",
@@ -267,7 +258,7 @@
         "direction": "LONG",
         "quantity": 1,
         "order_type": "MARKET",
-        "price": 3.00,
+        "price": 3.0,
         "underlying": "SPY",
         "strike": 585.0,
         "expiry": "20260106",
@@ -276,7 +267,6 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
     "wait": 0
   }
 ]

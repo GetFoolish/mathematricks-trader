@@ -101,15 +101,91 @@ fi
 mv "$SEED_FILE" "$OLDPWD/$SEED_DIR/"
 cd "$OLDPWD" || exit 1
 
-# Cleanup temp directory
-rm -rf "$TEMP_DIR"
-
-# Verify archive was created
+# Store the seed path for validation
 SEED_PATH="$SEED_DIR/$SEED_FILE"
+
+# Verify archive was created before cleanup
 if [ ! -f "$SEED_PATH" ]; then
     echo "❌ Error: Seed file was not created at $SEED_PATH"
+    rm -rf "$TEMP_DIR"
     exit 1
 fi
+
+echo "🔍 Validating export integrity..."
+echo ""
+
+# Extract archive to verify contents
+VERIFY_TEMP_DIR="/tmp/verify_export_$$"
+mkdir -p "$VERIFY_TEMP_DIR"
+cd "$VERIFY_TEMP_DIR" || exit 1
+
+tar -xzf "$OLDPWD/$SEED_PATH" 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo "❌ VALIDATION FAILED: Cannot extract seed archive"
+    cd "$OLDPWD"
+    rm -rf "$TEMP_DIR" "$VERIFY_TEMP_DIR" "$SEED_PATH"
+    exit 1
+fi
+
+# Get live database collections and counts
+echo "  📊 Comparing collections and document counts..."
+LIVE_COLLECTIONS=$(docker exec "$CONTAINER_NAME" mongosh "$DATABASE" --quiet --eval "
+db.getCollectionNames().sort().forEach(function(col) { 
+  print(col + ':' + db.getCollection(col).countDocuments({})); 
+});" 2>/dev/null | sort)
+
+# Copy extracted dump to container for verification
+docker cp "$VERIFY_TEMP_DIR/dump/$DATABASE" "$CONTAINER_NAME:/tmp/verify_dump_$$" > /dev/null 2>&1
+
+# Get exported collections and counts by restoring to a temp database
+VERIFY_DB="temp_verify_$$"
+docker exec "$CONTAINER_NAME" mongorestore \
+    --db "$VERIFY_DB" \
+    --dir "/tmp/verify_dump_$$" \
+    --quiet > /dev/null 2>&1
+
+if [ $? -ne 0 ]; then
+    echo "❌ VALIDATION FAILED: Cannot restore seed data for verification"
+    docker exec "$CONTAINER_NAME" rm -rf "/tmp/verify_dump_$$"
+    docker exec "$CONTAINER_NAME" mongosh "$VERIFY_DB" --quiet --eval "db.dropDatabase()" > /dev/null 2>&1
+    cd "$OLDPWD"
+    rm -rf "$TEMP_DIR" "$VERIFY_TEMP_DIR" "$SEED_PATH"
+    exit 1
+fi
+
+EXPORTED_COLLECTIONS=$(docker exec "$CONTAINER_NAME" mongosh "$VERIFY_DB" --quiet --eval "
+db.getCollectionNames().sort().forEach(function(col) { 
+  print(col + ':' + db.getCollection(col).countDocuments({})); 
+});" 2>/dev/null | sort)
+
+# Clean up verification database and temp files
+docker exec "$CONTAINER_NAME" mongosh "$VERIFY_DB" --quiet --eval "db.dropDatabase()" > /dev/null 2>&1
+docker exec "$CONTAINER_NAME" rm -rf "/tmp/verify_dump_$$"
+cd "$OLDPWD"
+rm -rf "$VERIFY_TEMP_DIR"
+
+# Compare collections
+if [ "$LIVE_COLLECTIONS" != "$EXPORTED_COLLECTIONS" ]; then
+    echo "❌ VALIDATION FAILED: Mismatch between live DB and exported seed data"
+    echo ""
+    echo "  Live Database Collections:"
+    echo "$LIVE_COLLECTIONS" | sed 's/^/    /'
+    echo ""
+    echo "  Exported Seed Collections:"
+    echo "$EXPORTED_COLLECTIONS" | sed 's/^/    /'
+    echo ""
+    echo "  Deleting invalid seed file: $SEED_PATH"
+    rm -f "$SEED_PATH"
+    rm -rf "$TEMP_DIR"
+    exit 1
+fi
+
+echo "  ✅ All collections match!"
+echo "  ✅ All document counts match!"
+echo ""
+
+# Cleanup temp directory
+rm -rf "$TEMP_DIR"
 
 SEED_SIZE=$(du -h "$SEED_PATH" | cut -f1)
 

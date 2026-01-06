@@ -14,18 +14,17 @@
         "direction": "LONG",
         "quantity": 100,
         "order_type": "MARKET",
-        "price": 92.00,
+        "price": 92.0,
         "secType": "STK",
         "exchange": "NASDAQ",
         "currency": "USD",
-        "stop_loss": 90.00,
-        "take_profit": 95.00
+        "stop_loss": 90.0,
+        "take_profit": 95.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
     "strategy_name": "TLT",
@@ -42,18 +41,17 @@
         "direction": "LONG",
         "quantity": 75,
         "order_type": "MARKET",
-        "price": 92.50,
+        "price": 92.5,
         "secType": "STK",
         "exchange": "NASDAQ",
         "currency": "USD",
-        "stop_loss": 90.00,
-        "take_profit": 96.00
+        "stop_loss": 90.0,
+        "take_profit": 96.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
     "strategy_name": "TLT",
@@ -70,7 +68,7 @@
         "direction": "LONG",
         "quantity": 100,
         "order_type": "MARKET",
-        "price": 94.00,
+        "price": 94.0,
         "secType": "STK",
         "exchange": "NASDAQ",
         "currency": "USD"
@@ -78,8 +76,7 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
     "strategy_name": "TLT",
@@ -104,8 +101,7 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 90
+    "wait": 6
   },
   {
     "strategy_name": "TLT",
@@ -122,18 +118,17 @@
         "direction": "LONG",
         "quantity": 80,
         "order_type": "MARKET",
-        "price": 87.50,
+        "price": 87.5,
         "secType": "STK",
         "exchange": "NYSE",
         "currency": "USD",
-        "stop_loss": 85.50,
-        "take_profit": 90.50
+        "stop_loss": 85.5,
+        "take_profit": 90.5
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
     "strategy_name": "TLT",
@@ -150,18 +145,17 @@
         "direction": "LONG",
         "quantity": 50,
         "order_type": "MARKET",
-        "price": 88.00,
+        "price": 88.0,
         "secType": "STK",
         "exchange": "NYSE",
         "currency": "USD",
-        "stop_loss": 85.50,
-        "take_profit": 91.00
+        "stop_loss": 85.5,
+        "take_profit": 91.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
     "strategy_name": "TLT",
@@ -178,7 +172,7 @@
         "direction": "LONG",
         "quantity": 80,
         "order_type": "MARKET",
-        "price": 89.50,
+        "price": 89.5,
         "secType": "STK",
         "exchange": "NYSE",
         "currency": "USD"
@@ -186,8 +180,7 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 60
+    "wait": 6
   },
   {
     "strategy_name": "TLT",
@@ -204,7 +197,7 @@
         "direction": "LONG",
         "quantity": 50,
         "order_type": "MARKET",
-        "price": 90.00,
+        "price": 90.0,
         "secType": "STK",
         "exchange": "NYSE",
         "currency": "USD"
@@ -212,8 +205,7 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 90
+    "wait": 6
   },
   {
     "strategy_name": "TLT",
@@ -230,18 +222,17 @@
         "direction": "LONG",
         "quantity": 120,
         "order_type": "MARKET",
-        "price": 79.00,
+        "price": 79.0,
         "secType": "STK",
         "exchange": "NYSE",
         "currency": "USD",
-        "stop_loss": 77.50,
-        "take_profit": 82.00
+        "stop_loss": 77.5,
+        "take_profit": 82.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "wait": 120
+    "wait": 6
   },
   {
     "strategy_name": "TLT",
@@ -258,7 +249,7 @@
         "direction": "LONG",
         "quantity": 120,
         "order_type": "MARKET",
-        "price": 81.00,
+        "price": 81.0,
         "secType": "STK",
         "exchange": "NYSE",
         "currency": "USD"
@@ -266,7 +257,6 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
     "wait": 0
   }
 ]

@@ -14,20 +14,21 @@
         "direction": "LONG",
         "quantity": 2,
         "order_type": "MARKET",
-        "price": 1.50,
+        "price": 1.5,
         "underlying": "SPY",
         "strike": 580.0,
         "expiry": "20260106",
         "right": "C",
-        "stop_loss": 0.80,
-        "take_profit": 2.50
+        "stop_loss": 0.8,
+        "take_profit": 2.5
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "also_route_to_funds": ["Mock-Fund-2"],
-    "wait": 120
+    "also_route_to_funds": [
+      "Mock-Fund-2"
+    ],
+    "wait": 6
   },
   {
     "strategy_name": "SPX 1 - D Opt",
@@ -54,8 +55,9 @@
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
-    "also_route_to_funds": ["Mock-Fund-2"],
+    "also_route_to_funds": [
+      "Mock-Fund-2"
+    ],
     "wait": 0
   }
 ]

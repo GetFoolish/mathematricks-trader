@@ -14,16 +14,15 @@
         "direction": "LONG",
         "quantity": 3,
         "order_type": "MARKET",
-        "price": 2050.00,
-        "stop_loss": 2040.00,
-        "take_profit": 2065.00
+        "price": 2050.0,
+        "stop_loss": 2040.0,
+        "take_profit": 2065.0
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
     "multi_account_distribution": true,
-    "wait": 120
+    "wait": 6
   },
   {
     "strategy_name": "Com1 - Met",
@@ -40,13 +39,12 @@
         "direction": "LONG",
         "quantity": 3,
         "order_type": "MARKET",
-        "price": 2058.00,
+        "price": 2058.0,
         "note": "Distributed across 2 accounts proportionally by available margin"
       }
     ],
     "environment": "staging",
     "staging": true,
-    "fund_id": "Mock-Fund-1",
     "wait": 0
   }
 ]

@@ -1,8 +1,0 @@
-=== STDOUT ===
-
-
-=== STDERR ===
-Traceback (most recent call last):
-  File "/Users/vandanchopra/VandanStuff/CODE_STUFF/mathematricks/mathematricks-trader/tests/signals_testing/send_test_signal.py", line 26, in <module>
-    from dotenv import load_dotenv
-ModuleNotFoundError: No module named 'dotenv'
