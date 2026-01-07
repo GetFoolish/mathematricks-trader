@@ -1,5 +1,5 @@
 """
-Cerebro Service - Pub/Sub Signal Processing Only
+Cerebro Service - MongoDB Change Stream Signal Processing
 The intelligent core for portfolio management, risk assessment, and position sizing.
 Implements hard margin limits and smart position sizing.
 """
@@ -7,9 +7,8 @@ import os
 import logging
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
-from google.cloud import pubsub_v1
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import requests
@@ -242,7 +241,7 @@ def initialize_portfolio_constructor():
                 max_single_strategy=1.0,  # 100% max per strategy
                 min_allocation=0.01,  # 1% minimum
                 cagr_target=2.0,  # 200% CAGR target for normalization
-                use_cached_allocations=True,  # ⚡ Use cached allocations (not recalculated - signals are time-critical)
+                use_cached_allocations=False,  # ❌ DISABLED - Use fund allocations from MongoDB instead
                 allocations_config_path=allocations_cache_path,  # current_portfolio_allocation_approved.json
                 risk_free_rate=0.0
             )
@@ -942,22 +941,21 @@ def build_portfolio_context(account_state: Dict[str, Any]) -> PortfolioContext:
 
 def convert_signal_dict_to_object(signal_dict: Dict[str, Any]) -> Signal:
     """Convert signal dictionary to Signal object"""
-    # Handle timestamp with 'Z' suffix
-    timestamp_str = signal_dict.get('timestamp')
+    # Use signal_sent_EPOCH (internal EPOCH format) - convert to datetime for Signal object
+    epoch_timestamp = signal_dict.get('signal_sent_EPOCH')
 
     # Validate timestamp exists
-    if timestamp_str is None:
-        raise ValueError(f"Signal {signal_dict.get('signal_id')} has no timestamp. Developer must provide a valid timestamp.")
+    if epoch_timestamp is None:
+        raise ValueError(f"Signal {signal_dict.get('signal_id')} has no signal_sent_EPOCH. Developer must provide a valid EPOCH timestamp.")
 
-    # Determine timestamp value
-    if isinstance(timestamp_str, datetime):
-        timestamp_value = timestamp_str
-    elif isinstance(timestamp_str, str):
-        if timestamp_str.endswith('Z'):
-            timestamp_str = timestamp_str[:-1] + '+00:00'
-        timestamp_value = datetime.fromisoformat(timestamp_str)
+    # Convert EPOCH to datetime
+    if isinstance(epoch_timestamp, (int, float)):
+        timestamp_value = datetime.fromtimestamp(epoch_timestamp, tz=timezone.utc)
+    elif isinstance(epoch_timestamp, datetime):
+        # Already a datetime (edge case)
+        timestamp_value = epoch_timestamp
     else:
-        raise ValueError(f"Signal {signal_dict.get('signal_id')} has invalid timestamp type: {type(timestamp_str)}. Must be datetime or ISO format string.")
+        raise ValueError(f"Signal {signal_dict.get('signal_id')} has invalid signal_sent_EPOCH type: {type(epoch_timestamp)}. Must be int/float EPOCH or datetime.")
 
     return Signal(
         signal_id=signal_dict.get('signal_id'),
@@ -1209,8 +1207,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     
     logger.info(f"📊 Found {len(active_allocations)} ACTIVE allocation(s) for strategy {strategy_id}")
     for alloc in active_allocations:
-        strategies_dict = alloc.get('strategies', {})
-        strategy_pct = strategies_dict.get(strategy_id, 0) * 100
+        allocations_dict = alloc.get('allocations', {})
+        strategy_pct = allocations_dict.get(strategy_id, 0)
         logger.info(f"   Fund: {alloc['fund_id']} | Allocation: {alloc['allocation_name']} | Strategy %: {strategy_pct:.1f}%")
     
     # ============================================================================
@@ -1221,25 +1219,32 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     for allocation in active_allocations:
         fund_id = allocation['fund_id']
         allocation_name = allocation['allocation_name']
-        strategies_dict = allocation.get('strategies', {})
-        strategy_pct = strategies_dict.get(strategy_id, 0)
+        allocations_dict = allocation.get('allocations', {})
+        strategy_pct = allocations_dict.get(strategy_id, 0)
         
         logger.info(f"\n{'='*70}")
         logger.info(f"🏦 Processing Fund: {fund_id} | Allocation: {allocation_name}")
         logger.info(f"💰 Strategy allocation: {strategy_pct*100:.1f}%")
         logger.info(f"{'='*70}")
         
-        # Calculate fund equity (sums all account equities, updates fund.total_equity)
-        fund_equity = calculate_fund_equity(fund_id, trading_accounts_collection, funds_collection)
+        # Get fund equity from MongoDB (updated by account-data-service)
+        fund_doc = funds_collection.find_one({"fund_id": fund_id})
+        if not fund_doc:
+            logger.warning(f"⚠️ Fund {fund_id} not found in database, skipping")
+            continue
+            
+        fund_equity = fund_doc.get('total_equity', 0.0)
         
         if fund_equity <= 0:
-            logger.warning(f"⚠️ Fund {fund_id} has zero or negative equity, skipping")
+            logger.warning(f"⚠️ Fund {fund_id} has zero or negative equity (${fund_equity:,.2f}), skipping")
+            logger.warning(f"   Make sure account-data-service is running and has polled broker accounts")
             continue
         
         # Get strategy allocation details for this fund
         fund_allocation_data = get_strategy_allocation_for_fund(
-            fund_id, strategy_id, fund_equity, strategy_pct,
-            trading_orders_collection, portfolio_allocations_collection
+            fund_id, strategy_id,
+            portfolio_allocations_collection, trading_orders_collection,
+            funds_collection, trading_accounts_collection
         )
         
         allocated_capital = fund_allocation_data['allocated_capital']
@@ -1295,17 +1300,34 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             update_signal_store_with_decision(signal_store_id, decision)
             return
 
-        # Step 3: Build context and convert signal
+        # Step 3: Extract signal_data and build context
+        raw_signal = signal.get('signal_data', signal)
         context = build_portfolio_context(account_state)
-        signal_obj = convert_signal_dict_to_object(signal)
+        
+        # Step 4: Override context with fund allocation capital
+        # The ratio-based sizing will use this instead of account equity
+        context['account_equity'] = allocated_capital  # Use fund's allocation as the "account"
+        context['fund_allocation'] = {
+            'fund_id': fund_id,
+            'strategy_pct': strategy_pct,
+            'allocated_capital': allocated_capital,
+            'available_capital': available_capital
+        }
+        
+        # Use Portfolio Constructor for ratio-based sizing (but skip optimization)
+        # Just approve the signal and let ratio logic calculate proper quantity
+        decision_obj = SignalDecision(
+            action='APPROVE',
+            quantity=0,  # Will be calculated by ratio logic below
+            reason=f'Fund allocation: {strategy_pct*100:.2f}% = ${allocated_capital:,.2f}',
+            allocated_capital=allocated_capital,
+            margin_required=0.0,
+            metadata={'fund_allocation': True, 'fund_id': fund_id}
+        )
 
-        # Step 4: Get portfolio constructor and evaluate signal
-        constructor = initialize_portfolio_constructor()
-        decision_obj: SignalDecision = constructor.evaluate_signal(signal_obj, context)
-
-        # Step 4.0: Extract legs for multi-leg processing
-        # If 'legs' is provided, use all legs; otherwise create single-leg array from primary signal
-        legs = signal.get('legs')
+        # Step 4.0: Extract legs for multi-leg processing (BEFORE decision logic needs them)
+        # If 'legs' or 'signal_legs' is provided, use all legs; otherwise create single-leg array from primary signal
+        legs = raw_signal.get('legs') or raw_signal.get('signal_legs') or raw_signal.get('signal')
         if legs and len(legs) > 1:
             is_multi_leg = True
             logger.info(f"🔀 Multi-leg signal detected: {len(legs)} legs")
@@ -1314,19 +1336,21 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         else:
             is_multi_leg = False
             # Create single-leg array from primary signal fields
-            legs = [{
-                'instrument': signal.get('instrument'),
-                'instrument_type': signal.get('instrument_type', 'STOCK'),
-                'direction': signal.get('direction'),
-                'action': signal.get('action'),
-                'order_type': signal.get('order_type'),
-                'price': signal.get('price'),
-                'quantity': signal.get('quantity'),
-                'environment': signal.get('environment', 'staging')
-            }]
+            # Use top-level fields from signal_store, but detail fields from raw_signal
+            if not legs:
+                legs = [{
+                    'instrument': signal.get('instrument'),
+                    'instrument_type': signal.get('instrument_type', 'STOCK'),
+                    'direction': signal.get('direction'),
+                    'action': signal.get('action'),
+                    'order_type': raw_signal.get('order_type'),
+                    'price': price,  # Use price from fund allocation calculation
+                    'quantity': raw_signal.get('quantity'),
+                    'environment': raw_signal.get('environment', 'staging')
+                }]
 
         # Step 4a: Determine Signal Type (ENTRY/EXIT/SCALE)
-        signal_type_info = position_manager.determine_signal_type(signal)
+        signal_type_info = position_manager.determine_signal_type(raw_signal)
 
         # Step 4a.1: CANCEL SIGNAL HANDLING - Cancel pending orders
         signal_type = signal_type_info.get('signal_type')
@@ -1335,7 +1359,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
             strategy_id = signal.get('strategy_id')
             instrument = signal.get('instrument')
-            entry_signal_id = signal.get('entry_signal_id')
+            entry_signal_id = raw_signal.get('entry_signal_id')
 
             # Query trading_orders collection for pending orders to cancel
             # Look for orders that are PENDING, SUBMITTED, or PRESUBMITTED (not yet filled)
@@ -1416,7 +1440,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             logger.info(f"🔴 EXIT signal detected - querying signal_store for entry quantity")
 
             # PRIORITY 1: Check if EXIT signal explicitly provides entry_signal_id
-            entry_signal_id = signal.get('entry_signal_id')
+            entry_signal_id = raw_signal.get('entry_signal_id')
             entry_signal = None
 
             if entry_signal_id and entry_signal_id != "$PREVIOUS":
@@ -2114,23 +2138,15 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     trading_order['entry_signal_id'] = decision_obj.metadata['entry_signal_id']
                     trading_order['entry_signal_ref'] = decision_obj.metadata.get('entry_signal_ref')
 
-                    # Save to MongoDB
+                    # Save to MongoDB (execution service watches via Change Stream)
                     trading_orders_collection.insert_one(trading_order)
                     all_fund_orders.append(order_id)
                     orders_created.append(order_id)
                     logger.info(f"✅ Trading order created: {order_id} for {leg_quantity} {leg_result.get('instrument')} in account {target_account_name}")
 
-                    # Publish to Pub/Sub
-                    try:
-                        message_data = json.dumps(trading_order, default=str).encode('utf-8')
-                        future = publisher.publish(trading_orders_topic, message_data)
-                        future.result(timeout=5)
-                        logger.info(f"✅ Order published to Pub/Sub topic")
-
-                        # Unified signal processing log for order creation
-                        logger.info(f"SIGNAL: {signal_id} | ORDER_CREATED | FundID={fund_id} | AccountID={target_account_name} | OrderID={order_id} | Quantity={leg_quantity} | Instrument={leg_result.get('instrument')} | Direction={leg_result.get('direction')}")
-                    except Exception as e:
-                        logger.error(f"Failed to publish order to Pub/Sub: {str(e)}")
+                    # Pub/Sub removed - execution service watches MongoDB Change Streams
+                    # Unified signal processing log for order creation
+                    logger.info(f"SIGNAL: {signal_id} | ORDER_CREATED | FundID={fund_id} | AccountID={target_account_name} | OrderID={order_id} | Quantity={leg_quantity} | Instrument={leg_result.get('instrument')} | Direction={leg_result.get('direction')}")
 
             # Summary log for this fund
             if len(orders_created) > 0:
@@ -2178,23 +2194,44 @@ def signals_callback(message):
         message.ack()
 
 
-def start_signal_subscriber():
+def watch_signals():
     """
-    Start Pub/Sub subscriber for signals with automatic reconnection on failure
+    Watch MongoDB Change Streams for new signals (replaces Pub/Sub subscriber)
     """
+    logger.info("Starting MongoDB Change Stream watcher for signals...")
+    
+    # Watch for new signals in signal_store collection
+    pipeline = [
+        {
+            '$match': {
+                'operationType': 'insert',
+                'fullDocument.cerebro_decision.status': {'$in': ['PENDING_PROCESSING', None]},
+                'fullDocument.status': {'$ne': 'REJECTED'}
+            }
+        }
+    ]
+    
     while True:
         try:
-            streaming_pull_future = subscriber.subscribe(signals_subscription, callback=signals_callback)
-            logger.info("CerebroService listening for signals...")
-            streaming_pull_future.result()  # Blocks until error
+            with signal_store_collection.watch(pipeline) as stream:
+                logger.info("✅ CerebroService listening for signals via MongoDB Change Streams...")
+                for change in stream:
+                    try:
+                        signal_data = change['fullDocument']
+                        signal_id = signal_data.get('signal_id', 'UNKNOWN')
+                        logger.info(f"Received signal: {signal_id}")
+                        
+                        # Process signal
+                        process_signal_with_constructor(signal_data)
+                        
+                    except Exception as e:
+                        signal_id = signal_data.get('signal_id', 'UNKNOWN') if 'signal_data' in locals() else 'UNKNOWN'
+                        logger.error(f"🚨 ERROR processing signal {signal_id}: {str(e)}", exc_info=True)
+                        
         except Exception as e:
-            logger.error(f"Subscriber error: {str(e)}")
-            logger.warning("Reconnecting to Pub/Sub in 5 seconds...")
-            try:
-                streaming_pull_future.cancel()
-            except:
-                pass
-            time.sleep(5)  # Wait before reconnecting
+            logger.error(f"Change Stream error: {str(e)}")
+            logger.warning("Reconnecting in 5 seconds...")
+            time.sleep(5)
             logger.info("Attempting to reconnect...")
 
 
@@ -2203,15 +2240,10 @@ def start_signal_subscriber():
 # ============================================================================
 
 if __name__ == "__main__":
-    logger.info("Starting Cerebro Service (Pub/Sub Only)")
+    logger.info("Starting Cerebro Service (MongoDB Change Streams)")
 
-    # Initialize Pub/Sub clients
-    project_id = os.getenv('PUBSUB_PROJECT_ID', 'mathematricks-trader')
-    subscriber = pubsub_v1.SubscriberClient()
-    publisher = pubsub_v1.PublisherClient()
-    signals_subscription = subscriber.subscription_path(project_id, 'standardized-signals-sub')
-    trading_orders_topic = publisher.topic_path(project_id, 'trading-orders')
-    order_commands_topic = publisher.topic_path(project_id, 'order-commands')
+    # Pub/Sub removed - using MongoDB Change Streams for all communication
+    # (Cerebro watches signal_store, writes to trading_orders, execution watches trading_orders)
 
     # Download current allocation from MongoDB to local cache (for fast signal processing)
     download_allocations_from_mongo_to_cache(update_action="cerebro_restart")
@@ -2222,5 +2254,5 @@ if __name__ == "__main__":
     # Load allocations
     reload_allocations()
 
-    # Start signal subscriber (BLOCKS)
-    start_signal_subscriber()
+    # Start MongoDB Change Stream watcher for signals (BLOCKS)
+    watch_signals()

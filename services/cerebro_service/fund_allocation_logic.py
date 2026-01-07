@@ -58,8 +58,8 @@ def calculate_fund_equity(
         # Get all accounts for this fund
         accounts = list(trading_accounts_collection.find({"fund_id": fund_id}))
         
-        # Sum equity across all accounts
-        total_equity = sum(acc.get('equity', 0.0) for acc in accounts)
+        # Sum equity across all accounts (from balances.equity field)
+        total_equity = sum(acc.get('balances', {}).get('equity', 0.0) for acc in accounts)
         
         # Update fund document
         funds_collection.update_one(
@@ -107,8 +107,17 @@ def get_strategy_allocation_for_fund(
         }
     """
     try:
-        # Get fund total equity (recalculate to be current)
-        fund_equity = calculate_fund_equity(fund_id, trading_accounts_collection, funds_collection)
+        # Get fund total equity from MongoDB (updated by account-data-service)
+        fund_doc = funds_collection.find_one({"fund_id": fund_id})
+        if not fund_doc:
+            logger.warning(f"Fund {fund_id} not found in database")
+            return {
+                "allocated_capital": 0.0,
+                "used_capital": 0.0,
+                "available_capital": 0.0
+            }
+        
+        fund_equity = fund_doc.get('total_equity', 0.0)
         
         if fund_equity <= 0:
             logger.warning(f"Fund {fund_id} has zero or negative equity: ${fund_equity:,.2f}")

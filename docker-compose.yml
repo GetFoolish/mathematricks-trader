@@ -15,12 +15,8 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
-      pubsub-emulator:
-        condition: service_started
     environment:
       - TZ=${TZ}
-      - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
-      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
       - MONGODB_URI=${MONGODB_URI}
       - PYTHONPATH=/app/services/cerebro_service:/app
       - ACCOUNT_DATA_SERVICE_URL=${ACCOUNT_DATA_SERVICE_URL}
@@ -39,14 +35,8 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
-      pubsub-emulator:
-        condition: service_started
-      pubsub-init:
-        condition: service_completed_successfully
     environment:
       - TZ=${TZ}
-      - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
-      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
       - MONGODB_URI=${MONGODB_URI}
       - ACCOUNT_DATA_SERVICE_URL=${ACCOUNT_DATA_SERVICE_URL}
     command: python -m services.execution_service.execution_main
@@ -62,12 +52,8 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
-      pubsub-emulator:
-        condition: service_started
     environment:
       - TZ=${TZ}
-      - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
-      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
       - MONGODB_URI=${MONGODB_URI}
     command: python -m services.account_data_service.account_data_main
 
@@ -109,14 +95,8 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
-      pubsub-emulator:
-        condition: service_started
-      pubsub-init:
-        condition: service_completed_successfully
     environment:
       - TZ=${TZ}
-      - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
-      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
       - MONGODB_URI=${MONGODB_URI}
     command: python -m services.signal_ingestion.signal_ingestion_main --staging
 
@@ -177,30 +157,6 @@ services:
       - VNC_SERVER_PASSWORD=ibgateway
     # Restart policy to handle 2FA timeouts/restarts
     restart: unless-stopped
-
-  pubsub-emulator:
-    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
-    ports:
-      - "8085:8085"
-    command: bash -c "gcloud beta emulators pubsub start --project=${PUBSUB_PROJECT_ID} --host-port=0.0.0.0:8085 2>&1 | grep -v 'HttpVersionRoutingHandler\\|Detected non-HTTP/2'"
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8085/" ]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-
-  pubsub-init:
-    image: python:3.11-slim
-    volumes:
-      - ./scripts:/scripts
-    depends_on:
-      pubsub-emulator:
-        condition: service_healthy
-    environment:
-      - PUBSUB_EMULATOR_HOST=${PUBSUB_EMULATOR_HOST}
-      - PUBSUB_PROJECT_ID=${PUBSUB_PROJECT_ID}
-    command: >
-      bash -c "pip install google-cloud-pubsub && python /scripts/init_pubsub.py"
 
   # Frontend
   frontend:

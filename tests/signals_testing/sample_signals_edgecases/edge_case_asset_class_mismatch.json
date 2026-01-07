@@ -5,7 +5,7 @@
     "signal_sent_EPOCH": 1736000100,
     "signalID": "sig_edge_asset_mismatch_001",
     "entry_name": "$ENTRY_1",
-    "account_equity": 500000,
+    "account_equity": 83000,
     "signal_legs": [
       {
         "instrument": "GC",

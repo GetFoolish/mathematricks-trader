@@ -118,7 +118,7 @@ trading_accounts_collection = db['trading_accounts']
 
 # Initialize repository and poller
 repository = TradingAccountRepository(trading_accounts_collection)
-poller = BrokerPoller(repository, interval=POLL_INTERVAL_SECONDS, mongodb_url=MONGODB_URI)
+poller = BrokerPoller(repository, interval=POLL_INTERVAL_SECONDS, mongodb_url=MONGODB_URI, mongodb_client=mongo_client)
 
 
 # ============================================================================

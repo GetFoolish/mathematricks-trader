@@ -9,7 +9,6 @@ import json
 import argparse
 from datetime import datetime
 from typing import Dict, Any, Optional, List
-from google.cloud import pubsub_v1
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import threading
@@ -90,7 +89,7 @@ if args.use_mock_broker:
     logger.warning("=" * 80)
 
 # ========================================================================
-# DATABASE AND PUB/SUB INITIALIZATION
+# DATABASE INITIALIZATION
 # ========================================================================
 
 # Initialize MongoDB
@@ -114,15 +113,8 @@ trading_orders_collection = db['trading_orders']
 trading_accounts_collection = db['trading_accounts']  # For position tracking
 signal_store_collection = db['signal_store']  # For updating execution data
 
-# Initialize Google Cloud Pub/Sub
-project_id = os.getenv('PUBSUB_PROJECT_ID', 'mathematricks-trader')
-subscriber = pubsub_v1.SubscriberClient()
-publisher = pubsub_v1.PublisherClient()
-
-trading_orders_subscription = subscriber.subscription_path(project_id, 'trading-orders-sub')
-order_commands_subscription = subscriber.subscription_path(project_id, 'order-commands-sub')
-execution_confirmations_topic = publisher.topic_path(project_id, 'execution-confirmations')
-account_updates_topic = publisher.topic_path(project_id, 'account-updates')
+# Pub/Sub removed - using MongoDB Change Streams instead
+# All event-driven communication now via MongoDB
 
 # Account Data Service Configuration
 ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:8082')
@@ -280,9 +272,8 @@ def get_broker_for_account(account_id: str) -> Optional['AbstractBroker']:
 initialize_broker_pool()
 
 # Order queue for threading safety
-# Pub/Sub callbacks run in thread pool, orders are processed in main thread
+# MongoDB Change Stream watcher runs in thread, orders are processed in main thread
 order_queue = queue.Queue()
-command_queue = queue.Queue()  # For cancel commands and other order management
 
 # Track active IBKR orders by order_id for cancellation
 active_ibkr_orders = {}  # {order_id: broker_order_id}
@@ -410,30 +401,8 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
         return None
 
 
-def publish_execution_confirmation(execution_data: Dict[str, Any]):
-    """
-    Publish execution confirmation to Pub/Sub
-    """
-    try:
-        message_data = json.dumps(execution_data, default=str).encode('utf-8')
-        future = publisher.publish(execution_confirmations_topic, message_data)
-        message_id = future.result()
-        logger.debug(f"Published execution confirmation: {message_id}")
-    except Exception as e:
-        logger.error(f"Error publishing execution confirmation: {str(e)}")
-
-
-def publish_account_update(account_data: Dict[str, Any]):
-    """
-    Publish account update to Pub/Sub
-    """
-    try:
-        message_data = json.dumps(account_data, default=str).encode('utf-8')
-        future = publisher.publish(account_updates_topic, message_data)
-        message_id = future.result()
-        logger.info(f"Published account update: {message_id}")
-    except Exception as e:
-        logger.error(f"Error publishing account update: {str(e)}")
+# Pub/Sub removed - execution confirmations stored directly in MongoDB
+# No need for separate publishing functions - all data in signal_store and trading_orders
 
 
 def update_signal_store_with_execution(order_data: Dict[str, Any], execution_data: Dict[str, Any]):
@@ -759,80 +728,46 @@ def cancel_order(order_id: str) -> bool:
         return False
 
 
-def order_commands_callback(message):
+def watch_trading_orders():
     """
-    Callback for order commands (cancel, modify, etc.) from Pub/Sub
-    Runs in thread pool - adds commands to queue for main thread processing
+    Watch MongoDB Change Streams for new trading orders
+    Runs in background thread - adds orders to queue for main thread processing
     """
-    try:
-        command_data = json.loads(message.data.decode('utf-8'))
-        command_type = command_data.get('command')
-        order_id = command_data.get('order_id')
-
-        logger.info(f"Received order command: {command_type} for {order_id}")
-
-        # Add command to queue for main thread processing
-        command_queue.put({
-            'command_data': command_data,
-            'message': message
-        })
-
-    except Exception as e:
-        logger.error(f"Error processing order command: {str(e)}", exc_info=True)
-        message.nack()
-
-
-def process_command_from_queue(command_item: Dict[str, Any]):
-    """
-    Process a single command from the queue in the main thread
-    """
-    command_data = command_item['command_data']
-    message = command_item['message']
-    command_type = command_data.get('command')
-    order_id = command_data.get('order_id')
-
-    try:
-        logger.info(f"Processing command: {command_type} for {order_id}")
-
-        if command_type == 'CANCEL':
-            success = cancel_order(order_id)
-            if success:
-                logger.info(f"✅ Successfully cancelled order {order_id}")
-            else:
-                logger.warning(f"⚠️ Failed to cancel order {order_id}")
-
-        else:
-            logger.warning(f"⚠️ Unknown command type: {command_type}")
-
-        # Ack the message
-        message.ack()
-
-    except Exception as e:
-        logger.error(f"Error processing command {command_type} for {order_id}: {e}", exc_info=True)
-        message.nack()
-
-
-def trading_orders_callback(message):
-    """
-    Callback for trading orders from Pub/Sub
-    Runs in thread pool - adds orders to queue for main thread processing
-    """
-    try:
-        order_data = json.loads(message.data.decode('utf-8'))
-        order_id = order_data.get('order_id')
-
-        logger.debug(f"Received trading order: {order_id} - adding to queue")
-
-        # Add order to queue for main thread processing
-        # Include the message so we can ack/nack it later
-        order_queue.put({
-            'order_data': order_data,
-            'message': message
-        })
-
-    except Exception as e:
-        logger.error(f"Error processing trading order: {str(e)}", exc_info=True)
-        message.nack()
+    logger.info("Starting MongoDB Change Stream watcher for trading_orders...")
+    
+    pipeline = [
+        {
+            '$match': {
+                'operationType': 'insert',
+                'fullDocument.status': 'PENDING'
+            }
+        }
+    ]
+    
+    while True:
+        try:
+            with trading_orders_collection.watch(pipeline) as stream:
+                logger.info("✅ MongoDB Change Stream connected for trading_orders")
+                for change in stream:
+                    try:
+                        order_data = change['fullDocument']
+                        order_id = order_data.get('order_id')
+                        
+                        logger.debug(f"Received trading order via Change Stream: {order_id} - adding to queue")
+                        
+                        # Add order to queue for main thread processing
+                        order_queue.put({
+                            'order_data': order_data,
+                            'resume_token': stream.resume_token
+                        })
+                    
+                    except Exception as e:
+                        logger.error(f"Error processing change stream event: {str(e)}", exc_info=True)
+        
+        except Exception as e:
+            logger.error(f"MongoDB Change Stream error: {str(e)}")
+            logger.warning("Reconnecting to trading_orders Change Stream in 5 seconds...")
+            time.sleep(5)
 
 
 def process_order_from_queue(order_item: Dict[str, Any]):
@@ -841,7 +776,6 @@ def process_order_from_queue(order_item: Dict[str, Any]):
     This runs in the main thread where IBKR's event loop is available
     """
     order_data = order_item['order_data']
-    message = order_item['message']
     order_id = order_data.get('order_id')
 
     # Extract signal ID from order ID (format: {signal_id}_ORD)
@@ -854,7 +788,7 @@ def process_order_from_queue(order_item: Dict[str, Any]):
         if signal_id in processed_signal_ids:
             logger.critical(f"🚨 DUPLICATE SIGNAL BLOCKED! Signal {signal_id} already processed - REJECTING to prevent duplicate execution!")
             signal_logger.critical(f"ORDER: {signal_id} | DUPLICATE_BLOCKED | This signal was already processed - order rejected for safety")
-            message.ack()  # ACK the message to prevent redelivery
+            # No ack needed - MongoDB Change Stream handles this automatically
             return
 
         # Add to processed set
@@ -968,44 +902,15 @@ def process_order_from_queue(order_item: Dict[str, Any]):
         # if account_state:
         #     publish_account_update(account_state)
 
-        # Acknowledge message
-        message.ack()
+        logger.debug(f"Completed processing order {order_id}")
 
     except Exception as e:
-        logger.error(f"Error processing order {order_id}: {str(e)}", exc_info=True)
-        message.nack()
+        logger.error(f"Error processing order {order_id}: {str(e)}\", exc_info=True)
+        # Order will remain in PENDING state and can be manually retried if needed
 
 
-def start_trading_orders_subscriber():
-    """
-    Start Pub/Sub subscriber for trading orders with retry logic
-    Runs in background thread
-    """
-    while True:
-        try:
-            streaming_pull_future = subscriber.subscribe(trading_orders_subscription, callback=trading_orders_callback)
-            logger.debug("Trading orders subscriber started")
-            streaming_pull_future.result()
-        except Exception as e:
-            logger.error(f"Trading orders subscriber error: {str(e)}")
-            logger.warning("Reconnecting to trading-orders subscription in 5 seconds...")
-            time.sleep(5)
-
-
-def start_order_commands_subscriber():
-    """
-    Start Pub/Sub subscriber for order commands (cancel, modify, etc.) with retry logic
-    Runs in background thread
-    """
-    while True:
-        try:
-            streaming_pull_future = subscriber.subscribe(order_commands_subscription, callback=order_commands_callback)
-            logger.debug("Order commands subscriber started")
-            streaming_pull_future.result()
-        except Exception as e:
-            logger.error(f"Order commands subscriber error: {str(e)}")
-            logger.warning("Reconnecting to order-commands subscription in 5 seconds...")
-            time.sleep(5)
+# MongoDB Change Stream watchers replace Pub/Sub subscribers
+# (watch_trading_orders function defined above)
 
 
 def periodic_account_updates():
@@ -1047,14 +952,11 @@ if __name__ == "__main__":
         )
         logger.info(f"✅ Mock broker account '{account_id}' initialized with empty positions")
 
-    # Start Pub/Sub subscribers in background threads
-    orders_subscriber_thread = threading.Thread(target=start_trading_orders_subscriber, daemon=True)
-    orders_subscriber_thread.start()
+    # Start MongoDB Change Stream watcher in background thread
+    orders_watcher_thread = threading.Thread(target=watch_trading_orders, daemon=True)
+    orders_watcher_thread.start()
 
-    commands_subscriber_thread = threading.Thread(target=start_order_commands_subscriber, daemon=True)
-    commands_subscriber_thread.start()
-
-    logger.info("✅ Execution Service ready - listening for orders")
+    logger.info("✅ Execution Service ready - listening for orders via MongoDB Change Streams")
     logger.info("*" * 50)
     try:
         while True:
@@ -1062,13 +964,6 @@ if __name__ == "__main__":
             try:
                 order_item = order_queue.get(timeout=0.1)
                 process_order_from_queue(order_item)
-            except queue.Empty:
-                pass
-
-            # Check if there are commands in the queue (non-blocking)
-            try:
-                command_item = command_queue.get(timeout=0.1)
-                process_command_from_queue(command_item)
             except queue.Empty:
                 pass
 
