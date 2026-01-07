@@ -27,6 +27,10 @@ if "%1"=="restart-portfolio" goto restart-portfolio
 if "%1"=="restart-dashboard" goto restart-dashboard
 if "%1"=="rebuild" goto rebuild
 if "%1"=="clean" goto clean
+if "%1"=="clean-old-logs" goto clean-old-logs
+if "%1"=="export-seed-data" goto export-seed-data
+if "%1"=="reseed-db" goto reseed-db
+if "%1"=="test-signals" goto test-signals
 
 echo Unknown target: %1
 goto help
@@ -56,6 +60,10 @@ echo .\make.bat restart-portfolio      - Restart portfolio-builder
 echo .\make.bat restart-dashboard      - Restart dashboard-creator
 echo .\make.bat rebuild                - Rebuild all containers
 echo .\make.bat clean                  - Stop and remove all containers and volumes (DATA LOSS!)
+echo .\make.bat clean-old-logs         - Truncate Docker container logs (keeps containers running)
+echo .\make.bat export-seed-data       - Export current MongoDB data as seed data
+echo .\make.bat reseed-db              - Restore MongoDB from latest seed data
+echo .\make.bat test-signals           - Reseed DB, start services, and run all test signals
 exit /b 0
 
 :start
@@ -67,7 +75,8 @@ docker-compose stop
 exit /b %errorlevel%
 
 :restart
-docker-compose restart
+echo Restarting services (excluding mongodb-init)...
+docker-compose restart cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend
 exit /b %errorlevel%
 
 :status
@@ -75,7 +84,7 @@ docker-compose ps
 exit /b %errorlevel%
 
 :logs
-docker-compose logs -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator ib-gateway frontend pubsub-emulator
+docker-compose logs -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator
 exit /b %errorlevel%
 
 :logs-cerebro
@@ -112,7 +121,9 @@ exit /b %errorlevel%
 
 :send-test-signal
 REM Try venv first, then fall back to system python
-if exist ".\venv\Scripts\python.exe" (
+if exist ".\.venv\Scripts\python.exe" (
+    .\.venv\Scripts\python.exe tests\signals_testing\send_test_signal.py --file tests\signals_testing\sample_signals\equity_simple_signal_1.json
+) else if exist ".\venv\Scripts\python.exe" (
     .\venv\Scripts\python.exe tests\signals_testing\send_test_signal.py --file tests\signals_testing\sample_signals\equity_simple_signal_1.json
 ) else (
     python tests\signals_testing\send_test_signal.py --file tests\signals_testing\sample_signals\equity_simple_signal_1.json
@@ -147,9 +158,44 @@ exit /b %errorlevel%
 docker-compose build
 exit /b %errorlevel%
 
+:clean-old-logs
+echo Clearing Docker logs by restarting containers...
+echo Note: This preserves container state but clears log buffers
+docker-compose restart
+echo Logs cleared. Containers restarted with fresh log buffers.
+exit /b %errorlevel%
+
 :clean
 echo WARNING: This will remove all containers and volumes.
 echo Press Ctrl+C to cancel or wait 5 seconds...
 timeout /t 5
 docker-compose down -v
+exit /b %errorlevel%
+
+:export-seed-data
+bash scripts/export_seed_data.sh
+exit /b %errorlevel%
+
+:reseed-db
+bash scripts/restore_seed_data.sh
+exit /b %errorlevel%
+
+:test-signals
+echo Reseeding database...
+bash scripts/restore_seed_data.sh
+echo.
+echo Starting services...
+call :start
+echo.
+echo Waiting 15 seconds for services to initialize...
+timeout /t 15
+echo.
+echo Running test signals...
+if exist ".\.venv\Scripts\python.exe" (
+    .\.venv\Scripts\python.exe tests\signals_testing\run_full_test.py --folder tests\signals_testing\sample_signals
+) else if exist ".\venv\Scripts\python.exe" (
+    .\venv\Scripts\python.exe tests\signals_testing\run_full_test.py --folder tests\signals_testing\sample_signals
+) else (
+    python tests\signals_testing\run_full_test.py --folder tests\signals_testing\sample_signals
+)
 exit /b %errorlevel%

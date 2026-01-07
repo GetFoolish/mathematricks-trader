@@ -257,12 +257,14 @@ def get_available_accounts_for_strategy(
             return []
         
         # Build result with relevant fields
+        # Note: balances are nested under 'balances' subdocument
         result = []
         for acc in accounts:
+            balances = acc.get('balances', {})
             result.append({
                 "account_id": acc['account_id'],
-                "available_margin": acc.get('margin_available', 0.0),
-                "equity": acc.get('equity', 0.0),
+                "available_margin": balances.get('margin_available', 0.0),
+                "equity": balances.get('equity', 0.0),
                 "broker": acc.get('broker', 'Unknown')
             })
         

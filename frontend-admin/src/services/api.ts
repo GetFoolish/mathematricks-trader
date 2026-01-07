@@ -20,11 +20,13 @@ import type {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
 const CEREBRO_BASE_URL = import.meta.env.VITE_CEREBRO_BASE_URL || 'http://localhost:8001';
 const PORTFOLIO_BUILDER_BASE_URL = import.meta.env.VITE_PORTFOLIO_BUILDER_BASE_URL || 'http://localhost:8003';
+const FRONTEND_API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 class ApiClient {
   private client: AxiosInstance;
   private cerebroClient: AxiosInstance;
   private portfolioBuilderClient: AxiosInstance;
+  private frontendApiClient: AxiosInstance;
 
   constructor() {
     this.client = axios.create({
@@ -43,6 +45,13 @@ class ApiClient {
 
     this.portfolioBuilderClient = axios.create({
       baseURL: PORTFOLIO_BUILDER_BASE_URL,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    this.frontendApiClient = axios.create({
+      baseURL: FRONTEND_API_BASE_URL,
       headers: {
         'Content-Type': 'application/json',
       },
@@ -186,27 +195,27 @@ class ApiClient {
   }
 
   // ============================================================================
-  // Activity Tab APIs (PortfolioBuilder Service)
+  // Activity Tab APIs (Frontend API Server)
   // ============================================================================
 
   async getRecentSignals(limit: number = 50, environment?: string) {
     const params: any = { limit };
     if (environment) params.environment = environment;
-    const response = await this.portfolioBuilderClient.get('/api/v1/activity/signals', { params });
+    const response = await this.frontendApiClient.get('/api/v1/activity/signals', { params });
     return response.data;
   }
 
   async getRecentOrders(limit: number = 50, environment?: string) {
     const params: any = { limit };
     if (environment) params.environment = environment;
-    const response = await this.portfolioBuilderClient.get('/api/v1/activity/orders', { params });
+    const response = await this.frontendApiClient.get('/api/v1/activity/orders', { params });
     return response.data;
   }
 
   async getCerebroDecisions(limit: number = 50, environment?: string) {
     const params: any = { limit };
     if (environment) params.environment = environment;
-    const response = await this.portfolioBuilderClient.get('/api/v1/activity/decisions', { params });
+    const response = await this.frontendApiClient.get('/api/v1/activity/decisions', { params });
     return response.data;
   }
 

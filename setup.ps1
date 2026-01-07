@@ -172,17 +172,17 @@ function Wait-ForMongoDB {
     return $false
 }
 
-# Wait for PubSub emulator
-function Wait-ForPubSub {
-    Write-Info "Waiting for PubSub emulator (max 60 seconds)..."
+# Wait for Frontend API
+function Wait-ForFrontendApi {
+    Write-Info "Waiting for Frontend API (max 60 seconds)..."
     $maxAttempts = 30
     $attempt = 1
 
     while ($attempt -le $maxAttempts) {
         try {
-            $response = Invoke-WebRequest -Uri "http://localhost:8085/" -TimeoutSec 1 -ErrorAction SilentlyContinue
+            $response = Invoke-WebRequest -Uri "http://localhost:8000/health" -TimeoutSec 1 -ErrorAction SilentlyContinue
             if ($response.StatusCode -eq 200) {
-                Write-Success "PubSub emulator is ready"
+                Write-Success "Frontend API is ready"
                 return $true
             }
         }
@@ -196,8 +196,8 @@ function Wait-ForPubSub {
         $attempt++
     }
 
-    Write-Error-Message "PubSub emulator did not start in time"
-    Write-Host "Check logs with: make logs"
+    Write-Error-Message "Frontend API did not start in time"
+    Write-Host "Check logs with: make logs-frontend"
     return $false
 }
 
@@ -321,8 +321,8 @@ function Show-Summary {
     Write-Host "Access points:"
     Write-Host "  Frontend Dashboard:  http://localhost:5173"
     Write-Host "                      (username: admin, password: admin)"
+    Write-Host "  Frontend API:       http://localhost:8000"
     Write-Host "  MongoDB:            mongodb://localhost:27018"
-    Write-Host "  PubSub Emulator:    http://localhost:8085"
     Write-Host "  Portfolio Builder:  http://localhost:8003"
     Write-Host "  Dashboard Creator:  http://localhost:8004"
     Write-Host ""
@@ -364,7 +364,7 @@ try {
 
     # Health checks
     Wait-ForMongoDB
-    Wait-ForPubSub
+    Wait-ForFrontendApi
     Wait-ForServices
 
     Write-Host ""

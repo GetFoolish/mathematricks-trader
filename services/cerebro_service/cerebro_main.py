@@ -1306,8 +1306,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         
         # Step 4: Override context with fund allocation capital
         # The ratio-based sizing will use this instead of account equity
-        context['account_equity'] = allocated_capital  # Use fund's allocation as the "account"
-        context['fund_allocation'] = {
+        context.account_equity = allocated_capital  # Use fund's allocation as the "account"
+        context.fund_allocation = {
             'fund_id': fund_id,
             'strategy_pct': strategy_pct,
             'allocated_capital': allocated_capital,
@@ -1600,7 +1600,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
             # RATIO-BASED POSITION SIZING
             # Calculate position capital based on signal's sizing intent
-            signal_account_equity = signal.get('account_equity')
+            # NOTE: account_equity is inside signal_data (raw_signal), not at top level
+            signal_account_equity = raw_signal.get('account_equity')
 
             # Calculate signal's position value from first leg
             if legs and len(legs) > 0:
@@ -2050,9 +2051,11 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             # ============================================================================
             # MULTI-ACCOUNT DISTRIBUTION: Distribute capital across available accounts
             # ============================================================================
-        
+
             # Calculate target capital from decision
-            target_capital = decision_obj.quantity * signal.get('price', 1.0)
+            # Use price from leg_results (properly extracted), not signal top-level
+            price_from_legs = leg_results[0].get('price_used', 1.0) if leg_results else 1.0
+            target_capital = decision_obj.quantity * price_from_legs
         
             # Distribute capital across accounts proportionally by available margin
             account_allocations = distribute_capital_across_accounts(target_capital, available_accounts)
@@ -2133,10 +2136,10 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         "created_at": datetime.utcnow()
                     }
 
-                # For EXIT signals, add entry_signal_id reference
-                if decision_obj.metadata.get('entry_signal_id'):
-                    trading_order['entry_signal_id'] = decision_obj.metadata['entry_signal_id']
-                    trading_order['entry_signal_ref'] = decision_obj.metadata.get('entry_signal_ref')
+                    # For EXIT signals, add entry_signal_id reference
+                    if decision_obj.metadata.get('entry_signal_id'):
+                        trading_order['entry_signal_id'] = decision_obj.metadata['entry_signal_id']
+                        trading_order['entry_signal_ref'] = decision_obj.metadata.get('entry_signal_ref')
 
                     # Save to MongoDB (execution service watches via Change Stream)
                     trading_orders_collection.insert_one(trading_order)
