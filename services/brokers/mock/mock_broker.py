@@ -114,7 +114,6 @@ class MockBroker(AbstractBroker):
             return
 
         mock_account = {
-            "_id": self.account_id,
             "account_id": self.account_id,
             "account_name": f"{self.account_id} Mock Paper Trading",
             "broker": "Mock",
@@ -142,17 +141,33 @@ class MockBroker(AbstractBroker):
         }
 
         try:
-            # Replace existing account (upsert with replace)
-            result = trading_accounts.replace_one(
-                {"_id": self.account_id},
-                mock_account,
+            # Only update broker-specific fields,  preserving fund_id and other config
+            result = trading_accounts.update_one(
+                {"account_id": self.account_id},
+                {
+                    "$set": {
+                        "account_name": mock_account["account_name"],
+                        "broker": mock_account["broker"],
+                        "account_number": mock_account["account_number"],
+                        "account_type": mock_account["account_type"],
+                        "authentication_details": mock_account["authentication_details"],
+                        "balances": mock_account["balances"],
+                        "open_positions": mock_account["open_positions"],
+                        "status": mock_account["status"],
+                        "updated_at": mock_account["updated_at"]
+                    },
+                    "$setOnInsert": {
+                        "created_at": mock_account["created_at"]
+                        # fund_id will be preserved if it exists, or omitted on new inserts
+                    }
+                },
                 upsert=True
             )
 
             if result.upserted_id:
                 logger.info(f"✅ Created fresh {self.account_id} account in database")
             else:
-                logger.info(f"✅ Replaced existing {self.account_id} account with fresh state")
+                logger.info(f"✅ Updated existing {self.account_id} account with fresh balances")
 
             logger.info(f"   Initial Equity: ${mock_account['balances']['equity']:,.2f}")
             logger.info(f"   Buying Power: ${mock_account['balances']['buying_power']:,.2f}")

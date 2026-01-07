@@ -47,9 +47,9 @@ find "$TEMP_DIR" -name ".DS_Store" -delete
 echo "🗑️  Ensuring clean database..."
 mongosh "$MONGODB_URI/$DATABASE" --quiet --eval "db.dropDatabase()" > /dev/null 2>&1 || true
 
-# Restore from extracted data
+# Restore from extracted data with --drop to replace existing collections
 echo "📥 Restoring collections..."
-mongorestore --uri "$MONGODB_URI" "$TEMP_DIR/dump"
+mongorestore --drop --uri "$MONGODB_URI" "$TEMP_DIR/dump"
 
 # Clean up
 rm -rf "$TEMP_DIR"

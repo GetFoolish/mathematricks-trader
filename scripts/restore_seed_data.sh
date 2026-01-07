@@ -50,9 +50,9 @@ docker cp "$TEMP_DIR/dump" "$CONTAINER_NAME:/seed_restore_data"
 echo "🗑️  Dropping existing database..."
 docker exec "$CONTAINER_NAME" mongosh mathematricks_trading --quiet --eval "db.dropDatabase()"
 
-# Restore using mongorestore
+# Restore using mongorestore with --drop flag to ensure clean replacement
 echo "🔄 Running mongorestore..."
-docker exec "$CONTAINER_NAME" mongorestore /seed_restore_data
+docker exec "$CONTAINER_NAME" mongorestore --drop /seed_restore_data
 
 # Clean up
 docker exec "$CONTAINER_NAME" rm -rf /seed_restore_data

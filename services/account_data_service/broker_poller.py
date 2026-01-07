@@ -375,7 +375,7 @@ class BrokerPoller:
     def poll_all_accounts(self):
         """Poll all active accounts"""
         accounts = self.repository.list_accounts(status="ACTIVE")
-        logger.info(f"📊 Polling {len(accounts)} active accounts...")
+        logger.debug(f"📊 Polling {len(accounts)} active accounts...")
 
         for account in accounts:
             try:
@@ -721,24 +721,24 @@ class BrokerPoller:
             poll_type: Type of poll - "SCHEDULED" or "EVENT-DRIVEN"
         """
         # Always display full account state with clear separator
-        logger.info("-" * 50)
-        logger.info(f"📊 {poll_type} POLL - {account_id}")
-        logger.info("-" * 50)
-        logger.info(f"Equity: ${balances['equity']:,.2f} | Cash: ${balances['cash_balance']:,.2f}")
+        logger.debug("-" * 50)
+        logger.debug(f"📊 {poll_type} POLL - {account_id}")
+        logger.debug("-" * 50)
+        logger.debug(f"Equity: ${balances['equity']:,.2f} | Cash: ${balances['cash_balance']:,.2f}")
 
         # Always show positions (not just when changed)
         if len(positions) > 0:
-            logger.info(f"Positions:")
+            logger.debug(f"Positions:")
             for pos in positions:
                 pnl = pos.get('unrealized_pnl', 0)
                 pnl_str = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
-                logger.info(
+                logger.debug(
                     f"  • {pos.get('instrument')}: "
                     f"{pos.get('quantity')} {pos.get('side', 'LONG')} @ "
                     f"${pos.get('avg_price', 0):.2f} | "
                     f"PnL: {pnl_str}"
                 )
         else:
-            logger.info("Positions: None")
+            logger.debug("Positions: None")
 
-        logger.info("-" * 50)
+        logger.debug("-" * 50)

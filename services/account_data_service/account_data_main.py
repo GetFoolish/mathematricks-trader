@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
+from bson import ObjectId
 import uvicorn
 
 
@@ -35,8 +36,14 @@ class NaNSafeJSONEncoder(json.JSONEncoder):
 
 
 def sanitize_response(data: Any) -> Any:
-    """Recursively sanitize data to replace NaN/Inf with 0"""
-    if isinstance(data, float):
+    """Recursively sanitize data to handle MongoDB types and NaN/Inf values"""
+    from bson import ObjectId
+    
+    if isinstance(data, ObjectId):
+        return str(data)
+    elif isinstance(data, datetime):
+        return data.isoformat()
+    elif isinstance(data, float):
         if math.isnan(data) or math.isinf(data):
             return 0.0
         return data
