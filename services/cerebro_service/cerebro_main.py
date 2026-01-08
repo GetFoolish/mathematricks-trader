@@ -1660,9 +1660,11 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         return
                     # If no pending entry found either, entry_signal remains None and will be rejected below
 
-            if entry_signal and entry_signal.get('execution') and entry_signal['execution'].get('quantity_filled'):
-                # Found entry signal with execution data - use exact quantity
-                entry_quantity_filled = entry_signal['execution']['quantity_filled']
+            # Check for execution data - support v2 (total_quantity_filled) and v1 (quantity_filled)
+            execution = entry_signal.get('execution', {}) if entry_signal else {}
+            entry_quantity_filled = execution.get('total_quantity_filled') or execution.get('quantity_filled')
+
+            if entry_signal and entry_quantity_filled:
 
                 logger.info(f"✅ Found entry signal: {entry_signal['signal_id']}")
                 logger.info(f"✅ Entry quantity filled: {entry_quantity_filled}")
