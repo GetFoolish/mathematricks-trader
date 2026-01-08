@@ -37,6 +37,74 @@ class MongoDBWatcher:
         # Connect to MongoDB
         self.connect()
 
+    def _build_signal_store_doc(self, raw_signal_doc: dict, signal_array: list) -> dict:
+        """
+        Build a signal_store document using v2 schema.
+
+        v2 Schema focuses on:
+        - `raw`: Slim audit trail of original signal (no duplication)
+        - `decision`: Cerebro's final trading decision (populated later)
+        - `execution`: Order execution details (populated later)
+        - `position`: Position lifecycle tracking (populated later)
+        """
+        # Build raw.legs from signal array
+        raw_legs = []
+        for leg in signal_array:
+            raw_leg = {
+                "instrument": leg.get('instrument') or leg.get('ticker'),
+                "instrument_type": leg.get('instrument_type', 'STOCK'),
+                "action": leg.get('action', 'UNKNOWN'),
+                "direction": leg.get('direction', 'UNKNOWN'),
+                "quantity": leg.get('quantity', 0),
+                "order_type": leg.get('order_type', 'MARKET'),
+                "price": leg.get('price', 0),
+            }
+            # Optional fields
+            if leg.get('stop_loss'):
+                raw_leg['stop_loss'] = leg['stop_loss']
+            if leg.get('take_profit'):
+                raw_leg['take_profit'] = leg['take_profit']
+            if leg.get('strike'):
+                raw_leg['strike'] = leg['strike']
+            if leg.get('expiry'):
+                raw_leg['expiry'] = leg['expiry']
+            if leg.get('option_type'):
+                raw_leg['option_type'] = leg['option_type']
+            raw_legs.append(raw_leg)
+
+        # Build the v2 document
+        return {
+            # === IDENTITY ===
+            "signal_id": raw_signal_doc['signalID'],
+            "strategy_id": raw_signal_doc['strategy_name'],
+            "environment": raw_signal_doc.get('environment', 'production'),
+
+            # === RAW SIGNAL (slim audit trail) ===
+            "raw": {
+                "_id": raw_signal_doc['_id'],  # Reference to trading_signals_raw
+                "received_at": raw_signal_doc.get('received_at', datetime.datetime.utcnow()),
+                "sent_epoch": raw_signal_doc.get('signal_sent_EPOCH'),
+                "entry_name": raw_signal_doc.get('entry_name'),
+                "exit_name": raw_signal_doc.get('exit_name'),
+                "account_equity": raw_signal_doc.get('account_equity'),
+                "signal_type": raw_signal_doc.get('signal_type', 'ENTRY'),
+                "legs": raw_legs
+            },
+
+            # === CEREBRO DECISION (populated by cerebro_main.py) ===
+            "decision": None,
+
+            # === EXECUTION (populated by execution_main.py) ===
+            "execution": None,
+
+            # === POSITION LIFECYCLE (populated by execution_main.py) ===
+            "position": None,
+
+            # === TIMESTAMPS ===
+            "created_at": datetime.datetime.utcnow(),
+            "updated_at": datetime.datetime.utcnow()
+        }
+
     def connect(self) -> bool:
         """Connect to MongoDB"""
         try:
@@ -104,35 +172,8 @@ class MongoDBWatcher:
                         logger.warning(f"⚠️ Invalid signal array for {raw_signal_doc.get('signalID')}, skipping")
                         continue
 
-                    first_leg = signal_array[0]
-
-                    # CREATE NEW DOCUMENT IN signal_store
-                    signal_store_doc = {
-                        "raw_signal_id": raw_signal_doc['_id'],
-                        "signal_id": raw_signal_doc['signalID'],
-                        "strategy_id": raw_signal_doc['strategy_name'],
-                        "instrument": first_leg.get('instrument') or first_leg.get('ticker'),
-                        "direction": first_leg.get('direction', 'UNKNOWN'),
-                        "action": first_leg.get('action', 'UNKNOWN'),
-                        "price": first_leg.get('price', 0),  # Price from first leg
-                        "quantity": first_leg.get('quantity', 0),  # Quantity from first leg
-                        "instrument_type": first_leg.get('instrument_type', 'STOCK'),  # Instrument type from first leg
-                        "order_type": first_leg.get('order_type', 'MARKET'),  # Order type from first leg
-                        "signal_type": raw_signal_doc.get('signal_type', 'ENTRY'),  # Signal type (ENTRY/EXIT)
-                        "signal_data": raw_signal_doc,
-
-                        # Lifecycle fields (populated later)
-                        "cerebro_decision": None,
-                        "execution": None,
-                        "position_status": None,
-                        "exit_signals": [],
-                        "pnl_realized": None,
-
-                        # Timestamps
-                        "created_at": datetime.datetime.utcnow(),
-                        "updated_at": datetime.datetime.utcnow(),
-                        "environment": raw_signal_doc.get('environment', 'production')
-                    }
+                    # CREATE NEW DOCUMENT IN signal_store (v2 schema)
+                    signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
 
                     # Insert into signal_store
                     result = self.signal_store_collection.insert_one(signal_store_doc)
@@ -266,35 +307,8 @@ class MongoDBWatcher:
                             logger.warning(f"⚠️ Invalid signal array for {raw_signal_doc.get('signalID')}")
                             continue
 
-                        first_leg = signal_array[0]
-
-                        # CREATE NEW DOCUMENT IN signal_store
-                        signal_store_doc = {
-                            "raw_signal_id": raw_signal_doc['_id'],
-                            "signal_id": raw_signal_doc['signalID'],
-                            "strategy_id": raw_signal_doc['strategy_name'],
-                            "instrument": first_leg.get('instrument') or first_leg.get('ticker'),
-                            "direction": first_leg.get('direction', 'UNKNOWN'),
-                            "action": first_leg.get('action', 'UNKNOWN'),
-                            "price": first_leg.get('price', 0),  # Price from first leg
-                            "quantity": first_leg.get('quantity', 0),  # Quantity from first leg
-                            "instrument_type": first_leg.get('instrument_type', 'STOCK'),  # Instrument type from first leg
-                            "order_type": first_leg.get('order_type', 'MARKET'),  # Order type from first leg
-                            "signal_type": raw_signal_doc.get('signal_type', 'ENTRY'),  # Signal type (ENTRY/EXIT)
-                            "signal_data": raw_signal_doc,  # Full raw signal
-
-                            # Lifecycle fields (populated later by cerebro/execution)
-                            "cerebro_decision": None,
-                            "execution": None,
-                            "position_status": None,
-                            "exit_signals": [],
-                            "pnl_realized": None,
-
-                            # Timestamps
-                            "created_at": datetime.datetime.utcnow(),
-                            "updated_at": datetime.datetime.utcnow(),
-                            "environment": raw_signal_doc.get('environment', 'production')
-                        }
+                        # CREATE NEW DOCUMENT IN signal_store (v2 schema)
+                        signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
 
                         # Insert into signal_store
                         result = self.signal_store_collection.insert_one(signal_store_doc)

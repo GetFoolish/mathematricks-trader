@@ -158,7 +158,8 @@ export const Activity: React.FC = () => {
                 <tbody className="divide-y divide-gray-700">
                   {signals.map((signal: any) => {
                     const isExpanded = expandedSignalId === signal.signal_id;
-                    const hasDecision = signal.cerebro_decision && signal.decision_status;
+                    // Support both v1 (cerebro_decision) and v2 (decision) schema
+                    const hasDecision = (signal.decision || signal.cerebro_decision) && signal.decision_status;
 
                     // Format timestamps
                     const formatTimestamp = (ts: string | null) => {
@@ -265,11 +266,11 @@ export const Activity: React.FC = () => {
                               <span className="text-gray-500">-</span>
                             ) : signal.pnl ? (
                               <span className={`font-semibold ${
-                                signal.pnl.net_pnl >= 0 ? 'text-green-400' : 'text-red-400'
+                                (signal.pnl.net ?? signal.pnl.net_pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'
                               }`}>
-                                ${signal.pnl.net_pnl.toFixed(2)}
+                                ${(signal.pnl.net ?? signal.pnl.net_pnl ?? 0).toFixed(2)}
                                 <span className="text-xs ml-1">
-                                  ({signal.pnl.pnl_percent >= 0 ? '+' : ''}{signal.pnl.pnl_percent.toFixed(2)}%)
+                                  ({(signal.pnl.percent ?? signal.pnl.pnl_percent ?? 0) >= 0 ? '+' : ''}{(signal.pnl.percent ?? signal.pnl.pnl_percent ?? 0).toFixed(2)}%)
                                 </span>
                               </span>
                             ) : (
@@ -310,12 +311,12 @@ export const Activity: React.FC = () => {
                                   </div>
                                 </div>
 
-                                {/* Cerebro decision details */}
+                                {/* Cerebro decision details - support both v1 and v2 schema */}
                                 {hasDecision && (
                                   <div>
                                     <h4 className="text-sm font-semibold text-white mb-2">Cerebro Decision Details</h4>
                                     <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-x-auto">
-                                      {JSON.stringify(signal.cerebro_decision, null, 2)}
+                                      {JSON.stringify(signal.decision || signal.cerebro_decision, null, 2)}
                                     </pre>
                                   </div>
                                 )}

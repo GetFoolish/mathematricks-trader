@@ -47,6 +47,7 @@ function serializeDocument(doc) {
 }
 
 // GET /api/v1/activity/signals
+// Supports both v1 (signal_data, cerebro_decision) and v2 (raw, decision) schema
 app.get('/api/v1/activity/signals', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
@@ -64,29 +65,46 @@ app.get('/api/v1/activity/signals', async (req, res) => {
       .toArray();
 
     const signals = docs.map(doc => {
+      // Support both v1 (signal_data) and v2 (raw) schema
+      const raw = doc.raw || {};
       const signalData = doc.signal_data || {};
-      let signalDetails = signalData.signal || {};
 
-      // Handle multi-leg signals
-      if (Array.isArray(signalDetails) && signalDetails.length > 0) {
-        signalDetails = signalDetails[0];
+      // Get first leg from v2 raw.legs or v1 signal_data.signal
+      let firstLeg = {};
+      if (raw.legs && raw.legs.length > 0) {
+        firstLeg = raw.legs[0];
+      } else {
+        let signalDetails = signalData.signal || {};
+        if (Array.isArray(signalDetails) && signalDetails.length > 0) {
+          firstLeg = signalDetails[0];
+        } else {
+          firstLeg = signalDetails;
+        }
       }
 
-      // Extract cerebro decision
-      const cerebroDecision = doc.cerebro_decision;
+      // Support both v1 (cerebro_decision) and v2 (decision) schema
+      const decision = doc.decision || doc.cerebro_decision || null;
       let decisionStatus = null;
-      if (cerebroDecision) {
-        decisionStatus = cerebroDecision.decision || 'PENDING';
+      if (decision) {
+        decisionStatus = decision.status || decision.decision || 'PENDING';
+      }
+
+      // Get signal type from v2 raw or v1 signal_data
+      let signalType = raw.signal_type || signalData.signal_type || 'UNKNOWN';
+      if (signalType === 'UNKNOWN') {
+        const action = (firstLeg.action || '').toUpperCase();
+        if (['ENTRY', 'BUY'].includes(action)) signalType = 'ENTRY';
+        else if (['EXIT', 'SELL', 'CLOSE'].includes(action)) signalType = 'EXIT';
       }
 
       // Calculate timestamps and lags
-      const signalSentEpoch = signalData.signal_sent_EPOCH;
+      const signalSentEpoch = raw.sent_epoch || signalData.signal_sent_EPOCH;
       let signalSentTimestamp = null;
       if (signalSentEpoch) {
         signalSentTimestamp = new Date(signalSentEpoch * 1000).toISOString();
       }
 
-      let signalReceivedTimestamp = doc.created_at;
+      let signalReceivedTimestamp = raw.received_at || doc.created_at;
       if (typeof signalReceivedTimestamp === 'string') {
         signalReceivedTimestamp = new Date(signalReceivedTimestamp);
       }
@@ -96,46 +114,62 @@ app.get('/api/v1/activity/signals', async (req, res) => {
         receiveLagSeconds = (signalReceivedTimestamp.getTime() / 1000) - signalSentEpoch;
       }
 
-      // Execution timestamp - check multiple sources
+      // Execution timestamp - support v2 (execution.orders[]) and v1 (execution.filled_at)
       const execution = doc.execution;
       let executionCompletedTimestamp = null;
       let executionLagSeconds = null;
 
-      // Priority 1: execution.filled_at (order actually filled at broker)
-      if (execution && execution.filled_at) {
-        executionCompletedTimestamp = new Date(execution.filled_at);
+      if (execution) {
+        // v2: check orders array
+        if (execution.orders && execution.orders.length > 0) {
+          const lastOrder = execution.orders[execution.orders.length - 1];
+          if (lastOrder.filled_at) {
+            executionCompletedTimestamp = new Date(lastOrder.filled_at);
+          }
+        }
+        // v1: check filled_at directly
+        else if (execution.filled_at) {
+          executionCompletedTimestamp = new Date(execution.filled_at);
+        }
       }
-      // Priority 2: cerebro_decision.timestamp (cerebro processing completed)
-      else if (cerebroDecision && cerebroDecision.timestamp) {
-        executionCompletedTimestamp = new Date(cerebroDecision.timestamp);
+      // Fallback to decision timestamp
+      if (!executionCompletedTimestamp && decision && decision.timestamp) {
+        executionCompletedTimestamp = new Date(decision.timestamp);
       }
 
       if (executionCompletedTimestamp && signalSentEpoch) {
         executionLagSeconds = (executionCompletedTimestamp.getTime() / 1000) - signalSentEpoch;
       }
 
-      // Determine signal type
-      let signalType = signalData.signal_type || 'UNKNOWN';
-      if (signalType === 'UNKNOWN') {
-        const action = (signalDetails.action || '').toUpperCase();
-        if (['ENTRY', 'BUY'].includes(action)) signalType = 'ENTRY';
-        else if (['EXIT', 'SELL', 'CLOSE'].includes(action)) signalType = 'EXIT';
+      // Get PnL from v2 position.pnl or v1 doc.pnl
+      const position = doc.position || {};
+      const pnl = position.pnl || doc.pnl || null;
+
+      // Get final quantity from v2 decision.legs or v1 cerebro_decision.final_quantity
+      let finalQuantity = firstLeg.quantity;
+      if (decision) {
+        if (decision.legs && decision.legs.length > 0) {
+          finalQuantity = decision.legs[0].quantity;
+        } else if (decision.final_quantity !== undefined) {
+          finalQuantity = decision.final_quantity;
+        }
       }
 
       return {
-        signal_id: doc.signal_id || signalData.signalID || signalData.signal_id,
-        strategy_id: signalData.strategy_name || 'Unknown',
+        signal_id: doc.signal_id,
+        strategy_id: doc.strategy_id || signalData.strategy_name || 'Unknown',
         timestamp: serializeDocument(doc.created_at),
         created_at: serializeDocument(doc.created_at),
-        instrument: signalDetails.ticker || signalDetails.instrument,
-        action: signalDetails.action,
-        direction: signalDetails.direction,
-        price: signalDetails.price || signalDetails.entry_price,
-        quantity: signalDetails.quantity,
+        instrument: firstLeg.instrument || firstLeg.ticker,
+        action: firstLeg.action,
+        direction: firstLeg.direction,
+        price: firstLeg.price || firstLeg.entry_price,
+        quantity: firstLeg.quantity,
+        final_quantity: finalQuantity,
         environment: doc.environment || 'production',
-        processed_by_cerebro: cerebroDecision !== null && cerebroDecision !== undefined,
+        processed_by_cerebro: decision !== null,
         receive_lag_ms: doc.receive_lag_ms || 0,
-        cerebro_decision: serializeDocument(cerebroDecision),
+        decision: serializeDocument(decision),
         decision_status: decisionStatus,
         signal_sent_timestamp: signalSentTimestamp,
         signal_received_timestamp: signalReceivedTimestamp ? signalReceivedTimestamp.toISOString() : null,
@@ -144,7 +178,8 @@ app.get('/api/v1/activity/signals', async (req, res) => {
         execution_lag_seconds: executionLagSeconds,
         signal_type: signalType,
         execution: serializeDocument(execution),
-        pnl: serializeDocument(doc.pnl)
+        position: serializeDocument(position),
+        pnl: serializeDocument(pnl)
       };
     });
 
@@ -180,13 +215,18 @@ app.get('/api/v1/activity/orders', async (req, res) => {
 });
 
 // GET /api/v1/activity/decisions
+// Supports both v1 (cerebro_decision) and v2 (decision) schema
 app.get('/api/v1/activity/decisions', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     const environment = req.query.environment;
 
+    // Query for docs with either v1 or v2 decision field
     const query = {
-      cerebro_decision: { $ne: null }
+      $or: [
+        { decision: { $ne: null } },
+        { cerebro_decision: { $ne: null } }
+      ]
     };
     if (environment) {
       query.environment = environment;
@@ -194,14 +234,14 @@ app.get('/api/v1/activity/decisions', async (req, res) => {
 
     const docs = await signalStoreCollection
       .find(query, { projection: { _id: 0 } })
-      .sort({ received_at: -1 })
+      .sort({ created_at: -1 })
       .limit(limit)
       .toArray();
 
     const decisions = docs.map(doc => {
-      const decision = doc.cerebro_decision || {};
-      const signalData = doc.signal_data || {};
-      decision.signal_id = doc.signal_id || signalData.signalID || signalData.signal_id;
+      // Support both v1 and v2 schema
+      const decision = doc.decision || doc.cerebro_decision || {};
+      decision.signal_id = doc.signal_id;
       return serializeDocument(decision);
     });
 

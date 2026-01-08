@@ -149,11 +149,135 @@ def round_quantity_for_instrument(quantity: float, instrument_type: str) -> floa
     return precision_service.normalize_quantity(quantity, precision)
 
 
+# Helper function to build v2 decision document
+def build_decision_v2(
+    status: str,
+    reason: str,
+    signal: dict,
+    decision_obj: Optional['SignalDecision'] = None,
+    legs: list = None
+) -> dict:
+    """
+    Build a clean v2 decision document for signal_store.
+
+    v2 Schema:
+    - decision.status: APPROVED | REJECTED | RESIZE
+    - decision.reason: Human-readable explanation
+    - decision.legs[]: Final quantities per instrument
+    - decision.math: Detailed calculation breakdown
+    """
+    from bson import ObjectId
+
+    # Build decision.legs from leg_results or signal
+    decision_legs = []
+    leg_results = []
+
+    if decision_obj and decision_obj.metadata.get('leg_results'):
+        leg_results = decision_obj.metadata['leg_results']
+    elif legs:
+        # Build from raw signal legs
+        for i, leg in enumerate(legs):
+            leg_results.append({
+                'leg_index': i,
+                'instrument': leg.get('instrument') or leg.get('ticker'),
+                'instrument_type': leg.get('instrument_type', 'STOCK'),
+                'action': leg.get('action'),
+                'direction': leg.get('direction'),
+                'order_type': leg.get('order_type', 'MARKET'),
+                'quantity': leg.get('quantity', 0),
+                'price_used': leg.get('price', 0)
+            })
+
+    for leg in leg_results:
+        decision_legs.append({
+            "instrument": leg.get('instrument'),
+            "instrument_type": leg.get('instrument_type', 'STOCK'),
+            "action": leg.get('action'),
+            "direction": leg.get('direction'),
+            "quantity": leg.get('quantity', 0),
+            "order_type": leg.get('order_type', 'MARKET'),
+            "price": leg.get('price_used', 0),
+            "margin_required": leg.get('initial_margin', 0)
+        })
+
+    # Build decision.math breakdown
+    math_breakdown = {
+        "signal_type": signal.get('signal_type', 'ENTRY')
+    }
+
+    if decision_obj and decision_obj.metadata:
+        metadata = decision_obj.metadata
+        position_sizing = metadata.get('position_sizing', {})
+
+        # Scaling ratio
+        if position_sizing.get('scaling_ratio'):
+            math_breakdown['scaling_ratio'] = position_sizing['scaling_ratio']
+
+        # Capital breakdown
+        math_breakdown['capital'] = {
+            'backtest_equity': position_sizing.get('signal_account_equity', 0),
+            'fund_allocated': position_sizing.get('allocated_capital', 0),
+            'fund_deployed': position_sizing.get('deployed_capital', 0),
+            'fund_available': position_sizing.get('allocated_capital_available', 0)
+        }
+
+        # Margin breakdown
+        math_breakdown['margin'] = {
+            'method': position_sizing.get('margin_method', 'Unknown'),
+            'per_contract': position_sizing.get('margin_required', 0) / max(decision_obj.quantity, 1) if decision_obj.quantity else 0,
+            'total_required': position_sizing.get('margin_required', 0),
+            'as_percent_of_available': (
+                (position_sizing.get('margin_required', 0) / position_sizing.get('allocated_capital_available', 1)) * 100
+                if position_sizing.get('allocated_capital_available', 0) > 0 else 0
+            )
+        }
+
+        # Quantity calculation
+        raw_qty = signal.get('quantity', 0)
+        final_qty = decision_obj.quantity if decision_obj else 0
+        scaling = position_sizing.get('scaling_ratio', 1)
+        math_breakdown['quantity_calc'] = {
+            'raw_quantity': raw_qty,
+            'scaled_raw': raw_qty * scaling if scaling else raw_qty,
+            'rounded': final_qty,
+            'precision': 0  # TODO: get from precision service
+        }
+
+        # Signal type info
+        if metadata.get('signal_type_info'):
+            math_breakdown['signal_type_info'] = metadata['signal_type_info']
+
+        # For EXIT signals, add entry reference
+        if metadata.get('entry_signal_id'):
+            math_breakdown['entry_ref'] = {
+                'signal_id': metadata.get('entry_signal_ref'),
+                'signal_store_id': metadata.get('entry_signal_id')
+            }
+            # Also add quantity calc for exits
+            if metadata.get('entry_quantity'):
+                math_breakdown['quantity_calc'] = {
+                    'raw_quantity': raw_qty,
+                    'open_position_quantity': metadata.get('entry_quantity', 0),
+                    'quantity_to_close': final_qty
+                }
+
+    # Build the v2 decision document
+    return {
+        "status": status,
+        "reason": reason,
+        "timestamp": datetime.utcnow(),
+        "legs": decision_legs,
+        "math": math_breakdown
+    }
+
+
 # Helper function to update signal_store with cerebro decision
 def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict):
     """
-    Update signal_store document with embedded cerebro_decision
-    This is the single source of truth for cerebro decisions
+    Update signal_store document with v2 decision structure.
+    This is the single source of truth for cerebro decisions.
+
+    v2 uses 'decision' field instead of 'cerebro_decision'
     """
     if not signal_store_id:
         logger.warning("⚠️ No signal_store_id provided, skipping signal_store update")
@@ -162,18 +286,21 @@ def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict):
     try:
         from bson import ObjectId
 
-        # Update signal_store with embedded decision
+        # Determine status for processing_complete flag
+        status = decision_doc.get("status", decision_doc.get("decision", ""))
+
+        # Update signal_store with v2 decision field
         signal_store_collection.update_one(
             {"_id": ObjectId(signal_store_id)},
             {
                 "$set": {
-                    "cerebro_decision": decision_doc,
-                    "processing_complete": decision_doc.get("decision") in ["APPROVED", "RESIZE"],
+                    "decision": decision_doc,
+                    "processing_complete": status in ["APPROVED", "RESIZE"],
                     "updated_at": datetime.utcnow()
                 }
             }
         )
-        logger.info(f"✅ Updated signal_store {signal_store_id} with cerebro decision")
+        logger.info(f"✅ Updated signal_store {signal_store_id} with decision (status={status})")
 
     except Exception as e:
         logger.error(f"⚠️ Failed to update signal_store: {e}")
@@ -683,11 +810,6 @@ def check_and_cancel_pending_entry(signal: Dict[str, Any], signal_type_info: Dic
         return False
 
 
-def opposite_direction(direction: str) -> str:
-    """Get opposite direction for entry/exit matching"""
-    return "LONG" if direction == "SHORT" else "SHORT"
-
-
 def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) -> Optional[Dict[str, Any]]:
     """
     Query signal_store for open entry signal
@@ -695,23 +817,36 @@ def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) ->
     Args:
         strategy_id: Strategy identifier
         instrument: Instrument name
-        direction: Direction of the EXIT signal (we need opposite for ENTRY)
+        direction: Direction of the EXIT signal (same as ENTRY direction)
 
     Returns:
         Entry signal document from signal_store, or None if not found
     """
     try:
-        # For an EXIT signal with direction SHORT, we need to find ENTRY with direction LONG (and vice versa)
-        entry_direction = opposite_direction(direction)
+        # EXIT signal has SAME direction as ENTRY (LONG->LONG, SHORT->SHORT)
+        # It's the ACTION that differs: ENTRY=BUY/SELL_SHORT, EXIT=SELL/BUY_TO_COVER
+        entry_direction = direction
 
+        # Try v2 schema first: raw.legs[].instrument, position.status, decision.status
         entry_signal = signal_store_collection.find_one({
             "strategy_id": strategy_id,
-            "instrument": instrument,
-            "direction": entry_direction,
-            "position_status": "OPEN",
-            "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},  # Support both legacy and new format
+            "raw.legs.instrument": instrument,
+            "raw.legs.direction": entry_direction,
+            "position.status": "OPEN",
+            "decision.status": {"$in": ["APPROVED", "RESIZE"]},
             "execution.status": "FILLED"
         })
+
+        # Fallback to v1 schema
+        if not entry_signal:
+            entry_signal = signal_store_collection.find_one({
+                "strategy_id": strategy_id,
+                "instrument": instrument,
+                "direction": entry_direction,
+                "position_status": "OPEN",
+                "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},
+                "execution.status": "FILLED"
+            })
 
         if entry_signal:
             logger.info(f"✅ Found open entry signal: {entry_signal.get('signal_id')} for {instrument} {entry_direction}")
@@ -725,117 +860,126 @@ def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) ->
         return None
 
 
-def wait_for_entry_fill(strategy_id: str, instrument: str, direction: str, max_wait: int = 30) -> Optional[Dict[str, Any]]:
+def find_and_cancel_pending_entry(strategy_id: str, instrument: str, direction: str) -> Optional[Dict[str, Any]]:
     """
-    Wait for entry order to fill with exponential backoff retry logic.
+    Find and cancel a pending (unfilled) ENTRY order when EXIT signal arrives too early.
 
-    This handles the case where EXIT signals arrive before ENTRY orders fill in the broker.
-    Instead of rejecting the EXIT signal, we wait for the entry to fill.
+    Real-world trading logic: If EXIT arrives before ENTRY fills, cancel the ENTRY
+    rather than waiting. This prevents holding stale positions.
 
     Args:
         strategy_id: Strategy identifier
         instrument: Instrument name
-        direction: Direction of the EXIT signal (we need opposite for ENTRY)
-        max_wait: Maximum total wait time in seconds (default: 30)
+        direction: Direction of the EXIT signal (same as ENTRY direction)
 
     Returns:
-        Entry signal document from signal_store if filled, or None if timeout
+        Cancelled entry signal document if found and cancelled, None otherwise
     """
-    logger.info(f"⏳ Waiting for entry order to fill (max {max_wait}s)...")
-
-    # First check if entry signal already filled
-    entry_signal = find_open_entry_signal(strategy_id, instrument, direction)
-    if entry_signal:
-        logger.info(f"✅ Entry already filled, proceeding with exit")
-        return entry_signal
-
-    # Check if there's a pending ENTRY order
-    entry_direction = opposite_direction(direction)
+    # EXIT signal has SAME direction as ENTRY
+    entry_direction = direction
+    logger.info(f"🔍 Looking for pending entry to cancel: {strategy_id}/{instrument}/{entry_direction}")
 
     try:
-        # DEBUG: First let's see what entry signals exist for this instrument (newest first)
-        debug_query = {
-            "strategy_id": strategy_id,
-            "instrument": instrument,
-            "direction": entry_direction
-        }
-        all_entries = list(signal_store_collection.find(debug_query).sort("created_at", -1).limit(5))
-        logger.info(f"🔍 DEBUG: Found {len(all_entries)} entry signals for {strategy_id}/{instrument}/{entry_direction} (showing 5 most recent)")
-        for idx, entry in enumerate(all_entries, 1):
-            logger.info(f"   Entry {idx}: signal_id={entry.get('signal_id')}")
-            logger.info(f"            cerebro_decision.action={entry.get('cerebro_decision', {}).get('action')}")
-            logger.info(f"            position_status={entry.get('position_status')}")
-            logger.info(f"            execution.status={entry.get('execution', {}).get('status') if entry.get('execution') else None}")
-            logger.info(f"            execution (full)={entry.get('execution')}")
-
-        # Query for pending ENTRY order in signal_store (cerebro approved but not filled yet)
-        # Note: execution field is null until order fills, position_status is null until filled
+        # Query for pending ENTRY order (v2 schema first, then v1 fallback)
+        # v2: decision.status, position.status, execution.status
+        # A pending entry is one that's been approved but NOT yet filled (execution.status != FILLED)
         pending_entry = signal_store_collection.find_one({
             "strategy_id": strategy_id,
-            "instrument": instrument,
-            "direction": entry_direction,
-            "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},  # Support both legacy and new format
-            "position_status": {"$ne": "CLOSED"},  # Include null, "OPEN", and any other non-CLOSED status
-            "$or": [
-                {"execution": None},  # Order not yet sent to execution_service
-                {"execution": {"$exists": False}},  # No execution field at all
-                {"execution.status": {"$nin": ["FILLED"]}}  # Order in-flight but not filled
+            "raw.legs.instrument": instrument,
+            "raw.legs.direction": entry_direction,
+            "decision.status": {"$in": ["APPROVED", "RESIZE"]},
+            "$and": [
+                # Position not yet OPEN (null, doesn't exist, or not OPEN)
+                {"$or": [
+                    {"position.status": None},
+                    {"position.status": {"$exists": False}},
+                    {"position.status": {"$nin": ["OPEN", "CLOSED"]}}
+                ]},
+                # Execution not FILLED
+                {"$or": [
+                    {"execution": None},
+                    {"execution": {"$exists": False}},
+                    {"execution.status": {"$nin": ["FILLED"]}}
+                ]}
             ]
         })
 
+        # Fallback to v1 schema
         if not pending_entry:
-            logger.warning(f"⚠️ No pending entry order found for {strategy_id}/{instrument}/{entry_direction}")
-            logger.warning(f"   Cannot wait for fill - rejecting EXIT signal")
+            pending_entry = signal_store_collection.find_one({
+                "strategy_id": strategy_id,
+                "instrument": instrument,
+                "direction": entry_direction,
+                "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},
+                "position_status": {"$ne": "CLOSED"},
+                "$or": [
+                    {"execution": None},
+                    {"execution": {"$exists": False}},
+                    {"execution.status": {"$nin": ["FILLED"]}}
+                ]
+            })
+
+        if not pending_entry:
+            logger.info(f"📭 No pending entry order found for {strategy_id}/{instrument}/{entry_direction}")
             return None
 
-        logger.info(f"📋 Found pending entry order: {pending_entry.get('signal_id')}")
-        logger.info(f"   Status: {pending_entry.get('execution', {}).get('status', 'UNKNOWN')}")
+        pending_signal_id = pending_entry.get('signal_id')
+        logger.info(f"📋 Found pending entry order: {pending_signal_id}")
 
-        # Retry with exponential backoff: 2s, 4s, 8s, 16s (max 30s total)
-        retry_delays = [2, 4, 8, 16]
-        total_waited = 0
+        # Check if there's a broker order to cancel
+        execution = pending_entry.get('execution')
+        broker_order_id = None
+        if execution:
+            # v2: execution.orders[]
+            orders = execution.get('orders', [])
+            if orders:
+                broker_order_id = orders[-1].get('broker_order_id')
+            # v1: execution.broker_order_id
+            if not broker_order_id:
+                broker_order_id = execution.get('broker_order_id')
 
-        for i, delay in enumerate(retry_delays, 1):
-            # Cap delay to not exceed max_wait
-            actual_delay = min(delay, max_wait - total_waited)
-            if actual_delay <= 0:
-                break
+        if broker_order_id:
+            logger.info(f"🚫 Cancelling broker order: {broker_order_id}")
+            try:
+                # Cancel via broker adapter
+                if broker_adapter:
+                    cancel_success = broker_adapter.cancel_order(broker_order_id)
+                    if cancel_success:
+                        logger.info(f"✅ Broker order cancelled successfully")
+                    else:
+                        logger.warning(f"⚠️ Broker cancel returned False - order may already be filled/cancelled")
+            except Exception as cancel_err:
+                logger.warning(f"⚠️ Error cancelling broker order: {cancel_err}")
 
-            logger.info(f"⏳ Retry {i}/{len(retry_delays)}: Waiting {actual_delay}s for entry to fill...")
-            time.sleep(actual_delay)
-            total_waited += actual_delay
+        # Update signal_store to mark entry as CANCELLED
+        cancel_timestamp = datetime.datetime.utcnow()
+        update_result = signal_store_collection.update_one(
+            {"_id": pending_entry["_id"]},
+            {
+                "$set": {
+                    # v2 schema
+                    "decision.status": "CANCELLED",
+                    "decision.reason": f"Cancelled: EXIT signal arrived before entry filled",
+                    "decision.cancelled_at": cancel_timestamp,
+                    "position.status": "CANCELLED",
+                    # v1 schema (for backward compat)
+                    "cerebro_decision.decision": "CANCELLED",
+                    "cerebro_decision.reason": f"Cancelled: EXIT signal arrived before entry filled",
+                    "position_status": "CANCELLED",
+                    "updated_at": cancel_timestamp
+                }
+            }
+        )
 
-            # Check if entry filled during wait
-            entry_signal = find_open_entry_signal(strategy_id, instrument, direction)
-            if entry_signal:
-                logger.info(f"✅ Entry filled after {total_waited}s wait! Proceeding with exit")
-                return entry_signal
+        if update_result.modified_count > 0:
+            logger.info(f"✅ Entry signal {pending_signal_id} marked as CANCELLED in signal_store")
+        else:
+            logger.warning(f"⚠️ Failed to update entry signal {pending_signal_id} in signal_store")
 
-            # Check if we've exceeded max wait time
-            if total_waited >= max_wait:
-                logger.error(f"⏰ Timeout after {total_waited}s - entry order still not filled")
-                break
-
-        # Timeout - send critical alert
-        logger.critical(f"🚨 CRITICAL: EXIT signal timeout waiting for entry fill")
-        logger.critical(f"   Strategy: {strategy_id}")
-        logger.critical(f"   Instrument: {instrument}")
-        logger.critical(f"   Direction: {entry_direction}")
-        logger.critical(f"   Pending Entry Signal: {pending_entry.get('signal_id')}")
-        logger.critical(f"   Waited: {total_waited}s")
-        logger.critical(f"   Action Required: Manual intervention needed to close position")
-
-        # TODO: Send Telegram notification
-        # send_telegram_alert(
-        #     f"🚨 EXIT signal timeout for {strategy_id}/{instrument}\n"
-        #     f"Entry order {pending_entry.get('signal_id')} still pending after {total_waited}s\n"
-        #     f"Manual intervention required"
-        # )
-
-        return None
+        return pending_entry
 
     except Exception as e:
-        logger.error(f"❌ Error in wait_for_entry_fill: {e}")
+        logger.error(f"❌ Error in find_and_cancel_pending_entry: {e}")
         return None
 
 
@@ -1134,6 +1278,8 @@ def log_detailed_calculation_math(signal: Dict[str, Any], context, decision_obj,
 def process_signal_with_constructor(signal: Dict[str, Any]):
     """
     Process signal using Portfolio Constructor (NEW APPROACH)
+
+    Supports both v2 schema (raw.legs[], decision) and v1 schema (signal_data, cerebro_decision)
     """
     signal_id = signal.get('signal_id')
     signal_store_id = signal.get('mathematricks_signal_id')  # Extract from Pub/Sub message (mongodb_watcher created this)
@@ -1141,26 +1287,56 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     # Initialize signal processing logger on first signal
     signal_logger = get_signal_processing_logger()
 
+    # Extract raw signal data (v2: signal.raw, v1: signal.signal_data or signal itself)
+    raw_obj = signal.get('raw', {})
+    raw_signal = signal.get('signal_data', signal)  # v1 compatibility
+
+    # Extract legs (v2: raw.legs, v1: signal_data.legs/signal_legs/signal)
+    legs = raw_obj.get('legs') or raw_signal.get('legs') or raw_signal.get('signal_legs') or raw_signal.get('signal')
+    if not legs or len(legs) == 0:
+        logger.error(f"❌ No legs found in signal {signal_id} - cannot process")
+        decision = build_decision_v2(
+            status="REJECTED",
+            reason="NO_LEGS_IN_SIGNAL",
+            signal=signal
+        )
+        update_signal_store_with_decision(signal_store_id, decision)
+        return
+
+    # Build normalized signal from first leg (for compatibility with existing code)
+    first_leg = legs[0]
+    normalized_signal = {
+        'signal_id': signal_id,
+        'strategy_id': signal.get('strategy_id'),
+        'environment': signal.get('environment'),
+        'instrument': first_leg.get('instrument'),
+        'instrument_type': first_leg.get('instrument_type', 'STOCK'),
+        'action': first_leg.get('action'),
+        'direction': first_leg.get('direction'),
+        'quantity': first_leg.get('quantity'),
+        'price': first_leg.get('price'),
+        'order_type': first_leg.get('order_type', 'MARKET'),
+        'signal_type': raw_obj.get('signal_type') or raw_signal.get('signal_type'),
+        'entry_signal_id': raw_obj.get('entry_signal_id') or raw_signal.get('entry_signal_id'),
+        'entry_name': raw_obj.get('entry_name'),
+        'exit_name': raw_obj.get('exit_name'),
+        'legs': legs
+    }
+
     signal_logger.info(f"Processing signal {signal_id} with Portfolio Constructor")
     if signal_store_id:
         logger.info(f"📍 Mathematricks Signal ID: {signal_store_id}")
 
     # Unified signal processing log
-    signal_logger.info(f"SIGNAL: {signal_id} | PROCESSING | Strategy={signal.get('strategy_id')} | Instrument={signal.get('instrument')} | Action={signal.get('action')}")
+    signal_logger.info(f"SIGNAL: {signal_id} | PROCESSING | Strategy={normalized_signal.get('strategy_id')} | Instrument={normalized_signal.get('instrument')} | Action={normalized_signal.get('action')}")
 
     # Step 1: Check slippage rule (keep existing logic)
-    if signal.get('action') == 'ENTRY' and not check_slippage_rule(signal):
-        decision = {
-            "signal_id": signal_id,
-            "decision": "REJECTED",
-            "timestamp": datetime.utcnow(),
-            "reason": "SLIPPAGE_EXCEEDED",
-            "original_quantity": signal.get('quantity', 0),
-            "final_quantity": 0,
-            "risk_assessment": {},
-            "created_at": datetime.utcnow()
-        }
-        # Write decision to signal_store (embedded)
+    if normalized_signal.get('action') == 'ENTRY' and not check_slippage_rule(normalized_signal):
+        decision = build_decision_v2(
+            status="REJECTED",
+            reason="SLIPPAGE_EXCEEDED",
+            signal=signal
+        )
         update_signal_store_with_decision(signal_store_id, decision)
         logger.info(f"Signal {signal_id} rejected due to slippage")
         return
@@ -1171,37 +1347,27 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
     if not strategy_doc:
         logger.error(f"Strategy {strategy_id} not found - rejecting signal")
-        decision = {
-            "signal_id": signal_id,
-            "decision": "REJECTED",
-            "timestamp": datetime.utcnow(),
-            "reason": "STRATEGY_NOT_FOUND",
-            "original_quantity": signal.get('quantity', 0),
-            "final_quantity": 0,
-            "risk_assessment": {},
-            "created_at": datetime.utcnow()
-        }
+        decision = build_decision_v2(
+            status="REJECTED",
+            reason="STRATEGY_NOT_FOUND",
+            signal=signal
+        )
         update_signal_store_with_decision(signal_store_id, decision)
         return
 
     # ============================================================================
     # MULTI-FUND ARCHITECTURE: Get active allocations for this strategy
     # ============================================================================
-    
+
     active_allocations = get_active_allocations_for_strategy(strategy_id, portfolio_allocations_collection)
-    
+
     if not active_allocations:
         logger.error(f"Strategy {strategy_id} has no ACTIVE allocations - rejecting signal")
-        decision = {
-            "signal_id": signal_id,
-            "decision": "REJECTED",
-            "timestamp": datetime.utcnow(),
-            "reason": "NO_ACTIVE_ALLOCATIONS",
-            "original_quantity": signal.get('quantity', 0),
-            "final_quantity": 0,
-            "risk_assessment": {},
-            "created_at": datetime.utcnow()
-        }
+        decision = build_decision_v2(
+            status="REJECTED",
+            reason="NO_ACTIVE_ALLOCATIONS",
+            signal=signal
+        )
         update_signal_store_with_decision(signal_store_id, decision)
         return
     
@@ -1286,22 +1452,15 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
         if not account_state:
             logger.error(f"Failed to get account state for {account_name}")
-            decision = {
-                "signal_id": signal_id,
-                "decision": "REJECTED",
-                "timestamp": datetime.utcnow(),
-                "reason": "ACCOUNT_STATE_UNAVAILABLE",
-                "original_quantity": signal.get('quantity', 0),
-                "final_quantity": 0,
-                "risk_assessment": {},
-                "created_at": datetime.utcnow()
-            }
-            # Write decision to signal_store (embedded)
+            decision = build_decision_v2(
+                status="REJECTED",
+                reason="ACCOUNT_STATE_UNAVAILABLE",
+                signal=signal
+            )
             update_signal_store_with_decision(signal_store_id, decision)
             return
 
-        # Step 3: Extract signal_data and build context
-        raw_signal = signal.get('signal_data', signal)
+        # Step 3: Build context (raw_obj, raw_signal, legs, normalized_signal already extracted at function start)
         context = build_portfolio_context(account_state)
         
         # Step 4: Override context with fund allocation capital
@@ -1325,41 +1484,24 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             metadata={'fund_allocation': True, 'fund_id': fund_id}
         )
 
-        # Step 4.0: Extract legs for multi-leg processing (BEFORE decision logic needs them)
-        # If 'legs' or 'signal_legs' is provided, use all legs; otherwise create single-leg array from primary signal
-        legs = raw_signal.get('legs') or raw_signal.get('signal_legs') or raw_signal.get('signal')
-        if legs and len(legs) > 1:
-            is_multi_leg = True
+        # Step 4.0: Determine multi-leg status (legs already extracted at function start)
+        is_multi_leg = len(legs) > 1
+        if is_multi_leg:
             logger.info(f"🔀 Multi-leg signal detected: {len(legs)} legs")
             for i, leg in enumerate(legs):
                 logger.info(f"   Leg {i+1}: {leg.get('instrument')} {leg.get('action')} {leg.get('direction')}")
-        else:
-            is_multi_leg = False
-            # Create single-leg array from primary signal fields
-            # Use top-level fields from signal_store, but detail fields from raw_signal
-            if not legs:
-                legs = [{
-                    'instrument': signal.get('instrument'),
-                    'instrument_type': signal.get('instrument_type', 'STOCK'),
-                    'direction': signal.get('direction'),
-                    'action': signal.get('action'),
-                    'order_type': raw_signal.get('order_type'),
-                    'price': price,  # Use price from fund allocation calculation
-                    'quantity': raw_signal.get('quantity'),
-                    'environment': raw_signal.get('environment', 'staging')
-                }]
 
         # Step 4a: Determine Signal Type (ENTRY/EXIT/SCALE)
-        signal_type_info = position_manager.determine_signal_type(raw_signal)
+        signal_type_info = position_manager.determine_signal_type(normalized_signal)
 
         # Step 4a.1: CANCEL SIGNAL HANDLING - Cancel pending orders
         signal_type = signal_type_info.get('signal_type')
         if signal_type == 'CANCEL':
             logger.info(f"🚫 CANCEL signal received - cancelling pending orders")
 
-            strategy_id = signal.get('strategy_id')
-            instrument = signal.get('instrument')
-            entry_signal_id = raw_signal.get('entry_signal_id')
+            strategy_id = normalized_signal.get('strategy_id')
+            instrument = normalized_signal.get('instrument')
+            entry_signal_id = normalized_signal.get('entry_signal_id')
 
             # Query trading_orders collection for pending orders to cancel
             # Look for orders that are PENDING, SUBMITTED, or PRESUBMITTED (not yet filled)
@@ -1373,20 +1515,13 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
             if not pending_orders:
                 logger.warning(f"⚠️ No pending orders found to cancel for {strategy_id}/{instrument}")
-                # Update signal store with CANCEL status
-                if signal_store_id:
-                    from bson import ObjectId
-                    signal_store_collection.update_one(
-                        {'_id': ObjectId(signal_store_id)},
-                        {'$set': {
-                            'cerebro_decision': {
-                                'action': 'CANCEL_NO_TARGET',
-                                'timestamp': datetime.utcnow(),
-                                'message': f'No pending orders found to cancel for {instrument}'
-                            },
-                            'status': 'processed'
-                        }}
-                    )
+                # Update signal store with CANCEL decision (v2 schema)
+                decision = build_decision_v2(
+                    status="CANCEL_NO_TARGET",
+                    reason=f"No pending orders found to cancel for {instrument}",
+                    signal=signal
+                )
+                update_signal_store_with_decision(signal_store_id, decision)
                 return
 
             # Cancel all matching pending orders
@@ -1412,21 +1547,14 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         }}
                     )
 
-            # Update signal store with CANCEL result
-            if signal_store_id:
-                from bson import ObjectId
-                signal_store_collection.update_one(
-                    {'_id': ObjectId(signal_store_id)},
-                    {'$set': {
-                        'cerebro_decision': {
-                            'action': 'CANCEL_SENT',
-                            'timestamp': datetime.utcnow(),
-                            'cancelled_orders': cancelled_count,
-                            'message': f'Sent cancel commands for {cancelled_count} pending order(s)'
-                        },
-                        'status': 'processed'
-                    }}
-                )
+            # Update signal store with CANCEL result (v2 schema)
+            decision = build_decision_v2(
+                status="CANCEL_SENT",
+                reason=f"Sent cancel commands for {cancelled_count} pending order(s)",
+                signal=signal
+            )
+            decision['cancelled_orders'] = cancelled_count
+            update_signal_store_with_decision(signal_store_id, decision)
 
             logger.info(f"✅ CANCEL signal processed - cancelled {cancelled_count} order(s)")
             return  # Don't process CANCEL signal as a new order
@@ -1440,34 +1568,51 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             logger.info(f"🔴 EXIT signal detected - querying signal_store for entry quantity")
 
             # PRIORITY 1: Check if EXIT signal explicitly provides entry_signal_id
-            entry_signal_id = raw_signal.get('entry_signal_id')
+            entry_signal_id = normalized_signal.get('entry_signal_id')
             entry_signal = None
 
             if entry_signal_id and entry_signal_id != "$PREVIOUS":
                 # Check if entry_signal_id is a symbolic reference like "$ENTRY_1"
                 if entry_signal_id.startswith("$ENTRY"):
-                    # Look up by entry_name in signal_data
+                    # Look up by entry_name (supports both v1 signal_data.entry_name and v2 raw.entry_name)
                     logger.info(f"✅ EXIT signal has symbolic entry_signal_id: {entry_signal_id}")
-                    strategy_id = signal.get('strategy_id')
+                    strategy_id = normalized_signal.get('strategy_id')
 
-                    # Find the ENTRY signal by entry_name (stored in signal_data.entry_name)
+                    # Try v2 schema first: raw.entry_name + decision.status + position.status
                     entry_signal = signal_store_collection.find_one({
                         "strategy_id": strategy_id,
-                        "signal_data.entry_name": entry_signal_id,
-                        "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},
+                        "raw.entry_name": entry_signal_id,
+                        "decision.status": {"$in": ["APPROVED", "RESIZE"]},
                         "execution.status": "FILLED",
-                        "position_status": "OPEN"
+                        "position.status": "OPEN"
                     })
+
+                    # Fallback to v1 schema
+                    if not entry_signal:
+                        entry_signal = signal_store_collection.find_one({
+                            "strategy_id": strategy_id,
+                            "signal_data.entry_name": entry_signal_id,
+                            "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},
+                            "execution.status": "FILLED",
+                            "position_status": "OPEN"
+                        })
 
                     if entry_signal:
                         logger.info(f"✅ Found entry signal by symbolic reference: {entry_signal.get('signal_id')}")
                     else:
-                        # Try without FILLED status (might still be pending)
+                        # Try without FILLED status (might still be pending) - v2 first
                         entry_signal = signal_store_collection.find_one({
                             "strategy_id": strategy_id,
-                            "signal_data.entry_name": entry_signal_id,
-                            "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]}
+                            "raw.entry_name": entry_signal_id,
+                            "decision.status": {"$in": ["APPROVED", "RESIZE"]}
                         })
+                        # Fallback to v1
+                        if not entry_signal:
+                            entry_signal = signal_store_collection.find_one({
+                                "strategy_id": strategy_id,
+                                "signal_data.entry_name": entry_signal_id,
+                                "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]}
+                            })
                         if entry_signal:
                             logger.info(f"✅ Found pending entry signal by symbolic reference: {entry_signal.get('signal_id')}")
                         else:
@@ -1489,20 +1634,31 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             if not entry_signal:
                 logger.info("Using fuzzy matching to find ENTRY signal (strategy/instrument/direction)")
                 entry_signal = find_open_entry_signal(
-                    strategy_id=signal.get('strategy_id'),
-                    instrument=signal.get('instrument'),
-                    direction=signal.get('direction')  # EXIT direction (we'll find opposite)
+                    strategy_id=normalized_signal.get('strategy_id'),
+                    instrument=normalized_signal.get('instrument'),
+                    direction=normalized_signal.get('direction')  # EXIT direction (we'll find opposite)
                 )
 
-                # If entry not found immediately, wait for it to fill (with retry logic)
+                # If entry not found (not filled), check if there's a pending entry to cancel
                 if not entry_signal:
-                    logger.warning(f"⚠️ Entry not filled yet - initiating retry logic")
-                    entry_signal = wait_for_entry_fill(
-                        strategy_id=signal.get('strategy_id'),
-                        instrument=signal.get('instrument'),
-                        direction=signal.get('direction'),
-                        max_wait=30
+                    logger.warning(f"⚠️ No filled entry found - checking for pending entry to cancel")
+                    cancelled_entry = find_and_cancel_pending_entry(
+                        strategy_id=normalized_signal.get('strategy_id'),
+                        instrument=normalized_signal.get('instrument'),
+                        direction=normalized_signal.get('direction')
                     )
+
+                    if cancelled_entry:
+                        # Entry was pending and has been cancelled - reject this EXIT
+                        logger.info(f"🚫 Pending entry {cancelled_entry.get('signal_id')} cancelled - rejecting EXIT signal")
+                        decision = build_decision_v2(
+                            status="REJECTED",
+                            reason=f"ENTRY_CANCELLED: Entry signal {cancelled_entry.get('signal_id')} was pending (not filled) - cancelled entry and rejected exit",
+                            signal=signal
+                        )
+                        update_signal_store_with_decision(signal_store_id, decision)
+                        return
+                    # If no pending entry found either, entry_signal remains None and will be rejected below
 
             if entry_signal and entry_signal.get('execution') and entry_signal['execution'].get('quantity_filled'):
                 # Found entry signal with execution data - use exact quantity
@@ -1516,8 +1672,13 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 if is_multi_leg and legs:
                     logger.info(f"🔀 Multi-leg EXIT signal: Processing {len(legs)} legs")
 
-                    # Get leg_results from entry signal's cerebro_decision
-                    entry_leg_results = entry_signal.get('cerebro_decision', {}).get('risk_assessment', {}).get('metadata', {}).get('leg_results', [])
+                    # Get leg_results from entry signal - support both v2 (decision.legs) and v1 (cerebro_decision)
+                    entry_decision = entry_signal.get('decision') or entry_signal.get('cerebro_decision', {})
+                    # v2: legs are directly on decision
+                    entry_leg_results = entry_decision.get('legs', [])
+                    # v1 fallback: legs are in risk_assessment.metadata.leg_results
+                    if not entry_leg_results:
+                        entry_leg_results = entry_decision.get('risk_assessment', {}).get('metadata', {}).get('leg_results', [])
 
                     if entry_leg_results:
                         logger.info(f"✅ Found entry leg_results with {len(entry_leg_results)} legs")
@@ -1601,14 +1762,14 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             else:
                 # Timeout or no entry found after retry - reject with critical error
                 logger.critical(f"🚨 CRITICAL: EXIT signal REJECTED - No filled entry found after retry")
-                logger.critical(f"   Strategy: {signal.get('strategy_id')}")
-                logger.critical(f"   Instrument: {signal.get('instrument')}")
+                logger.critical(f"   Strategy: {normalized_signal.get('strategy_id')}")
+                logger.critical(f"   Instrument: {normalized_signal.get('instrument')}")
                 logger.critical(f"   This indicates a serious issue - manual intervention required")
 
                 decision_obj = SignalDecision(
                     action="REJECTED",
                     quantity=0,
-                    reason=f"No open position found in signal_store for {signal.get('strategy_id')}/{signal.get('instrument')} after 30s retry",
+                    reason=f"No open position found in signal_store for {normalized_signal.get('strategy_id')}/{normalized_signal.get('instrument')} after 30s retry",
                     allocated_capital=0,
                     margin_required=0,
                     metadata={
@@ -1621,7 +1782,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
         # Step 4b: Smart Position Sizing - Adjust for capital distribution (ENTRY signals only)
         elif decision_obj.action in ['APPROVED', 'RESIZE']:
-            strategy_id = signal.get('strategy_id')
+            strategy_id = normalized_signal.get('strategy_id')
 
             # Get strategy metadata for backtest margin comparison
             strategy_meta = get_strategy_metadata(strategy_id)
@@ -1629,16 +1790,12 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
             # RATIO-BASED POSITION SIZING
             # Calculate position capital based on signal's sizing intent
-            # NOTE: account_equity is inside signal_data (raw_signal), not at top level
-            signal_account_equity = raw_signal.get('account_equity')
+            # v2: account_equity is in raw.account_equity, v1: in signal_data.account_equity
+            signal_account_equity = raw_obj.get('account_equity') or raw_signal.get('account_equity')
 
-            # Calculate signal's position value from first leg
-            if legs and len(legs) > 0:
-                signal_price = legs[0].get('price', 0)
-                signal_quantity = legs[0].get('quantity', 1)
-            else:
-                signal_price = signal.get('price', 0)
-                signal_quantity = signal.get('quantity', 1)
+            # Calculate signal's position value from first leg (already normalized)
+            signal_price = normalized_signal.get('price', 0)
+            signal_quantity = normalized_signal.get('quantity', 1)
             signal_position_value = signal_price * signal_quantity
 
             # Validate required fields for ratio-based sizing
@@ -1657,30 +1814,20 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     }
                 )
                 # Log and update signal store for rejected signal
-                log_detailed_calculation_math(signal, context, decision_obj, account_state)
+                log_detailed_calculation_math(normalized_signal, context, decision_obj, account_state)
                 logger.info(f"\n{'='*70}")
-                logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {signal.get('instrument')}")
+                logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {normalized_signal.get('instrument')}")
                 logger.info(f"{'='*70}")
-                logger.info(f"Strategy: {signal.get('strategy_id')}")
+                logger.info(f"Strategy: {normalized_signal.get('strategy_id')}")
                 logger.info(f"Action: {decision_obj.action}")
                 logger.info(f"Reason: {decision_obj.reason}")
                 logger.info(f"{'='*70}\n")
-                update_signal_store_with_decision(signal_store_id, {
-                    "signal_id": signal_id,
-                    "strategy_id": signal.get('strategy_id'),
-                    "decision": decision_obj.action,
-                    "timestamp": datetime.utcnow(),
-                    "reason": decision_obj.reason,
-                    "original_quantity": signal.get('quantity', 0),
-                    "final_quantity": 0,
-                    "environment": signal.get('environment', 'staging'),
-                    "risk_assessment": {
-                        "allocated_capital": decision_obj.allocated_capital,
-                        "margin_required": 0,
-                        "metadata": decision_obj.metadata
-                    },
-                    "created_at": datetime.utcnow()
-                })
+                update_signal_store_with_decision(signal_store_id, build_decision_v2(
+                    status=decision_obj.action,
+                    reason=decision_obj.reason,
+                    signal=signal,
+                    decision_obj=decision_obj
+                ))
                 return  # Exit early
 
             if signal_position_value <= 0:
@@ -1698,30 +1845,20 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     }
                 )
                 # Log and update signal store for rejected signal
-                log_detailed_calculation_math(signal, context, decision_obj, account_state)
+                log_detailed_calculation_math(normalized_signal, context, decision_obj, account_state)
                 logger.info(f"\n{'='*70}")
-                logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {signal.get('instrument')}")
+                logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {normalized_signal.get('instrument')}")
                 logger.info(f"{'='*70}")
-                logger.info(f"Strategy: {signal.get('strategy_id')}")
+                logger.info(f"Strategy: {normalized_signal.get('strategy_id')}")
                 logger.info(f"Action: {decision_obj.action}")
                 logger.info(f"Reason: {decision_obj.reason}")
                 logger.info(f"{'='*70}\n")
-                update_signal_store_with_decision(signal_store_id, {
-                    "signal_id": signal_id,
-                    "strategy_id": signal.get('strategy_id'),
-                    "decision": decision_obj.action,
-                    "timestamp": datetime.utcnow(),
-                    "reason": decision_obj.reason,
-                    "original_quantity": signal.get('quantity', 0),
-                    "final_quantity": 0,
-                    "environment": signal.get('environment', 'staging'),
-                    "risk_assessment": {
-                        "allocated_capital": decision_obj.allocated_capital,
-                        "margin_required": 0,
-                        "metadata": decision_obj.metadata
-                    },
-                    "created_at": datetime.utcnow()
-                })
+                update_signal_store_with_decision(signal_store_id, build_decision_v2(
+                    status=decision_obj.action,
+                    reason=decision_obj.reason,
+                    signal=signal,
+                    decision_obj=decision_obj
+                ))
                 return  # Exit early
 
             # Get allocated capital and deployed capital
@@ -1874,31 +2011,20 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                             }
                         )
                         # Log and update signal store for rejected signal
-                        log_detailed_calculation_math(signal, context, decision_obj, account_state)
+                        log_detailed_calculation_math(normalized_signal, context, decision_obj, account_state)
                         logger.info(f"\n{'='*70}")
-                        logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {signal.get('instrument')}")
+                        logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {normalized_signal.get('instrument')}")
                         logger.info(f"{'='*70}")
-                        logger.info(f"Strategy: {signal.get('strategy_id')}")
+                        logger.info(f"Strategy: {normalized_signal.get('strategy_id')}")
                         logger.info(f"Action: {decision_obj.action}")
                         logger.info(f"Reason: {decision_obj.reason}")
                         logger.info(f"{'='*70}\n")
-                        update_signal_store_with_decision(signal_store_id, {
-                            "signal_id": signal_id,
-                            "strategy_id": signal.get('strategy_id'),
-                            "decision": decision_obj.action,
-                            "timestamp": datetime.utcnow(),
-                            "reason": decision_obj.reason,
-                            "original_quantity": signal.get('quantity', 0),
-                            "final_quantity": 0,
-                            "environment": signal.get('environment', 'staging'),
-                            "risk_assessment": {
-                                "allocated_capital": allocated_capital,
-                                "allocated_capital_available": allocated_capital_available,
-                                "margin_required": total_margin_required,
-                                "metadata": decision_obj.metadata
-                            },
-                            "created_at": datetime.utcnow()
-                        })
+                        update_signal_store_with_decision(signal_store_id, build_decision_v2(
+                            status=decision_obj.action,
+                            reason=decision_obj.reason,
+                            signal=signal,
+                            decision_obj=decision_obj
+                        ))
                         return  # Exit early
 
                     # Log multi-leg summary
@@ -1939,30 +2065,20 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         }
                     )
                     # Skip to decision logging
-                    log_detailed_calculation_math(signal, context, decision_obj, account_state)
+                    log_detailed_calculation_math(normalized_signal, context, decision_obj, account_state)
                     logger.info(f"\n{'='*70}")
-                    logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {signal.get('instrument')}")
+                    logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {normalized_signal.get('instrument')}")
                     logger.info(f"{'='*70}")
-                    logger.info(f"Strategy: {signal.get('strategy_id')}")
+                    logger.info(f"Strategy: {normalized_signal.get('strategy_id')}")
                     logger.info(f"Action: {decision_obj.action}")
                     logger.info(f"Reason: {decision_obj.reason}")
                     logger.info(f"{'='*70}\n")
-                    update_signal_store_with_decision(signal_store_id, {
-                        "signal_id": signal_id,
-                        "strategy_id": signal.get('strategy_id'),
-                        "decision": decision_obj.action,
-                        "timestamp": datetime.utcnow(),
-                        "reason": decision_obj.reason,
-                        "original_quantity": signal.get('quantity', 0),
-                        "final_quantity": 0,
-                        "environment": signal.get('environment', 'staging'),
-                        "risk_assessment": {
-                            "allocated_capital": decision_obj.allocated_capital,
-                            "margin_required": 0,
-                            "metadata": decision_obj.metadata
-                        },
-                        "created_at": datetime.utcnow()
-                    })
+                    update_signal_store_with_decision(signal_store_id, build_decision_v2(
+                        status=decision_obj.action,
+                        reason=decision_obj.reason,
+                        signal=signal,
+                        decision_obj=decision_obj
+                    ))
                     return  # Exit early
 
                 # Update decision with adjusted values
@@ -2007,13 +2123,13 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 )
 
         # Log detailed calculation math to signal_processing.log (not console)
-        log_detailed_calculation_math(signal, context, decision_obj, account_state)
+        log_detailed_calculation_math(normalized_signal, context, decision_obj, account_state)
 
         # Log decision summary to console and cerebro_service.log
         logger.info(f"\n{'='*70}")
-        logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {signal.get('instrument')}")
+        logger.info(f"📊 PORTFOLIO CONSTRUCTOR DECISION for {normalized_signal.get('instrument')}")
         logger.info(f"{'='*70}")
-        logger.info(f"Strategy: {signal.get('strategy_id')}")
+        logger.info(f"Strategy: {normalized_signal.get('strategy_id')}")
         logger.info(f"Action: {decision_obj.action}")
         logger.info(f"Quantity: {decision_obj.quantity:.2f}")
         logger.info(f"Reason: {decision_obj.reason}")
@@ -2023,34 +2139,19 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             logger.info(f"Margin Required: ${decision_obj.margin_required:,.2f}")
         logger.info(f"{'='*70}")
 
-        # Step 5: Save decision to MongoDB
-        decision_doc = {
-            "signal_id": signal_id,
-            "strategy_id": signal.get('strategy_id'),
-            "decision": decision_obj.action,  # "APPROVE", "REJECT", "RESIZE"
-            "timestamp": datetime.utcnow(),
-            "reason": decision_obj.reason,
-            "original_quantity": signal.get('quantity', 0),
-            "final_quantity": decision_obj.quantity,
-            "environment": signal.get('environment', 'staging'),
-            "risk_assessment": {
-                "allocated_capital": decision_obj.allocated_capital,
-                "margin_required": decision_obj.margin_required,
-                "metadata": decision_obj.metadata
-            },
-            "created_at": datetime.utcnow()
-        }
-
-        # For EXIT signals, add entry reference at top level for easier querying
-        if decision_obj.metadata.get('entry_signal_id'):
-            decision_doc['entry_signal_id'] = decision_obj.metadata['entry_signal_id']
-            decision_doc['entry_signal_ref'] = decision_obj.metadata.get('entry_signal_ref')
+        # Step 5: Save decision to MongoDB (v2 format)
+        decision_doc = build_decision_v2(
+            status=decision_obj.action,
+            reason=decision_obj.reason,
+            signal=signal,
+            decision_obj=decision_obj
+        )
 
         # Write decision to signal_store (embedded)
         update_signal_store_with_decision(signal_store_id, decision_doc)
 
         # Unified signal processing log for decision
-        logger.info(f"SIGNAL: {signal_id} | DECISION | Action={decision_obj.action} | OrigQty={signal.get('quantity', 0)} | FinalQty={decision_obj.quantity} | Reason={decision_obj.reason}")
+        logger.info(f"SIGNAL: {signal_id} | DECISION | Action={decision_obj.action} | OrigQty={normalized_signal.get('quantity', 0)} | FinalQty={decision_obj.quantity} | Reason={decision_obj.reason}")
 
         # Step 6: If approved or resized, distribute capital across accounts and create orders
         if decision_obj.action in ['APPROVED', 'RESIZE']:
@@ -2060,7 +2161,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
             if not leg_results:
                 # No leg_results (EXIT signal or legacy) - create single order from primary signal
-                instrument_type = signal.get('instrument_type', 'STOCK')
+                instrument_type = normalized_signal.get('instrument_type', 'STOCK')
                 final_quantity_rounded = round_quantity_for_instrument(decision_obj.quantity, instrument_type)
                 if final_quantity_rounded <= 0:
                     logger.warning(f"Rounded quantity is 0, rejecting signal")
@@ -2068,13 +2169,13 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
                 leg_results = [{
                     'leg_index': 0,
-                    'instrument': signal.get('instrument'),
+                    'instrument': normalized_signal.get('instrument'),
                     'instrument_type': instrument_type,
-                    'direction': signal.get('direction'),
-                    'action': signal.get('action'),
-                    'order_type': signal.get('order_type', 'MARKET'),
+                    'direction': normalized_signal.get('direction'),
+                    'action': normalized_signal.get('action'),
+                    'order_type': normalized_signal.get('order_type', 'MARKET'),
                     'quantity': final_quantity_rounded,
-                    'price_used': signal.get('price', 0)
+                    'price_used': normalized_signal.get('price', 0)
                 }]
 
             # ============================================================================
@@ -2098,17 +2199,17 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             for account_alloc in account_allocations:
                 target_account_name = account_alloc['account_id']
                 account_capital = account_alloc['allocated_capital']
-            
+
                 # Calculate quantity for this account based on capital allocation
-                price_used = signal.get('price', 1.0)
+                price_used = normalized_signal.get('price', 1.0)
                 if price_used <= 0:
                     price_used = 1.0
                 account_quantity = account_capital / price_used
-            
+
                 for leg_result in leg_results:
                     leg_index = leg_result.get('leg_index', 0)
                     leg_instrument_type = leg_result.get('instrument_type', 'STOCK')
-                
+
                     # Scale leg quantity by account's capital allocation ratio
                     leg_base_quantity = leg_result.get('quantity', 0)
                     leg_account_quantity = leg_base_quantity * (account_capital / target_capital) if target_capital > 0 else 0
@@ -2124,11 +2225,14 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     else:
                         order_id = f"{signal_id}_{fund_id}_{target_account_name}_ORD"
 
+                    # Get optional fields from raw_obj (v2) or first_leg (already in normalized)
+                    first_leg = legs[0] if legs else {}
+
                     trading_order = {
                         "order_id": order_id,
                         "signal_id": signal_id,
                         "mathematricks_signal_id": signal_store_id,  # For execution_service to update signal_store
-                        "strategy_id": signal.get('strategy_id'),
+                        "strategy_id": normalized_signal.get('strategy_id'),
                         "fund_id": fund_id,  # NEW: Fund architecture support
                         "account_id": target_account_name,  # NEW: Renamed from "account"
                         "account": target_account_name,  # DEPRECATED: Keep for backward compatibility
@@ -2136,17 +2240,17 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         "instrument": leg_result.get('instrument'),
                         "direction": leg_result.get('direction'),
                         "action": leg_result.get('action'),
-                        "signal_type": signal.get('signal_type'),  # ENTRY or EXIT (for execution service)
+                        "signal_type": normalized_signal.get('signal_type'),  # ENTRY or EXIT (for execution service)
                         "order_type": leg_result.get('order_type', 'MARKET'),
                         "price": leg_result.get('price_used', 0),
                         "quantity": leg_quantity,
-                        "stop_loss": signal.get('stop_loss'),
-                        "take_profit": signal.get('take_profit'),
-                        "expiry": signal.get('expiry'),
+                        "stop_loss": first_leg.get('stop_loss'),
+                        "take_profit": first_leg.get('take_profit'),
+                        "expiry": first_leg.get('expiry'),
                         # Multi-asset support: pass through instrument_type and related fields
                         "instrument_type": leg_result.get('instrument_type', 'STOCK'),
-                        "underlying": signal.get('underlying'),  # For options
-                        "exchange": signal.get('exchange'),  # For futures
+                        "underlying": first_leg.get('underlying'),  # For options
+                        "exchange": first_leg.get('exchange'),  # For futures
                         # Multi-leg metadata
                         "leg_index": leg_index,
                         "total_legs": len(leg_results),
@@ -2160,7 +2264,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                             "position_size_logic": "PortfolioConstructor:MaxCAGR:MultiFund",
                             "risk_metrics": {k: v for k, v in decision_obj.metadata.items() if k != 'leg_results'}  # Exclude leg_results to reduce size
                         },
-                        "environment": signal.get('environment', 'staging'),
+                        "environment": normalized_signal.get('environment', 'staging'),
                         "status": "PENDING",
                         "created_at": datetime.utcnow()
                     }

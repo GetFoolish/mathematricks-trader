@@ -407,7 +407,15 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
 
 def update_signal_store_with_execution(order_data: Dict[str, Any], execution_data: Dict[str, Any]):
     """
-    Update signal_store with execution results and calculate PnL for EXIT signals
+    Update signal_store with execution results and calculate PnL for EXIT signals.
+
+    v2 Schema:
+    - execution.status: PENDING | PARTIAL | FILLED | FAILED
+    - execution.orders[]: Array of orders (supports multi-fund)
+    - execution.total_quantity_filled: Aggregate across all orders
+    - position.status: null | OPEN | CLOSED
+    - position.pnl: PnL breakdown (only when CLOSED)
+    - position.exit_signals: Array of exit signal ObjectIds
 
     Args:
         order_data: Original order data from trading order
@@ -424,31 +432,70 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
 
         logger.debug(f"Updating signal_store for mathematricks_signal_id: {mathematricks_signal_id}")
 
-        # Use signal_type to determine ENTRY vs EXIT (not action, since action can be BUY/SELL for both)
+        # Use signal_type to determine ENTRY vs EXIT
         signal_type = order_data.get('signal_type') or 'ENTRY'
         signal_type = signal_type.upper()
         is_exit = signal_type == 'EXIT'
 
-        # Prepare execution update
-        execution_update = {
-            "execution": {
-                "order_id": order_data.get('order_id'),
-                "broker_order_id": execution_data.get('broker_order_id'),
-                "status": "FILLED",
-                "avg_fill_price": execution_data['avg_fill_price'],
-                "quantity_filled": execution_data['quantity_filled'],
-                "fills": execution_data.get('fills', []),
-                "filled_at": datetime.utcnow()
-            },
-            "updated_at": datetime.utcnow()
+        # Build order document for execution.orders[] array
+        order_doc = {
+            "order_id": order_data.get('order_id'),
+            "broker_order_id": execution_data.get('broker_order_id'),
+            "fund_id": order_data.get('fund_id'),
+            "account_id": order_data.get('account_id'),
+            "quantity_requested": order_data.get('quantity', 0),
+            "quantity_filled": execution_data['quantity_filled'],
+            "avg_fill_price": execution_data['avg_fill_price'],
+            "filled_at": datetime.utcnow(),
+            "fills": execution_data.get('fills', [])
         }
 
+        # Get current signal_store document to check existing execution
+        current_doc = signal_store_collection.find_one({"_id": ObjectId(mathematricks_signal_id)})
+        existing_execution = current_doc.get('execution') if current_doc else None
+
+        # Build execution update - aggregate with existing orders if any
+        if existing_execution and existing_execution.get('orders'):
+            # Append to existing orders array
+            existing_orders = existing_execution.get('orders', [])
+            existing_orders.append(order_doc)
+            total_filled = sum(o.get('quantity_filled', 0) for o in existing_orders)
+            total_value = sum(o.get('quantity_filled', 0) * o.get('avg_fill_price', 0) for o in existing_orders)
+            weighted_avg = total_value / total_filled if total_filled > 0 else 0
+
+            execution_update = {
+                "execution": {
+                    "status": "FILLED",
+                    "orders": existing_orders,
+                    "total_quantity_filled": total_filled,
+                    "weighted_avg_price": weighted_avg,
+                    "total_cost_basis": total_value if not is_exit else None,
+                    "total_proceeds": total_value if is_exit else None
+                },
+                "updated_at": datetime.utcnow()
+            }
+        else:
+            # First order for this signal
+            total_value = execution_data['quantity_filled'] * execution_data['avg_fill_price']
+            execution_update = {
+                "execution": {
+                    "status": "FILLED",
+                    "orders": [order_doc],
+                    "total_quantity_filled": execution_data['quantity_filled'],
+                    "weighted_avg_price": execution_data['avg_fill_price'],
+                    "total_cost_basis": total_value if not is_exit else None,
+                    "total_proceeds": total_value if is_exit else None
+                },
+                "updated_at": datetime.utcnow()
+            }
+
         if not is_exit:
-            # ENTRY signal: Set position_status to OPEN
-            execution_update["position_status"] = "OPEN"
-            execution_update["execution"]["total_cost_basis"] = (
-                execution_data['avg_fill_price'] * execution_data['quantity_filled']
-            )
+            # ENTRY signal: Set position.status to OPEN
+            execution_update["position"] = {
+                "status": "OPEN",
+                "opened_at": datetime.utcnow(),
+                "exit_signals": []
+            }
 
             # Update signal_store
             result = signal_store_collection.update_one(
@@ -478,48 +525,62 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
                 logger.error(f"❌ Entry signal {entry_signal_id} not found or has no execution data")
                 return
 
-            # Calculate PnL
-            entry_price = entry_signal['execution']['avg_fill_price']
+            # Calculate PnL (support both v1 and v2 schema)
+            entry_execution = entry_signal['execution']
+            if 'weighted_avg_price' in entry_execution:
+                # v2 schema
+                entry_price = entry_execution['weighted_avg_price']
+                entry_cost_basis = entry_execution.get('total_cost_basis', entry_price * entry_execution.get('total_quantity_filled', 0))
+            else:
+                # v1 schema fallback
+                entry_price = entry_execution.get('avg_fill_price', 0)
+                entry_cost_basis = entry_execution.get('total_cost_basis', entry_price * entry_execution.get('quantity_filled', 0))
+
             exit_price = execution_data['avg_fill_price']
             quantity = execution_data['quantity_filled']
 
             gross_pnl = (exit_price - entry_price) * quantity
-            commission = execution_data.get('commission', 0)  # TODO: Get actual commissions
+            commission = execution_data.get('commission', 0)
             net_pnl = gross_pnl - commission
-
-            entry_cost_basis = entry_signal['execution'].get('total_cost_basis', entry_price * quantity)
             pnl_percent = (net_pnl / entry_cost_basis) * 100 if entry_cost_basis > 0 else 0
 
-            holding_period_seconds = (
-                datetime.utcnow() - entry_signal['execution']['filled_at']
-            ).total_seconds()
+            # Get entry filled_at (support both v1 and v2)
+            entry_filled_at = None
+            if entry_execution.get('orders'):
+                # v2: use first order's filled_at
+                entry_filled_at = entry_execution['orders'][0].get('filled_at')
+            else:
+                # v1: use filled_at directly
+                entry_filled_at = entry_execution.get('filled_at')
 
-            # Prepare PnL data
+            holding_seconds = 0
+            if entry_filled_at:
+                holding_seconds = (datetime.utcnow() - entry_filled_at).total_seconds()
+
+            # Prepare PnL data for v2 position.pnl structure
             pnl_data = {
-                "gross_pnl": gross_pnl,
+                "gross": gross_pnl,
+                "net": net_pnl,
+                "percent": pnl_percent,
                 "commission": commission,
-                "net_pnl": net_pnl,
-                "pnl_percent": pnl_percent,
-                "holding_period_seconds": holding_period_seconds
+                "holding_seconds": holding_seconds
             }
 
-            execution_update["pnl"] = pnl_data
-
-            # Update EXIT signal
+            # Update EXIT signal (no position lifecycle, just execution)
             signal_store_collection.update_one(
                 {"_id": ObjectId(mathematricks_signal_id)},
                 {"$set": execution_update}
             )
 
-            # Update ENTRY signal: add to exit_signals array and set CLOSED
+            # Update ENTRY signal: set position to CLOSED with PnL
             signal_store_collection.update_one(
                 {"_id": ObjectId(entry_signal_id)},
                 {
-                    "$push": {"exit_signals": ObjectId(mathematricks_signal_id)},
+                    "$push": {"position.exit_signals": ObjectId(mathematricks_signal_id)},
                     "$set": {
-                        "position_status": "CLOSED",
-                        "pnl_realized": net_pnl,
-                        "closed_at": datetime.utcnow(),
+                        "position.status": "CLOSED",
+                        "position.closed_at": datetime.utcnow(),
+                        "position.pnl": pnl_data,
                         "updated_at": datetime.utcnow()
                     }
                 }
