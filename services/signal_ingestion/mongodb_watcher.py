@@ -114,6 +114,11 @@ class MongoDBWatcher:
                         "instrument": first_leg.get('instrument') or first_leg.get('ticker'),
                         "direction": first_leg.get('direction', 'UNKNOWN'),
                         "action": first_leg.get('action', 'UNKNOWN'),
+                        "price": first_leg.get('price', 0),  # Price from first leg
+                        "quantity": first_leg.get('quantity', 0),  # Quantity from first leg
+                        "instrument_type": first_leg.get('instrument_type', 'STOCK'),  # Instrument type from first leg
+                        "order_type": first_leg.get('order_type', 'MARKET'),  # Order type from first leg
+                        "signal_type": raw_signal_doc.get('signal_type', 'ENTRY'),  # Signal type (ENTRY/EXIT)
                         "signal_data": raw_signal_doc,
 
                         # Lifecycle fields (populated later)
@@ -271,6 +276,11 @@ class MongoDBWatcher:
                             "instrument": first_leg.get('instrument') or first_leg.get('ticker'),
                             "direction": first_leg.get('direction', 'UNKNOWN'),
                             "action": first_leg.get('action', 'UNKNOWN'),
+                            "price": first_leg.get('price', 0),  # Price from first leg
+                            "quantity": first_leg.get('quantity', 0),  # Quantity from first leg
+                            "instrument_type": first_leg.get('instrument_type', 'STOCK'),  # Instrument type from first leg
+                            "order_type": first_leg.get('order_type', 'MARKET'),  # Order type from first leg
+                            "signal_type": raw_signal_doc.get('signal_type', 'ENTRY'),  # Signal type (ENTRY/EXIT)
                             "signal_data": raw_signal_doc,  # Full raw signal
 
                             # Lifecycle fields (populated later by cerebro/execution)

@@ -425,7 +425,8 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
         logger.debug(f"Updating signal_store for mathematricks_signal_id: {mathematricks_signal_id}")
 
         # Use signal_type to determine ENTRY vs EXIT (not action, since action can be BUY/SELL for both)
-        signal_type = order_data.get('signal_type', 'ENTRY').upper()
+        signal_type = order_data.get('signal_type') or 'ENTRY'
+        signal_type = signal_type.upper()
         is_exit = signal_type == 'EXIT'
 
         # Prepare execution update
@@ -541,9 +542,9 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
     try:
         strategy_id = order_data.get('strategy_id')
         instrument = order_data.get('instrument')
-        direction = order_data.get('direction', 'LONG').upper()
-        action = order_data.get('action', 'ENTRY').upper()
-        signal_type = order_data.get('signal_type', '').upper()
+        direction = (order_data.get('direction') or 'LONG').upper()
+        action = (order_data.get('action') or 'ENTRY').upper()
+        signal_type = (order_data.get('signal_type') or '').upper()
         order_id = order_data.get('order_id')
 
         # Get account_id from order_data, with fallback based on broker mode
@@ -839,11 +840,7 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                 }
 
                 # Note: Execution data is stored in signal_store.execution field
-                # (redundant execution_confirmations collection removed)
-
-                # Publish execution confirmation
-                logger.debug(f"Publishing execution confirmation for {order_id}")
-                publish_execution_confirmation(execution)
+                # (redundant execution_confirmations collection and Pub/Sub removed)
 
                 # Create or update position in open_positions collection
                 logger.debug(f"Creating/updating position for {order_id}")
@@ -905,7 +902,7 @@ def process_order_from_queue(order_item: Dict[str, Any]):
         logger.debug(f"Completed processing order {order_id}")
 
     except Exception as e:
-        logger.error(f"Error processing order {order_id}: {str(e)}\", exc_info=True)
+        logger.error(f"Error processing order {order_id}: {str(e)}", exc_info=True)
         # Order will remain in PENDING state and can be manually retried if needed
 
 

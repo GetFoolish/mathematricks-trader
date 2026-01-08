@@ -329,7 +329,7 @@ class MaxCAGRV2Constructor(PortfolioConstructor):
         
         # Approved
         return SignalDecision(
-            action='APPROVE',
+            action='APPROVED',
             quantity=quantity,
             reason='Within allocation and margin limits',
             allocated_capital=allocated_capital,

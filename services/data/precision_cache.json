@@ -35,6 +35,84 @@
     "BND": {
       "precision": 0,
       "last_checked": "2026-01-07T19:02:32.070180+00:00"
+    },
+    "SPY": {
+      "precision": 0,
+      "last_checked": "2026-01-07T23:26:57.942140+00:00"
+    },
+    "QQQ": {
+      "precision": 0,
+      "last_checked": "2026-01-08T02:51:31.316672+00:00"
+    },
+    "IEF": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:00:20.931447+00:00"
+    },
+    "TLT": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:07:00.130482+00:00"
+    },
+    "AAPL": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:16:12.844664+00:00"
+    }
+  },
+  "OANDA_MOCK": {
+    "GBPUSD": {
+      "precision": 0,
+      "last_checked": "2026-01-08T02:51:12.245481+00:00"
+    },
+    "SI": {
+      "precision": 0,
+      "last_checked": "2026-01-08T02:51:18.856211+00:00"
+    },
+    "ZS": {
+      "precision": 0,
+      "last_checked": "2026-01-08T02:59:50.032626+00:00"
+    },
+    "ZC": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:01:22.203925+00:00"
+    },
+    "GC": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:02:23.926782+00:00"
+    },
+    "CL": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:02:54.542265+00:00"
+    },
+    "CC": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:03:55.941910+00:00"
+    },
+    "EURUSD": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:04:57.325202+00:00"
+    },
+    "SB": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:07:30.835006+00:00"
+    },
+    "NG": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:11:36.547848+00:00"
+    },
+    "KC": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:14:10.129504+00:00"
+    },
+    "AUDCAD": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:17:45.581392+00:00"
+    },
+    "ZW": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:19:47.932541+00:00"
+    },
+    "HG": {
+      "precision": 0,
+      "last_checked": "2026-01-08T03:20:49.795994+00:00"
     }
   }
 }

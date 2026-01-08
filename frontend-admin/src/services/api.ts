@@ -212,13 +212,6 @@ class ApiClient {
     return response.data;
   }
 
-  async getCerebroDecisions(limit: number = 50, environment?: string) {
-    const params: any = { limit };
-    if (environment) params.environment = environment;
-    const response = await this.frontendApiClient.get('/api/v1/activity/decisions', { params });
-    return response.data;
-  }
-
   // ============================================================================
   // Fund Management APIs (v5)
   // ============================================================================

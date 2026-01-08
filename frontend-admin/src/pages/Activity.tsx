@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../services/api';
-import { Activity as ActivityIcon, TrendingUp, TrendingDown, Clock, ChevronDown, ChevronRight } from 'lucide-react';
+import { TrendingUp, TrendingDown, Clock, ChevronDown, ChevronRight } from 'lucide-react';
 
 export const Activity: React.FC = () => {
-  const [selectedTab, setSelectedTab] = useState<'signals' | 'orders' | 'decisions'>('signals');
+  const [selectedTab, setSelectedTab] = useState<'signals' | 'orders'>('signals');
   const [showStaging, setShowStaging] = useState(true);
   const [showProduction, setShowProduction] = useState(false);
   const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
@@ -33,13 +33,6 @@ export const Activity: React.FC = () => {
     refetchInterval: 5000,
   });
 
-  // Fetch decisions
-  const { data: decisionsData, isLoading: isLoadingDecisions } = useQuery({
-    queryKey: ['decisions', environmentFilter],
-    queryFn: () => apiClient.getCerebroDecisions(50, environmentFilter),
-    refetchInterval: 5000,
-  });
-
   // Filter results client-side based on checkboxes
   const filterByEnvironment = (items: any[]) => {
     if (showStaging && showProduction) return items; // Show all
@@ -52,9 +45,13 @@ export const Activity: React.FC = () => {
     });
   };
 
-  const signals = filterByEnvironment(signalsData?.signals || []);
+  // Sort signals by signal_sent_timestamp (latest first)
+  const signals = filterByEnvironment(signalsData?.signals || []).sort((a: any, b: any) => {
+    const timeA = a.signal_sent_timestamp ? new Date(a.signal_sent_timestamp).getTime() : 0;
+    const timeB = b.signal_sent_timestamp ? new Date(b.signal_sent_timestamp).getTime() : 0;
+    return timeB - timeA; // Descending (latest first)
+  });
   const orders = filterByEnvironment(ordersData?.orders || []);
-  const decisions = filterByEnvironment(decisionsData?.decisions || []);
 
   // Helper to display current filter state
   const getFilterLabel = () => {
@@ -119,16 +116,6 @@ export const Activity: React.FC = () => {
         >
           Orders & Executions ({orders.length})
         </button>
-        <button
-          onClick={() => setSelectedTab('decisions')}
-          className={`px-6 py-3 font-medium transition-colors ${
-            selectedTab === 'decisions'
-              ? 'border-b-2 border-blue-500 text-blue-500'
-              : 'text-gray-400 hover:text-white'
-          }`}
-        >
-          Cerebro Decisions ({decisions.length})
-        </button>
       </div>
 
       {/* Recent Signals Tab */}
@@ -153,15 +140,15 @@ export const Activity: React.FC = () => {
               <table className="w-full">
                 <thead>
                   <tr>
+                    <th className="table-header w-8"></th>
                     <th className="table-header">Signal Sent</th>
-                    <th className="table-header">Signal Received (Lag)</th>
-                    <th className="table-header">Execution Complete (Lag)</th>
                     <th className="table-header">Type</th>
                     <th className="table-header">Signal ID</th>
                     <th className="table-header">Strategy</th>
                     <th className="table-header">Symbol</th>
                     <th className="table-header">Action</th>
                     <th className="table-header">Direction</th>
+                    <th className="table-header">Qty</th>
                     <th className="table-header">Price</th>
                     <th className="table-header">Cerebro Decision</th>
                     <th className="table-header">Status</th>
@@ -192,35 +179,29 @@ export const Activity: React.FC = () => {
                     return (
                       <React.Fragment key={signal.signal_id}>
                         <tr className="hover:bg-gray-700/50">
+                          {/* Expand button on far left */}
+                          <td className="table-cell w-8">
+                            <button
+                              onClick={() => setExpandedSignalId(isExpanded ? null : signal.signal_id)}
+                              className="p-1 hover:bg-gray-600 rounded transition-colors"
+                              title="View details"
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="h-4 w-4 text-blue-400" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 text-gray-400" />
+                              )}
+                            </button>
+                          </td>
                           <td className="table-cell text-sm">
                             <div className="flex items-center gap-2">
                               <Clock className="h-4 w-4 text-blue-400" />
                               {formatTimestamp(signal.signal_sent_timestamp)}
                             </div>
                           </td>
-                          <td className="table-cell text-sm">
-                            <div>
-                              <div>{formatTimestamp(signal.signal_received_timestamp)}</div>
-                              {signal.receive_lag_seconds !== null && (
-                                <span className="text-xs text-gray-400">
-                                  {formatLag(signal.receive_lag_seconds)}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="table-cell text-sm">
-                            <div>
-                              <div>{formatTimestamp(signal.execution_completed_timestamp)}</div>
-                              {signal.execution_lag_seconds !== null && (
-                                <span className="text-xs text-gray-400">
-                                  {formatLag(signal.execution_lag_seconds)}
-                                </span>
-                              )}
-                            </div>
-                          </td>
                           <td className="table-cell">
                             <span className={`px-2 py-1 rounded text-xs font-medium ${
-                              signal.signal_type === 'ENTRY' ? 'bg-green-900/30 text-green-400' : 
+                              signal.signal_type === 'ENTRY' ? 'bg-green-900/30 text-green-400' :
                               signal.signal_type === 'EXIT' ? 'bg-red-900/30 text-red-400' :
                               'bg-gray-700/30 text-gray-400'
                             }`}>
@@ -256,29 +237,17 @@ export const Activity: React.FC = () => {
                               )}
                             </div>
                           </td>
+                          <td className="table-cell">{signal.quantity || 'N/A'}</td>
                           <td className="table-cell">${signal.price?.toFixed(2) || 'N/A'}</td>
                           <td className="table-cell">
                             {hasDecision ? (
-                              <div className="flex items-center gap-2">
-                                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                  signal.decision_status === 'APPROVED' ? 'bg-green-900/30 text-green-400' :
-                                  signal.decision_status === 'REJECTED' ? 'bg-red-900/30 text-red-400' :
-                                  'bg-yellow-900/30 text-yellow-400'
-                                }`}>
-                                  {signal.decision_status}
-                                </span>
-                                <button
-                                  onClick={() => setExpandedSignalId(isExpanded ? null : signal.signal_id)}
-                                  className="p-1 hover:bg-gray-600 rounded transition-colors"
-                                  title="View decision details"
-                                >
-                                  {isExpanded ? (
-                                    <ChevronDown className="h-4 w-4 text-blue-400" />
-                                  ) : (
-                                    <ChevronRight className="h-4 w-4 text-gray-400" />
-                                  )}
-                                </button>
-                              </div>
+                              <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                signal.decision_status === 'APPROVED' || signal.decision_status === 'APPROVE' ? 'bg-green-900/30 text-green-400' :
+                                signal.decision_status === 'REJECTED' ? 'bg-red-900/30 text-red-400' :
+                                'bg-yellow-900/30 text-yellow-400'
+                              }`}>
+                                {signal.decision_status === 'APPROVE' ? 'APPROVED' : signal.decision_status}
+                              </span>
                             ) : (
                               <span className="px-2 py-1 bg-gray-700/30 text-gray-400 rounded text-xs font-medium">
                                 PENDING
@@ -292,15 +261,47 @@ export const Activity: React.FC = () => {
                           </td>
                         </tr>
 
-                        {/* Expanded JSON viewer row */}
-                        {isExpanded && hasDecision && (
+                        {/* Expanded details row */}
+                        {isExpanded && (
                           <tr>
                             <td colSpan={12} className="bg-gray-800/50 p-4">
-                              <div className="max-w-full overflow-x-auto">
-                                <h4 className="text-sm font-semibold text-white mb-2">Cerebro Decision Details</h4>
-                                <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-x-auto">
-                                  {JSON.stringify(signal.cerebro_decision, null, 2)}
-                                </pre>
+                              <div className="max-w-full overflow-x-auto space-y-4">
+                                {/* Timing details */}
+                                <div>
+                                  <h4 className="text-sm font-semibold text-white mb-2">Timing Details</h4>
+                                  <div className="grid grid-cols-3 gap-4 p-3 bg-gray-900 rounded border border-gray-700">
+                                    <div>
+                                      <p className="text-xs text-gray-400">Signal Received</p>
+                                      <p className="text-sm text-white">{formatTimestamp(signal.signal_received_timestamp)}</p>
+                                      {signal.receive_lag_seconds !== null && (
+                                        <p className="text-xs text-yellow-400">{formatLag(signal.receive_lag_seconds)} lag</p>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <p className="text-xs text-gray-400">Execution Complete</p>
+                                      <p className="text-sm text-white">{formatTimestamp(signal.execution_completed_timestamp)}</p>
+                                      {signal.execution_lag_seconds !== null && (
+                                        <p className="text-xs text-yellow-400">{formatLag(signal.execution_lag_seconds)} total</p>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <p className="text-xs text-gray-400">Environment</p>
+                                      <p className={`text-sm font-medium ${signal.environment === 'staging' ? 'text-blue-400' : 'text-green-400'}`}>
+                                        {signal.environment?.toUpperCase() || 'UNKNOWN'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Cerebro decision details */}
+                                {hasDecision && (
+                                  <div>
+                                    <h4 className="text-sm font-semibold text-white mb-2">Cerebro Decision Details</h4>
+                                    <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-x-auto">
+                                      {JSON.stringify(signal.cerebro_decision, null, 2)}
+                                    </pre>
+                                  </div>
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -377,98 +378,6 @@ export const Activity: React.FC = () => {
                 </tbody>
               </table>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Cerebro Decisions Tab */}
-      {selectedTab === 'decisions' && (
-        <div className="space-y-4">
-          <div className="card">
-            <h3 className="text-lg font-semibold text-white mb-4">
-              Cerebro Decision Log - {getFilterLabel()}
-            </h3>
-            <p className="text-sm text-gray-400 mb-4">
-              Detailed position sizing calculations and risk assessments
-            </p>
-          </div>
-
-          {isLoadingDecisions ? (
-            <div className="card">
-              <div className="text-center py-12">
-                <div className="inline-block animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-3"></div>
-                <p className="text-gray-400">Loading decisions...</p>
-              </div>
-            </div>
-          ) : decisions.length === 0 ? (
-            <div className="card text-center py-12">
-              <ActivityIcon className="h-16 w-16 text-gray-600 mx-auto mb-4" />
-              <p className="text-gray-400 text-lg">No Cerebro decisions yet for {getFilterLabel()}</p>
-              <p className="text-gray-500 text-sm mt-2">Decisions will appear here when signals are processed</p>
-            </div>
-          ) : (
-            decisions.map((decision: any) => (
-              <div key={decision.signal_id} className="card">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <ActivityIcon className="h-5 w-5 text-blue-500" />
-                    <div>
-                      <p className="text-white font-medium">Signal: {decision.signal_id}</p>
-                      <p className="text-sm text-gray-400">{new Date(decision.timestamp).toLocaleString()}</p>
-                    </div>
-                  </div>
-                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                    decision.decision === 'APPROVED' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'
-                  }`}>
-                    {decision.decision}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 p-4 bg-gray-700/30 rounded-lg">
-                  <div>
-                    <p className="text-xs text-gray-400 mb-1">Strategy</p>
-                    <p className="text-white font-medium">{decision.strategy_id}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-400 mb-1">Final Quantity</p>
-                    <p className="text-white font-medium">{decision.final_quantity?.toFixed(2) || 0}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-400 mb-1">Allocated Capital</p>
-                    <p className="text-white font-medium">
-                      ${decision.risk_assessment?.allocated_capital?.toLocaleString() || 0}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-400 mb-1">Margin Required</p>
-                    <p className="text-white font-medium">
-                      ${decision.risk_assessment?.margin_required?.toLocaleString() || 0}
-                    </p>
-                  </div>
-                </div>
-
-                {decision.risk_assessment && (
-                  <div className="grid grid-cols-2 gap-4 p-4 bg-gray-700/30 rounded-lg">
-                    <div>
-                      <p className="text-xs text-gray-400 mb-1">Margin Utilization Before</p>
-                      <p className="text-white font-semibold">
-                        {decision.risk_assessment.margin_utilization_before_pct?.toFixed(1) || 0}%
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-400 mb-1">Margin Utilization After</p>
-                      <p className={`font-semibold ${
-                        (decision.risk_assessment.margin_utilization_after_pct || 0) > 40
-                          ? 'text-red-500'
-                          : 'text-green-500'
-                      }`}>
-                        {decision.risk_assessment.margin_utilization_after_pct?.toFixed(1) || 0}%
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))
           )}
         </div>
       )}

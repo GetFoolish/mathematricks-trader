@@ -709,7 +709,7 @@ def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) ->
             "instrument": instrument,
             "direction": entry_direction,
             "position_status": "OPEN",
-            "cerebro_decision.decision": "APPROVE",
+            "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},  # Support both legacy and new format
             "execution.status": "FILLED"
         })
 
@@ -774,7 +774,7 @@ def wait_for_entry_fill(strategy_id: str, instrument: str, direction: str, max_w
             "strategy_id": strategy_id,
             "instrument": instrument,
             "direction": entry_direction,
-            "cerebro_decision.decision": "APPROVE",
+            "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},  # Support both legacy and new format
             "position_status": {"$ne": "CLOSED"},  # Include null, "OPEN", and any other non-CLOSED status
             "$or": [
                 {"execution": None},  # Order not yet sent to execution_service
@@ -1317,7 +1317,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         # Use Portfolio Constructor for ratio-based sizing (but skip optimization)
         # Just approve the signal and let ratio logic calculate proper quantity
         decision_obj = SignalDecision(
-            action='APPROVE',
+            action='APPROVED',
             quantity=0,  # Will be calculated by ratio logic below
             reason=f'Fund allocation: {strategy_pct*100:.2f}% = ${allocated_capital:,.2f}',
             allocated_capital=allocated_capital,
@@ -1436,7 +1436,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         # check_and_cancel_pending_entry(signal, signal_type_info)
 
         # Step 4a.3: EXIT SIGNAL HANDLING - Query signal_store for exact entry quantity
-        if signal_type in ['EXIT', 'SCALE_OUT'] and decision_obj.action in ['APPROVE', 'RESIZE']:
+        if signal_type in ['EXIT', 'SCALE_OUT'] and decision_obj.action in ['APPROVED', 'RESIZE']:
             logger.info(f"🔴 EXIT signal detected - querying signal_store for entry quantity")
 
             # PRIORITY 1: Check if EXIT signal explicitly provides entry_signal_id
@@ -1444,17 +1444,46 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             entry_signal = None
 
             if entry_signal_id and entry_signal_id != "$PREVIOUS":
-                # Direct lookup by ObjectId - most reliable method
-                logger.info(f"✅ EXIT signal has entry_signal_id - using direct lookup: {entry_signal_id[:12]}...")
-                try:
-                    from bson import ObjectId
-                    entry_signal = signal_store_collection.find_one({"_id": ObjectId(entry_signal_id)})
+                # Check if entry_signal_id is a symbolic reference like "$ENTRY_1"
+                if entry_signal_id.startswith("$ENTRY"):
+                    # Look up by entry_name in signal_data
+                    logger.info(f"✅ EXIT signal has symbolic entry_signal_id: {entry_signal_id}")
+                    strategy_id = signal.get('strategy_id')
+
+                    # Find the ENTRY signal by entry_name (stored in signal_data.entry_name)
+                    entry_signal = signal_store_collection.find_one({
+                        "strategy_id": strategy_id,
+                        "signal_data.entry_name": entry_signal_id,
+                        "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},
+                        "execution.status": "FILLED",
+                        "position_status": "OPEN"
+                    })
+
                     if entry_signal:
-                        logger.info(f"✅ Found exact entry signal by ID: {entry_signal.get('signal_id')}")
+                        logger.info(f"✅ Found entry signal by symbolic reference: {entry_signal.get('signal_id')}")
                     else:
-                        logger.warning(f"⚠️ entry_signal_id provided but signal not found: {entry_signal_id}")
-                except Exception as e:
-                    logger.error(f"❌ Error looking up entry_signal_id {entry_signal_id}: {e}")
+                        # Try without FILLED status (might still be pending)
+                        entry_signal = signal_store_collection.find_one({
+                            "strategy_id": strategy_id,
+                            "signal_data.entry_name": entry_signal_id,
+                            "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]}
+                        })
+                        if entry_signal:
+                            logger.info(f"✅ Found pending entry signal by symbolic reference: {entry_signal.get('signal_id')}")
+                        else:
+                            logger.warning(f"⚠️ No entry signal found for symbolic reference: {entry_signal_id}")
+                else:
+                    # Direct lookup by ObjectId - most reliable method
+                    logger.info(f"✅ EXIT signal has entry_signal_id - using direct lookup: {entry_signal_id[:12]}...")
+                    try:
+                        from bson import ObjectId
+                        entry_signal = signal_store_collection.find_one({"_id": ObjectId(entry_signal_id)})
+                        if entry_signal:
+                            logger.info(f"✅ Found exact entry signal by ID: {entry_signal.get('signal_id')}")
+                        else:
+                            logger.warning(f"⚠️ entry_signal_id provided but signal not found: {entry_signal_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Error looking up entry_signal_id {entry_signal_id}: {e}")
 
             # PRIORITY 2: Fallback to fuzzy matching if no entry_signal_id provided or lookup failed
             if not entry_signal:
@@ -1558,7 +1587,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     exit_metadata['leg_results'] = exit_leg_results
 
                 decision_obj = SignalDecision(
-                    action="APPROVE",
+                    action="APPROVED",
                     quantity=exact_quantity,
                     reason=f"EXIT: Closing position from entry signal {entry_signal['signal_id']}" + (f" ({len(legs)} legs)" if is_multi_leg else ""),
                     allocated_capital=0,
@@ -1591,7 +1620,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 )
 
         # Step 4b: Smart Position Sizing - Adjust for capital distribution (ENTRY signals only)
-        elif decision_obj.action in ['APPROVE', 'RESIZE']:
+        elif decision_obj.action in ['APPROVED', 'RESIZE']:
             strategy_id = signal.get('strategy_id')
 
             # Get strategy metadata for backtest margin comparison
@@ -2024,7 +2053,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         logger.info(f"SIGNAL: {signal_id} | DECISION | Action={decision_obj.action} | OrigQty={signal.get('quantity', 0)} | FinalQty={decision_obj.quantity} | Reason={decision_obj.reason}")
 
         # Step 6: If approved or resized, distribute capital across accounts and create orders
-        if decision_obj.action in ['APPROVE', 'RESIZE']:
+        if decision_obj.action in ['APPROVED', 'RESIZE']:
             # Get leg_results from metadata (for ENTRY signals with multi-leg calculation)
             # For EXIT signals or single-leg, fall back to creating from primary signal
             leg_results = decision_obj.metadata.get('leg_results', [])
@@ -2222,8 +2251,15 @@ def watch_signals():
                     try:
                         signal_data = change['fullDocument']
                         signal_id = signal_data.get('signal_id', 'UNKNOWN')
+
+                        # Extract the _id from signal_store as mathematricks_signal_id
+                        # This is required for cerebro to update the signal_store with its decision
+                        signal_store_id = signal_data.get('_id')
+                        if signal_store_id:
+                            signal_data['mathematricks_signal_id'] = str(signal_store_id)
+
                         logger.info(f"Received signal: {signal_id}")
-                        
+
                         # Process signal
                         process_signal_with_constructor(signal_data)
                         

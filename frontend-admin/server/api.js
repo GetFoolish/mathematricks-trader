@@ -96,15 +96,22 @@ app.get('/api/v1/activity/signals', async (req, res) => {
         receiveLagSeconds = (signalReceivedTimestamp.getTime() / 1000) - signalSentEpoch;
       }
 
-      // Execution timestamp
+      // Execution timestamp - check multiple sources
       const execution = doc.execution;
       let executionCompletedTimestamp = null;
       let executionLagSeconds = null;
+
+      // Priority 1: execution.filled_at (order actually filled at broker)
       if (execution && execution.filled_at) {
         executionCompletedTimestamp = new Date(execution.filled_at);
-        if (signalSentEpoch) {
-          executionLagSeconds = (executionCompletedTimestamp.getTime() / 1000) - signalSentEpoch;
-        }
+      }
+      // Priority 2: cerebro_decision.timestamp (cerebro processing completed)
+      else if (cerebroDecision && cerebroDecision.timestamp) {
+        executionCompletedTimestamp = new Date(cerebroDecision.timestamp);
+      }
+
+      if (executionCompletedTimestamp && signalSentEpoch) {
+        executionLagSeconds = (executionCompletedTimestamp.getTime() / 1000) - signalSentEpoch;
       }
 
       // Determine signal type
