@@ -200,66 +200,93 @@ def build_decision_v2(
             "margin_required": leg.get('initial_margin', 0)
         })
 
-    # Build decision.math breakdown
-    math_breakdown = {
-        "signal_type": signal.get('signal_type', 'ENTRY')
-    }
+    # Build decision.math as formatted string (7 sections matching log_detailed_calculation_math)
+    math_lines = []
+    raw_qty = signal.get('quantity', 0)
+    final_qty = decision_obj.quantity if decision_obj else 0
+
+    # --- 1. SIGNAL INPUT ---
+    math_lines.append("--- 1. SIGNAL INPUT ---")
+    math_lines.append(f"Instrument: {signal.get('instrument', 'N/A')} ({signal.get('instrument_type', 'UNKNOWN')})")
+    math_lines.append(f"Action: {signal.get('action', 'N/A')} {signal.get('direction', '')}")
+    math_lines.append(f"Raw Quantity: {raw_qty}")
+    math_lines.append(f"Price: ${signal.get('price', 0):,.2f}")
 
     if decision_obj and decision_obj.metadata:
         metadata = decision_obj.metadata
         position_sizing = metadata.get('position_sizing', {})
 
-        # Scaling ratio
-        if position_sizing.get('scaling_ratio'):
-            math_breakdown['scaling_ratio'] = position_sizing['scaling_ratio']
-
-        # Capital breakdown
-        math_breakdown['capital'] = {
-            'backtest_equity': position_sizing.get('signal_account_equity', 0),
-            'fund_allocated': position_sizing.get('allocated_capital', 0),
-            'fund_deployed': position_sizing.get('deployed_capital', 0),
-            'fund_available': position_sizing.get('allocated_capital_available', 0)
-        }
-
-        # Margin breakdown
-        math_breakdown['margin'] = {
-            'method': position_sizing.get('margin_method', 'Unknown'),
-            'per_contract': position_sizing.get('margin_required', 0) / max(decision_obj.quantity, 1) if decision_obj.quantity else 0,
-            'total_required': position_sizing.get('margin_required', 0),
-            'as_percent_of_available': (
-                (position_sizing.get('margin_required', 0) / position_sizing.get('allocated_capital_available', 1)) * 100
-                if position_sizing.get('allocated_capital_available', 0) > 0 else 0
-            )
-        }
-
-        # Quantity calculation
-        raw_qty = signal.get('quantity', 0)
-        final_qty = decision_obj.quantity if decision_obj else 0
-        scaling = position_sizing.get('scaling_ratio', 1)
-        math_breakdown['quantity_calc'] = {
-            'raw_quantity': raw_qty,
-            'scaled_raw': raw_qty * scaling if scaling else raw_qty,
-            'rounded': final_qty,
-            'precision': 0  # TODO: get from precision service
-        }
-
-        # Signal type info
+        # --- 2. SIGNAL TYPE ---
+        math_lines.append("\n--- 2. SIGNAL TYPE ---")
+        signal_type = signal.get('signal_type', 'ENTRY')
         if metadata.get('signal_type_info'):
-            math_breakdown['signal_type_info'] = metadata['signal_type_info']
+            st_info = metadata['signal_type_info']
+            math_lines.append(f"Type: {st_info.get('signal_type', signal_type)}")
+            math_lines.append(f"Detection: {st_info.get('method', 'N/A')}")
+            if st_info.get('reasoning'):
+                math_lines.append(f"Reasoning: {st_info.get('reasoning')}")
+        else:
+            math_lines.append(f"Type: {signal_type}")
 
-        # For EXIT signals, add entry reference
-        if metadata.get('entry_signal_id'):
-            math_breakdown['entry_ref'] = {
-                'signal_id': metadata.get('entry_signal_ref'),
-                'signal_store_id': metadata.get('entry_signal_id')
-            }
-            # Also add quantity calc for exits
-            if metadata.get('entry_quantity'):
-                math_breakdown['quantity_calc'] = {
-                    'raw_quantity': raw_qty,
-                    'open_position_quantity': metadata.get('entry_quantity', 0),
-                    'quantity_to_close': final_qty
-                }
+        # --- 3. FUND ALLOCATION ---
+        math_lines.append("\n--- 3. FUND ALLOCATION ---")
+        allocated = position_sizing.get('allocated_capital', 0)
+        deployed = position_sizing.get('deployed_capital', 0)
+        available = position_sizing.get('allocated_capital_available', 0)
+        position_count = position_sizing.get('position_count', 0)
+        math_lines.append(f"Allocated Capital: ${allocated:,.2f}")
+        math_lines.append(f"Deployed Capital: ${deployed:,.2f} ({position_count} positions)")
+        math_lines.append(f"Available Capital: ${available:,.2f}")
+
+        # --- 4. SCALING CALCULATION ---
+        scaling = position_sizing.get('scaling_ratio', 1)
+        signal_equity = position_sizing.get('signal_account_equity', 0)
+        math_lines.append("\n--- 4. SCALING CALCULATION ---")
+        if signal_equity > 0 and scaling and scaling != 1:
+            math_lines.append(f"Signal Account Equity: ${signal_equity:,.2f}")
+            math_lines.append(f"Available Capital: ${available:,.2f}")
+            math_lines.append(f"Scaling Ratio: {scaling:.5f}")
+            scaled_qty = raw_qty * scaling
+            math_lines.append(f"Quantity: {raw_qty} x {scaling:.5f} = {scaled_qty:.2f} -> {final_qty}")
+        elif metadata.get('entry_signal_id'):
+            # EXIT signal
+            math_lines.append(f"Entry Signal: {metadata.get('entry_signal_ref', 'N/A')}")
+            math_lines.append(f"Entry Quantity: {metadata.get('entry_quantity', 0)}")
+            math_lines.append(f"Quantity to Close: {final_qty}")
+        else:
+            math_lines.append("N/A - No scaling applied")
+
+        # --- 5. MARGIN VALIDATION ---
+        margin_required = position_sizing.get('margin_required', 0)
+        margin_method = position_sizing.get('margin_method', 'Unknown')
+        notional = position_sizing.get('notional_value', 0)
+        math_lines.append("\n--- 5. MARGIN VALIDATION ---")
+        math_lines.append(f"Method: {margin_method}")
+        if notional > 0:
+            math_lines.append(f"Notional: ${notional:,.2f}")
+        math_lines.append(f"Required: ${margin_required:,.2f}")
+        if available > 0:
+            check = "OK" if margin_required <= available else "EXCEEDS"
+            math_lines.append(f"Check: {check} (${margin_required:,.2f} vs ${available:,.2f})")
+
+        # --- 6. BROKER ACCOUNT STATE ---
+        account_state = metadata.get('account_state', {})
+        if account_state:
+            math_lines.append("\n--- 6. BROKER ACCOUNT STATE ---")
+            math_lines.append("Source: account-data-service (broker-reported)")
+            math_lines.append(f"Equity: ${account_state.get('equity', 0):,.2f}")
+            math_lines.append(f"Cash: ${account_state.get('cash_balance', 0):,.2f}")
+            math_lines.append(f"Margin Used: ${account_state.get('margin_used', 0):,.2f}")
+            math_lines.append(f"Margin Available: ${account_state.get('margin_available', 0):,.2f}")
+
+        # --- 7. FINAL DECISION ---
+        math_lines.append("\n--- 7. FINAL DECISION ---")
+        math_lines.append(f"Decision: {status}")
+        math_lines.append(f"Original Qty: {raw_qty}")
+        math_lines.append(f"Final Qty: {final_qty}")
+        math_lines.append(f"Reason: {reason}")
+
+    math_breakdown = "\n".join(math_lines) if math_lines else "No calculation data"
 
     # Build the v2 decision document
     return {
@@ -1127,141 +1154,138 @@ def log_detailed_calculation_math(signal: Dict[str, Any], context, decision_obj,
     Log detailed calculation math to signal_processing.log only (not console).
     This provides full transparency into position sizing calculations.
 
+    Sections:
+    1. SIGNAL INPUT - Raw signal data
+    2. SIGNAL TYPE - Entry/Exit detection
+    3. FUND ALLOCATION - Full calculation chain with formulas
+    4. SCALING CALCULATION - Ratio-based quantity scaling
+    5. MARGIN VALIDATION - Margin check results
+    6. BROKER ACCOUNT STATE - Reference data from broker
+    7. FINAL DECISION - Approved/Rejected with final quantity
+
     Args:
         signal: The incoming signal dictionary
-        context: PortfolioContext object
+        context: PortfolioContext object with fund_allocation data
         decision_obj: SignalDecision object with the final decision
-        account_state: Account state dictionary
+        account_state: Account state dictionary from broker
     """
     signal_id = signal.get('signal_id')
     strategy_id = signal.get('strategy_id')
 
-    # Build detailed log message
+    # Extract position_sizing and fund_allocation data
+    ps = decision_obj.metadata.get('position_sizing', {}) if decision_obj.metadata else {}
+    fund_alloc = getattr(context, 'fund_allocation', {}) or {}
+
     log_lines = []
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | ===== START CALCULATION BREAKDOWN =====")
 
-    # Full signal payload
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- FULL SIGNAL PAYLOAD ---")
-    signal_payload = {k: v for k, v in signal.items() if k not in ['_id']}  # Exclude MongoDB _id
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Raw Signal: {json.dumps(signal_payload, default=str)}")
-
-    # Input data summary
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- INPUT DATA SUMMARY ---")
+    # --- 1. SIGNAL INPUT ---
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- 1. SIGNAL INPUT ---")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal ID: {signal_id}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Strategy: {strategy_id}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Instrument: {signal.get('instrument')}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Direction: {signal.get('direction')}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Action: {signal.get('action')}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Quantity: {signal.get('quantity', 0)}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Price: ${signal.get('price', 0):,.2f}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Account Equity: ${signal.get('account_equity', 0):,.2f}")
+    instrument = signal.get('instrument')
+    instrument_type = signal.get('instrument_type', 'UNKNOWN')
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Instrument: {instrument} ({instrument_type})")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Action: {signal.get('action')} {signal.get('direction')}")
+    signal_qty = signal.get('quantity', 0)
+    signal_price = signal.get('price', 0)
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Raw Quantity: {signal_qty}")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Price: ${signal_price:,.2f}")
 
-    # Signal type detection
+    # Show signal's account_equity with SOURCE
+    raw_account_equity = signal.get('account_equity')
+    if raw_account_equity:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Account Equity: ${raw_account_equity:,.2f} (from signal payload)")
+    else:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Account Equity: MISSING (will be rejected if ENTRY)")
+
+    # --- 2. SIGNAL TYPE ---
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- 2. SIGNAL TYPE ---")
     if decision_obj.metadata and 'signal_type_info' in decision_obj.metadata:
         st_info = decision_obj.metadata['signal_type_info']
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- SIGNAL TYPE DETECTION ---")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Detected Type: {st_info['signal_type']}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Detection Method: {st_info['method']}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Reasoning: {st_info['reasoning']}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Type: {st_info.get('signal_type', 'UNKNOWN')}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Detection: {st_info.get('method', 'N/A')}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Reasoning: {st_info.get('reasoning', 'N/A')}")
 
-        # Show current position if exists
+        # Show current position if exists (for EXIT signals)
         if st_info.get('current_position'):
             pos = st_info['current_position']
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Current Position: {pos.get('quantity')} shares {pos.get('direction')} @ avg ${pos.get('avg_entry_price', 0):.2f}")
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Cost Basis: ${pos.get('total_cost_basis', 0):,.2f}")
+            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Current Position: {pos.get('quantity')} units {pos.get('direction')} @ avg ${pos.get('avg_entry_price', 0):.2f}")
+    else:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Type: N/A (no signal_type_info)")
 
-    # Account state
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- ACCOUNT STATE ---")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Account Equity: ${account_state.get('equity', 0):,.2f}")
+    # --- 3. FUND ALLOCATION --- (CLEAR MATH CHAIN)
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- 3. FUND ALLOCATION ---")
+    fund_id = fund_alloc.get('fund_id', 'N/A')
+    fund_equity = fund_alloc.get('fund_equity', 0)
+    strategy_pct = fund_alloc.get('strategy_pct', 0)
+    allocated_capital = ps.get('allocated_capital', fund_alloc.get('allocated_capital', 0))
+    deployed_capital = ps.get('deployed_capital', 0)
+    available_capital = ps.get('allocated_capital_available', allocated_capital - deployed_capital)
+    position_count = ps.get('position_count', 0)
+
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Fund: {fund_id}")
+    if fund_equity > 0:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Fund Total Equity: ${fund_equity:,.2f}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Strategy Allocation: {strategy_pct:.2f}%")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital: ${fund_equity:,.2f} × {strategy_pct/100:.4f} = ${allocated_capital:,.2f}")
+    else:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital: ${allocated_capital:,.2f}")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Deployed Capital: ${deployed_capital:,.2f} ({position_count} open positions)")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Available Capital: ${allocated_capital:,.2f} - ${deployed_capital:,.2f} = ${available_capital:,.2f}")
+
+    # Show open positions if any
+    if position_count > 0:
+        for idx, pos_summary in enumerate(ps.get('open_positions_summary', []), 1):
+            cost_basis = pos_summary.get('cost_basis') or 0
+            log_lines.append(
+                f"SIGNAL: {signal_id} | DETAILED_MATH |   Position {idx}: {pos_summary.get('quantity', 0)} units "
+                f"{pos_summary.get('instrument', 'N/A')} {pos_summary.get('direction', 'N/A')} (cost: ${cost_basis:,.2f})"
+            )
+
+    # --- 4. SCALING CALCULATION --- (CLEAR FORMULA)
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- 4. SCALING CALCULATION ---")
+    signal_account_equity = ps.get('signal_account_equity', 0)
+    scaling_ratio = ps.get('scaling_ratio', 0)
+
+    if signal_account_equity > 0:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Account Equity: ${signal_account_equity:,.2f}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Available Capital: ${available_capital:,.2f}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Scaling Ratio: ${available_capital:,.2f} ÷ ${signal_account_equity:,.2f} = {scaling_ratio:.5f}")
+        calculated_qty = signal_qty * scaling_ratio
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Scaled Quantity: {signal_qty} × {scaling_ratio:.5f} = {calculated_qty:.4f}")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Final Quantity: {decision_obj.quantity} (after precision rules)")
+    else:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | N/A - No signal_account_equity for scaling")
+
+    # --- 5. MARGIN VALIDATION ---
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- 5. MARGIN VALIDATION ---")
+    margin_required = ps.get('margin_required', decision_obj.margin_required or 0)
+    notional = ps.get('notional_value', 0)
+    margin_method = ps.get('margin_method', 'Broker query')
+
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Instrument: {instrument} ({instrument_type})")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Method: {margin_method}")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Notional Value: ${notional:,.2f}")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Required: ${margin_required:,.2f}")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Available Capital: ${available_capital:,.2f}")
+    if margin_required > available_capital:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Check: ${margin_required:,.2f} > ${available_capital:,.2f} ✗ EXCEEDS")
+    else:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Check: ${margin_required:,.2f} < ${available_capital:,.2f} ✓ OK")
+
+    # --- 6. BROKER ACCOUNT STATE (reference) ---
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- 6. BROKER ACCOUNT STATE (reference) ---")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Source: account-data-service (broker-reported values)")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Equity: ${account_state.get('equity', 0):,.2f}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Cash Balance: ${account_state.get('cash_balance', 0):,.2f}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Used: ${account_state.get('margin_used', 0):,.2f}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Available: ${account_state.get('margin_available', 0):,.2f}")
-    if account_state.get('equity', 0) > 0:
-        margin_pct = (account_state.get('margin_used', 0) / account_state.get('equity', 1)) * 100
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Used %: {margin_pct:.2f}%")
 
-    # Portfolio context
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- PORTFOLIO CONTEXT ---")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Portfolio Equity: ${context.account_equity:,.2f}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Number of Active Allocations: {len(context.current_allocations) if context.current_allocations else 0}")
-
-    # Strategy allocation
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- ALLOCATION CALCULATION ---")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Account Equity: ${context.account_equity:,.2f}")
-    if decision_obj.metadata and 'allocation_pct' in decision_obj.metadata:
-        allocation_pct = decision_obj.metadata.get('allocation_pct', 0)
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Strategy Allocation: {allocation_pct:.2f}%")
-
-        # Show calculation
-        if decision_obj.metadata and 'position_sizing' in decision_obj.metadata:
-            allocated = decision_obj.metadata['position_sizing'].get('allocated_capital', decision_obj.allocated_capital)
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital: ${context.account_equity:,.2f} × {allocation_pct/100:.4f} = ${allocated:,.2f}")
-        else:
-            allocated_cap = decision_obj.allocated_capital if decision_obj.allocated_capital is not None else 0
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital: ${context.account_equity:,.2f} × {allocation_pct/100:.4f} = ${allocated_cap:,.2f}")
-
-    # Position sizing details (if available)
-    if decision_obj.metadata and 'position_sizing' in decision_obj.metadata:
-        ps = decision_obj.metadata['position_sizing']
-
-        # Deployed capital section
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- DEPLOYED CAPITAL ---")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Open Positions: {ps.get('position_count', 0)}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Deployed Capital: ${ps.get('deployed_capital', 0):,.2f}")
-        allocated = ps.get('allocated_capital', 0)
-        deployed = ps.get('deployed_capital', 0)
-        available = ps.get('allocated_capital_available', allocated - deployed)
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital Available: ${allocated:,.2f} - ${deployed:,.2f} = ${available:,.2f}")
-
-        # Ratio-based quantity section
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- RATIO-BASED QUANTITY ---")
-        signal_qty = signal.get('quantity', 0)
-        signal_equity = ps.get('signal_account_equity', 0)
-        scaling_ratio = ps.get('scaling_ratio', 0)
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal: {signal_qty} units with ${signal_equity:,.2f} equity")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Scaling Ratio: ${available:,.2f} / ${signal_equity:,.2f} = {scaling_ratio:.5f}")
-        calculated_qty = signal_qty * scaling_ratio
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Calculated Quantity: {signal_qty} × {scaling_ratio:.5f} = {calculated_qty:.4f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Normalized Quantity: {decision_obj.quantity}")
-
-        # Show current open positions for this strategy
-        if ps.get('position_count', 0) > 0:
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- CURRENT OPEN POSITIONS ({ps['position_count']}) ---")
-            for idx, pos_summary in enumerate(ps.get('open_positions_summary', []), 1):
-                cost_basis = pos_summary.get('cost_basis') or 0
-                log_lines.append(
-                    f"SIGNAL: {signal_id} | DETAILED_MATH | Position {idx}: {pos_summary.get('quantity', 0)} units "
-                    f"{pos_summary.get('instrument', 'N/A')} {pos_summary.get('direction', 'N/A')} (cost: ${cost_basis:,.2f})"
-                )
-
-    # Margin validation section
-    if decision_obj.metadata and 'position_sizing' in decision_obj.metadata:
-        ps = decision_obj.metadata['position_sizing']
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- MARGIN VALIDATION ---")
-
-        margin_required = ps.get('margin_required', decision_obj.margin_required)
-        available = ps.get('allocated_capital_available', 0)
-        notional = ps.get('notional_value', 0)
-        margin_method = ps.get('margin_method', 'Broker query')
-
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Required: ${margin_required:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital Available: ${available:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Notional Value: ${notional:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Method: {margin_method}")
-
-        # Show margin check result
-        if margin_required > available:
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Check: ${margin_required:,.2f} > ${available:,.2f} = EXCEEDS")
-        else:
-            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Check: ${margin_required:,.2f} < ${available:,.2f} = OK")
-    elif decision_obj.margin_required:
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- MARGIN VALIDATION ---")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital: ${decision_obj.allocated_capital:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Margin Required: ${decision_obj.margin_required:,.2f}")
-
-    # Final decision
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- FINAL DECISION ---")
+    # --- 7. FINAL DECISION ---
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- 7. FINAL DECISION ---")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Decision: {decision_obj.action}")
-    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Original Quantity: {signal.get('quantity', 0)}")
+    log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Original Quantity: {signal_qty}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Final Quantity: {decision_obj.quantity}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Reason: {decision_obj.reason}")
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | ===== END CALCULATION BREAKDOWN =====")
@@ -1390,7 +1414,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         
         logger.info(f"\n{'='*70}")
         logger.info(f"🏦 Processing Fund: {fund_id} | Allocation: {allocation_name}")
-        logger.info(f"💰 Strategy allocation: {strategy_pct*100:.1f}%")
+        logger.info(f"💰 Strategy allocation: {strategy_pct:.1f}%")
         logger.info(f"{'='*70}")
         
         # Get fund equity from MongoDB (updated by account-data-service)
@@ -1468,6 +1492,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         context.account_equity = allocated_capital  # Use fund's allocation as the "account"
         context.fund_allocation = {
             'fund_id': fund_id,
+            'fund_equity': fund_equity,
             'strategy_pct': strategy_pct,
             'allocated_capital': allocated_capital,
             'available_capital': available_capital
@@ -1478,7 +1503,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         decision_obj = SignalDecision(
             action='APPROVED',
             quantity=0,  # Will be calculated by ratio logic below
-            reason=f'Fund allocation: {strategy_pct*100:.2f}% = ${allocated_capital:,.2f}',
+            reason=f'Fund allocation: {strategy_pct:.2f}% = ${allocated_capital:,.2f}',
             allocated_capital=allocated_capital,
             margin_required=0.0,
             metadata={'fund_allocation': True, 'fund_id': fund_id}
@@ -2096,6 +2121,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         'is_multi_leg': is_multi_leg,
                         'leg_count': len(legs),
                         'leg_results': leg_results,
+                        'account_state': account_state,  # For decision.math display
                         'position_sizing': {
                             'allocated_capital': allocated_capital,
                             'deployed_capital': deployed_capital,

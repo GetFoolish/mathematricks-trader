@@ -312,14 +312,33 @@ export const Activity: React.FC = () => {
                                 </div>
 
                                 {/* Cerebro decision details - support both v1 and v2 schema */}
-                                {hasDecision && (
-                                  <div>
-                                    <h4 className="text-sm font-semibold text-white mb-2">Cerebro Decision Details</h4>
-                                    <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-x-auto">
-                                      {JSON.stringify(signal.decision || signal.cerebro_decision, null, 2)}
-                                    </pre>
-                                  </div>
-                                )}
+                                {hasDecision && (() => {
+                                  const decision = signal.decision || signal.cerebro_decision;
+                                  const mathText = typeof decision?.math === 'string'
+                                    ? decision.math
+                                    : null;
+                                  const decisionWithoutMath = { ...decision };
+                                  if (mathText) delete decisionWithoutMath.math;
+
+                                  return (
+                                    <div className={`grid gap-4 ${mathText ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                                      <div>
+                                        <h4 className="text-sm font-semibold text-white mb-2">Cerebro Decision Details</h4>
+                                        <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-auto max-h-64">
+                                          {JSON.stringify(decisionWithoutMath, null, 2)}
+                                        </pre>
+                                      </div>
+                                      {mathText && (
+                                        <div>
+                                          <h4 className="text-sm font-semibold text-white mb-2">Calculation Breakdown</h4>
+                                          <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-auto max-h-64 whitespace-pre-wrap">
+                                            {mathText}
+                                          </pre>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </td>
                           </tr>
