@@ -374,42 +374,63 @@ export const Activity: React.FC = () => {
               <table className="w-full">
                 <thead>
                   <tr>
-                    <th className="table-header">Timestamp</th>
+                    <th className="table-header">Filled Timestamp</th>
+                    <th className="table-header">Signal ID</th>
                     <th className="table-header">Order ID</th>
-                    <th className="table-header">Strategy</th>
-                    <th className="table-header">Symbol</th>
-                    <th className="table-header">Quantity</th>
-                    <th className="table-header">Price</th>
                     <th className="table-header">Status</th>
+                    <th className="table-header">Symbol</th>
+                    <th className="table-header">Type</th>
+                    <th className="table-header">Broker</th>
+                    <th className="table-header">Fund</th>
+                    <th className="table-header">Filled Qty</th>
+                    <th className="table-header">Filled Price</th>
+                    <th className="table-header">Broker Order ID</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
-                  {orders.map((order: any) => (
-                    <tr key={order.order_id} className="hover:bg-gray-700/50">
+                  {orders.map((order: any, idx: number) => (
+                    <tr key={`${order.order_id}-${idx}`} className="hover:bg-gray-700/50">
                       <td className="table-cell text-sm">
                         <div className="flex items-center gap-2">
                           <Clock className="h-4 w-4 text-gray-400" />
-                          {new Date(order.timestamp).toLocaleString()}
+                          {order.filled_at ? new Date(order.filled_at).toLocaleString() : 'N/A'}
                         </div>
                       </td>
-                      <td className="table-cell font-mono text-xs">{order.order_id}</td>
                       <td className="table-cell">
-                        <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
-                          {order.strategy_id}
+                        <span className="px-2 py-1 bg-purple-900/30 text-purple-400 rounded text-xs font-medium font-mono">
+                          {order.signal_id}
                         </span>
                       </td>
-                      <td className="table-cell font-semibold">{order.instrument}</td>
-                      <td className="table-cell">{order.quantity?.toFixed(2) || 0}</td>
-                      <td className="table-cell">${order.price?.toFixed(2) || 0}</td>
+                      <td className="table-cell font-mono text-xs text-gray-400">{order.order_id}</td>
                       <td className="table-cell">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
                           order.status === 'FILLED' ? 'bg-green-900/30 text-green-400' :
-                          order.status === 'PENDING' ? 'bg-yellow-900/30 text-yellow-400' :
+                          order.status === 'PARTIAL' ? 'bg-yellow-900/30 text-yellow-400' :
+                          order.status === 'PENDING' ? 'bg-blue-900/30 text-blue-400' :
                           'bg-red-900/30 text-red-400'
                         }`}>
                           {order.status}
                         </span>
                       </td>
+                      <td className="table-cell font-semibold">{order.instrument}</td>
+                      <td className="table-cell">
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          order.signal_type === 'ENTRY' ? 'bg-green-900/30 text-green-400' :
+                          order.signal_type === 'EXIT' ? 'bg-red-900/30 text-red-400' :
+                          'bg-gray-900/30 text-gray-400'
+                        }`}>
+                          {order.signal_type}
+                        </span>
+                      </td>
+                      <td className="table-cell">
+                        <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
+                          {order.broker}
+                        </span>
+                      </td>
+                      <td className="table-cell text-xs text-gray-400">{order.fund_id}</td>
+                      <td className="table-cell">{order.quantity_filled?.toFixed(2) || 0}</td>
+                      <td className="table-cell">${order.avg_fill_price?.toFixed(2) || 0}</td>
+                      <td className="table-cell font-mono text-xs text-gray-500">{order.broker_order_id}</td>
                     </tr>
                   ))}
                 </tbody>

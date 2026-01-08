@@ -191,21 +191,80 @@ app.get('/api/v1/activity/signals', async (req, res) => {
 });
 
 // GET /api/v1/activity/orders
+// Fetches execution orders from signal_store.execution.orders[] (v2 schema)
 app.get('/api/v1/activity/orders', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     const environment = req.query.environment;
 
-    const query = {};
+    // Query for signals with execution.orders
+    const query = {
+      'execution.orders': { $exists: true, $ne: [] }
+    };
     if (environment) {
       query.environment = environment;
     }
 
-    const orders = await tradingOrdersCollection
-      .find(query, { projection: { _id: 0 } })
-      .sort({ timestamp: -1 })
+    const signals = await signalStoreCollection
+      .find(query, {
+        projection: {
+          signal_id: 1,
+          'execution.orders': 1,
+          created_at: 1,
+          environment: 1,
+          'raw.legs': 1
+        }
+      })
+      .sort({ created_at: -1 })
       .limit(limit)
       .toArray();
+
+    // Flatten execution.orders[] from all signals into a single array
+    const orders = [];
+    signals.forEach(signal => {
+      const instrument = signal.raw?.legs?.[0]?.instrument || 'N/A';
+      const signalType = signal.raw?.signal_type || 'UNKNOWN';
+
+      signal.execution.orders.forEach(order => {
+        // Generate shorter, more readable order ID
+        // Format: {signal_id}_{fund}_{broker_short}
+        const brokerShort = (order.account_id || 'UNK').replace(/[-_]MOCK/g, '').replace(/IBKR-/g, '');
+        const shortOrderId = `${signal.signal_id}_${order.fund_id}_${brokerShort}`;
+
+        // Determine status based on filled quantity
+        let status = 'FILLED';
+        if (order.quantity_filled === 0) {
+          status = 'PENDING';
+        } else if (order.quantity_filled < order.quantity_requested) {
+          status = 'PARTIAL';
+        }
+
+        orders.push({
+          signal_id: signal.signal_id,
+          order_id: shortOrderId,
+          full_order_id: order.order_id, // Keep full ID for reference
+          broker_order_id: order.broker_order_id,
+          broker: order.account_id || 'N/A', // Broker/account
+          fund_id: order.fund_id,
+          instrument: instrument,
+          signal_type: signalType,
+          quantity_requested: order.quantity_requested,
+          quantity_filled: order.quantity_filled,
+          avg_fill_price: order.avg_fill_price,
+          filled_at: order.filled_at,
+          status: status,
+          environment: signal.environment,
+          fills: order.fills
+        });
+      });
+    });
+
+    // Sort by filled_at descending
+    orders.sort((a, b) => {
+      const timeA = a.filled_at ? new Date(a.filled_at).getTime() : 0;
+      const timeB = b.filled_at ? new Date(b.filled_at).getTime() : 0;
+      return timeB - timeA;
+    });
 
     res.json({ status: 'success', count: orders.length, orders: serializeDocument(orders) });
   } catch (error) {
