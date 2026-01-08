@@ -1,28 +1,112 @@
 # V5 TESTING FRAMEWORK PLAN
 
-**Status:** ✅ COMPLETE (Testing Ready)
+**Status:** ✅ ARCHITECTURE FIXED - Signal Processing Working
 **Created:** 2026-01-04
-**Last Updated:** 2026-01-05 13:55 EST
-**Completed:** 2026-01-05
+**Last Updated:** 2026-01-06 22:37 EST
+**Major Refactor:** 2026-01-06 (Pub/Sub Removal, EPOCH Timestamps)
 
 ---
 
-## CURRENT STATUS
+## CURRENT STATUS - JANUARY 6, 2026
 
-✅ **Framework Complete** - All 98 signal files created, scripts enhanced, seed data management working
-⚠️ **Pending:** Install venv dependencies and add --delay parameter before first test run
+✅ **Framework Complete** - All 98 signal files created with EPOCH timestamps
+✅ **Architecture Fixed** - Removed Pub/Sub, MongoDB Change Streams only
+✅ **Fund System Working** - $5M fund equity, 9 strategies allocated
+✅ **Signal Processing Working** - Validates, calculates position sizes, finds accounts
+⚠️ **Pending:** Complete end-to-end test and verify order execution
 
-### Quick Start (After fixing dependencies)
+### Quick Test (Current State)
 ```bash
-# Install dependencies
-.venv/bin/pip install -r requirements.txt
+# Run single signal test (delay=999 to test one signal)
+.venv/bin/python -u tests/signals_testing/run_full_test.py --folder tests/signals_testing/sample_signals --delay 999
 
-# Run full test suite
-make test-signals
+# Check cerebro logs for order creation
+docker logs mathematricks-trader-cerebro-service-1 2>&1 | grep -A 10 "ORDER CREATED"
 
-# Or manual control
-make reseed-db && .venv/bin/python tests/signals_testing/run_full_test.py --folder tests/signals_testing/sample_signals --delay 2
+# Run full test suite (delay=6 seconds between signals)
+.venv/bin/python -u tests/signals_testing/run_full_test.py --folder tests/signals_testing/sample_signals --delay 6
 ```
+
+---
+
+## MAJOR ARCHITECTURAL CHANGES (2026-01-06)
+
+### ✅ COMPLETED: Pub/Sub Removal
+**Decision:** Remove Google Cloud Pub/Sub entirely, use MongoDB Change Streams only
+
+**Why:** Simplified architecture, single source of truth (MongoDB), easier debugging
+
+**Changes Made:**
+1. **cerebro_service/cerebro_main.py**
+   - Removed Pub/Sub imports and initialization
+   - Removed Pub/Sub publishing from order creation
+   - Now writes orders directly to `trading_orders` collection
+   - Reads fund equity from MongoDB (doesn't recalculate)
+
+2. **execution_service/execution_main.py**
+   - Removed Pub/Sub imports and publishing functions
+   - Added `watch_trading_orders()` for MongoDB Change Stream
+   - Listens to `trading_orders` collection for new orders
+
+3. **account_data_service/broker_poller.py**
+   - Added MongoDB persistence for fund.total_equity
+   - Calculates fund equity after each poll cycle
+   - Persists to `funds` collection (total_equity field)
+   - Special handling for Mock brokers (skips polling)
+
+### ✅ COMPLETED: EPOCH Timestamp Architecture
+**Decision:** Use EPOCH timestamps internally everywhere, human-readable only for display
+
+**Why:** Avoid timezone issues, simplify validation, consistent data format
+
+**Changes Made:**
+1. **Test Signals** - All 90 signals use `signal_sent_EPOCH` field (integer)
+2. **cerebro_main.py** - Updated `convert_signal_dict_to_object()` to read `signal_sent_EPOCH`
+3. **Conversion** - EPOCH converted to datetime only for Signal object (internal processing)
+4. **Display** - Human-readable timestamps used only in logs and frontend
+
+### ✅ COMPLETED: Fund Architecture Fixes
+**Issues Fixed:**
+1. Fund equity showing $0 in cerebro (now reads from MongoDB: $5,000,000)
+2. No ACTIVE allocations (created via init_fund_allocations_v2.py)
+3. Strategy-to-account mapping missing (created via assign_strategies_to_accounts.py)
+4. Repository query bug (was querying by `_id` instead of `account_id`)
+
+**Fund Hierarchy:**
+```
+funds (mock-fund-1)
+  └─ total_equity: $5,000,000 (updated by account-data-service)
+     └─ portfolio_allocations (ACTIVE)
+        ├─ Com1-Met: 11.11% → $555,500
+        ├─ Com2-Ag: 11.11% → $555,500
+        ├─ Com3-Mkt: 11.11% → $555,500
+        ├─ Com4-Misc: 11.11% → $555,500
+        ├─ FloridaForex: 11.11% → $555,500
+        ├─ SPX_0DE_Opt: 11.11% → $555,500
+        ├─ SPX_1-D_Opt: 11.11% → $555,500
+        ├─ SPY: 11.11% → $555,500
+        └─ TLT: 11.11% → $555,500
+
+trading_accounts (5 mock accounts, each $1M)
+  ├─ IBKR-MOCK → SPY, TLT, SPX_0DE_Opt, SPX_1-D_Opt
+  ├─ VANTAGE_MOCK → Com1-Met, Com2-Ag, Com3-Mkt, Com4-Misc, FloridaForex
+  ├─ OANDA_MOCK → Com1-Met, Com2-Ag, Com3-Mkt, Com4-Misc, FloridaForex
+  ├─ BYBIT_MOCK → (available for future strategies)
+  └─ BINANCE_MOCK → (available for future strategies)
+```
+
+### ✅ COMPLETED: Critical Bug Fixes
+1. **repository.py (Line 20)** - Changed query from `{"_id": account_id}` to `{"account_id": account_id}`
+   - Fixed 404 errors when cerebro queried `/api/v1/account/IBKR-MOCK/state`
+   
+2. **broker_poller.py** - Fixed database truth testing bug
+   - Changed from `if funds_collection:` to `if self.db is not None:`
+   
+3. **cerebro_main.py** - Fixed allocation field name
+   - Changed from `fund.get('strategies', {})` to `fund.get('allocations', {})`
+   
+4. **fund_allocation_logic.py** - Fixed function call signature
+   - Updated `get_strategy_allocation_for_fund()` call to match new signature
 
 ---
 

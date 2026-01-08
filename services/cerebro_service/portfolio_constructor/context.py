@@ -88,6 +88,9 @@ class PortfolioContext:
     # Mode flag
     is_backtest: bool = False
     current_date: Optional[datetime] = None
+
+    # Fund allocation context (for multi-fund architecture)
+    fund_allocation: Optional[Dict[str, Any]] = None
     
     def get_margin_utilization_pct(self) -> float:
         """Calculate current margin utilization percentage"""

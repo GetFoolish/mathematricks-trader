@@ -7,6 +7,7 @@ import threading
 import time
 import logging
 import math
+from datetime import datetime
 from typing import Dict, Callable, Optional, List
 import sys
 import os
@@ -208,7 +209,7 @@ class MongoPositionWatcher:
 class BrokerPoller:
     """Background service to poll broker accounts"""
 
-    def __init__(self, repository: TradingAccountRepository, interval: int = 300, mongodb_url: Optional[str] = None):
+    def __init__(self, repository: TradingAccountRepository, interval: int = 300, mongodb_url: Optional[str] = None, mongodb_client=None):
         """
         Initialize broker poller
 
@@ -216,10 +217,13 @@ class BrokerPoller:
             repository: TradingAccountRepository instance
             interval: Polling interval in seconds (default: 300 = 5 minutes)
             mongodb_url: MongoDB connection string for position watching (optional)
+            mongodb_client: MongoDB client instance for fund updates (optional)
         """
         self.repository = repository
         self.interval = interval
         self.mongodb_url = mongodb_url
+        self.mongodb_client = mongodb_client
+        self.db = mongodb_client['mathematricks_trading'] if mongodb_client else None
         self.running = False
         self.thread = None
         self.position_watcher = None
@@ -375,7 +379,7 @@ class BrokerPoller:
     def poll_all_accounts(self):
         """Poll all active accounts"""
         accounts = self.repository.list_accounts(status="ACTIVE")
-        logger.info(f"📊 Polling {len(accounts)} active accounts...")
+        logger.debug(f"📊 Polling {len(accounts)} active accounts...")
 
         for account in accounts:
             try:
@@ -690,7 +694,7 @@ class BrokerPoller:
                 'equity': equity
             })
         
-        # Log fund-level summaries
+        # Log fund-level summaries AND persist to MongoDB
         if funds_data:
             logger.info("=" * 70)
             logger.info("💰 FUND-LEVEL SUMMARY (After Account Polling)")
@@ -706,6 +710,25 @@ class BrokerPoller:
                 
                 for acc in data['accounts']:
                     logger.info(f"    • {acc['account_id']} ({acc['broker']}): ${acc['equity']:,.2f}")
+                
+                # Persist fund equity to MongoDB for cerebro to read
+                if fund_id != 'NO_FUND' and self.db is not None:
+                    try:
+                        self.db['funds'].update_one(
+                            {"fund_id": fund_id},
+                            {
+                                "$set": {
+                                    "total_equity": data['total_equity'],
+                                    "updated_at": datetime.utcnow()
+                                }
+                            },
+                            upsert=True
+                        )
+                        logger.debug(f"✓ Updated fund {fund_id} total_equity in MongoDB")
+                    except Exception as e:
+                        logger.error(f"Failed to update fund {fund_id} equity: {e}")
+                    except Exception as e:
+                        logger.error(f"Failed to update fund {fund_id} equity: {e}")
             
             logger.info("=" * 70)
 
@@ -721,24 +744,24 @@ class BrokerPoller:
             poll_type: Type of poll - "SCHEDULED" or "EVENT-DRIVEN"
         """
         # Always display full account state with clear separator
-        logger.info("-" * 50)
-        logger.info(f"📊 {poll_type} POLL - {account_id}")
-        logger.info("-" * 50)
-        logger.info(f"Equity: ${balances['equity']:,.2f} | Cash: ${balances['cash_balance']:,.2f}")
+        logger.debug("-" * 50)
+        logger.debug(f"📊 {poll_type} POLL - {account_id}")
+        logger.debug("-" * 50)
+        logger.debug(f"Equity: ${balances['equity']:,.2f} | Cash: ${balances['cash_balance']:,.2f}")
 
         # Always show positions (not just when changed)
         if len(positions) > 0:
-            logger.info(f"Positions:")
+            logger.debug(f"Positions:")
             for pos in positions:
                 pnl = pos.get('unrealized_pnl', 0)
                 pnl_str = f"+${pnl:,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
-                logger.info(
+                logger.debug(
                     f"  • {pos.get('instrument')}: "
                     f"{pos.get('quantity')} {pos.get('side', 'LONG')} @ "
                     f"${pos.get('avg_price', 0):.2f} | "
                     f"PnL: {pnl_str}"
                 )
         else:
-            logger.info("Positions: None")
+            logger.debug("Positions: None")
 
-        logger.info("-" * 50)
+        logger.debug("-" * 50)

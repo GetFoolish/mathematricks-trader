@@ -5,7 +5,7 @@
     "signal_sent_EPOCH": 1736000000,
     "signalID": "sig_edge_insufficient_margin_001",
     "entry_name": "$ENTRY_1",
-    "account_equity": 500000,
+    "account_equity": 3508000,
     "signal_legs": [
       {
         "instrument": "GC",

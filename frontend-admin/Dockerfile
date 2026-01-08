@@ -8,8 +8,9 @@ COPY package.json package-lock.json* ./
 # Install dependencies
 RUN npm install
 
-# Expose Vite port
+# Expose Vite port and API port
 EXPOSE 5173
+EXPOSE 8000
 
-# Start development server
-CMD ["npm", "run", "dev", "--", "--host"]
+# Start both Vite dev server and API server
+CMD ["npm", "run", "dev:all"]

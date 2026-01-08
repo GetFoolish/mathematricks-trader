@@ -5,7 +5,7 @@
     "signal_sent_EPOCH": 1736000800,
     "signalID": "sig_edge_account_failover_001",
     "entry_name": "$ENTRY_1",
-    "account_equity": 750000,
+    "account_equity": 40000,
     "signal_legs": [
       {
         "instrument": "GC",
@@ -35,7 +35,7 @@
     "signal_sent_EPOCH": 1736000860,
     "signalID": "sig_edge_account_failover_002",
     "entry_signal_id": "$ENTRY_1",
-    "account_equity": 750000,
+    "account_equity": 88000,
     "signal_legs": [
       {
         "instrument": "GC",

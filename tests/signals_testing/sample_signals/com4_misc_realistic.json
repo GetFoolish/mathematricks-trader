@@ -5,7 +5,7 @@
     "signal_sent_EPOCH": 1735983000,
     "signalID": "sig_com4_misc_001",
     "entry_name": "$ENTRY_1",
-    "account_equity": 500000,
+    "account_equity": 53000,
     "signal_legs": [
       {
         "instrument": "CC",
@@ -29,7 +29,7 @@
     "signal_sent_EPOCH": 1735983060,
     "signalID": "sig_com4_misc_002",
     "entry_name": "$ENTRY_2",
-    "account_equity": 500000,
+    "account_equity": 65000,
     "signal_legs": [
       {
         "instrument": "CC",
@@ -53,7 +53,7 @@
     "signal_sent_EPOCH": 1735983180,
     "signalID": "sig_com4_misc_003",
     "entry_signal_id": "$ENTRY_1",
-    "account_equity": 500000,
+    "account_equity": 32000,
     "signal_legs": [
       {
         "instrument": "CC",
@@ -75,7 +75,7 @@
     "signal_sent_EPOCH": 1735983240,
     "signalID": "sig_com4_misc_004",
     "entry_signal_id": "$ENTRY_2",
-    "account_equity": 500000,
+    "account_equity": 25000,
     "signal_legs": [
       {
         "instrument": "CC",
@@ -97,7 +97,7 @@
     "signal_sent_EPOCH": 1735983330,
     "signalID": "sig_com4_misc_005",
     "entry_name": "$ENTRY_3",
-    "account_equity": 500000,
+    "account_equity": 10000,
     "signal_legs": [
       {
         "instrument": "SB",
@@ -121,7 +121,7 @@
     "signal_sent_EPOCH": 1735983390,
     "signalID": "sig_com4_misc_006",
     "entry_name": "$ENTRY_4",
-    "account_equity": 500000,
+    "account_equity": 10000,
     "signal_legs": [
       {
         "instrument": "SB",
@@ -145,7 +145,7 @@
     "signal_sent_EPOCH": 1735983510,
     "signalID": "sig_com4_misc_007",
     "entry_signal_id": "$ENTRY_3",
-    "account_equity": 500000,
+    "account_equity": 10000,
     "signal_legs": [
       {
         "instrument": "SB",
@@ -167,7 +167,7 @@
     "signal_sent_EPOCH": 1735983570,
     "signalID": "sig_com4_misc_008",
     "entry_signal_id": "$ENTRY_4",
-    "account_equity": 500000,
+    "account_equity": 10000,
     "signal_legs": [
       {
         "instrument": "SB",
@@ -189,7 +189,7 @@
     "signal_sent_EPOCH": 1735983660,
     "signalID": "sig_com4_misc_009",
     "entry_name": "$ENTRY_5",
-    "account_equity": 500000,
+    "account_equity": 10000,
     "signal_legs": [
       {
         "instrument": "KC",
@@ -213,7 +213,7 @@
     "signal_sent_EPOCH": 1735983780,
     "signalID": "sig_com4_misc_010",
     "entry_signal_id": "$ENTRY_5",
-    "account_equity": 500000,
+    "account_equity": 10000,
     "signal_legs": [
       {
         "instrument": "KC",

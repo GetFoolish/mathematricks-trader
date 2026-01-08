@@ -243,92 +243,221 @@ def list_strategies():
     client.close()
 
 
-def process_folder(folder_path: str, seed: int = 1, delay_override: int = None):
+def shuffle_signals(entry_signals: list, exit_signals_by_entry: dict, seed: int) -> list:
+    """
+    Shuffle signals realistically: entries and exits are interleaved randomly,
+    but an exit never comes before its corresponding entry.
+
+    Algorithm:
+    1. Shuffle entries to get random entry order
+    2. For each entry, assign its exit a random position AFTER the entry
+    3. Build final list respecting these constraints
+
+    Args:
+        entry_signals: List of (signal, source_file) tuples for ENTRY signals
+        exit_signals_by_entry: Dict mapping (source_file, entry_name) -> list of (exit_signal, source_file)
+        seed: Random seed (0=random time-based, positive=reproducible, negative=no shuffle)
+
+    Returns:
+        List of (signal, source_file) tuples in the shuffled order
+    """
+    if seed < 0:
+        # No shuffle - just pair entries with exits sequentially
+        ordered = []
+        for entry_sig, entry_source in entry_signals:
+            ordered.append((entry_sig, entry_source))
+            entry_name = entry_sig.get("entry_name")
+            key = (entry_source, entry_name)
+            if entry_name and key in exit_signals_by_entry:
+                for exit_sig, exit_source in exit_signals_by_entry[key]:
+                    ordered.append((exit_sig, exit_source))
+        return ordered
+
+    # Initialize random with seed
+    rng = random.Random(seed if seed > 0 else None)
+
+    # Shuffle entries
+    shuffled_entries = list(entry_signals)
+    rng.shuffle(shuffled_entries)
+
+    # Collect all exits with their constraints
+    # Each exit must come after its entry's position
+    exits_with_constraints = []  # List of (exit_sig, exit_source, entry_index)
+
+    for entry_idx, (entry_sig, entry_source) in enumerate(shuffled_entries):
+        entry_name = entry_sig.get("entry_name")
+        key = (entry_source, entry_name)
+        if entry_name and key in exit_signals_by_entry:
+            for exit_sig, exit_source in exit_signals_by_entry[key]:
+                exits_with_constraints.append((exit_sig, exit_source, entry_idx))
+
+    # Shuffle exits
+    rng.shuffle(exits_with_constraints)
+
+    # Build final list by interleaving
+    # We'll insert signals one by one, respecting constraints
+    # Use a simple greedy approach: for each slot, pick randomly from available signals
+
+    total_signals = len(shuffled_entries) + len(exits_with_constraints)
+    result = []
+    entries_placed = set()  # Track which entry indices have been placed
+    remaining_entries = list(range(len(shuffled_entries)))
+    remaining_exits = list(exits_with_constraints)
+
+    rng.shuffle(remaining_entries)
+
+    for _ in range(total_signals):
+        # Determine what's available to place
+        available_entries = remaining_entries[:]
+        available_exits = [
+            (i, ex) for i, ex in enumerate(remaining_exits)
+            if ex[2] in entries_placed  # Exit's entry has been placed
+        ]
+
+        # Build choice pool
+        choices = []
+        if available_entries:
+            choices.append(('entry', available_entries[0]))
+        if available_exits:
+            choices.append(('exit', available_exits[0]))
+
+        if not choices:
+            break
+
+        # Random choice between entry and exit (if both available)
+        choice_type, choice_data = rng.choice(choices)
+
+        if choice_type == 'entry':
+            entry_idx = choice_data
+            entry_sig, entry_source = shuffled_entries[entry_idx]
+            result.append((entry_sig, entry_source))
+            entries_placed.add(entry_idx)
+            remaining_entries.remove(entry_idx)
+        else:
+            exit_list_idx, (exit_sig, exit_source, _) = choice_data
+            result.append((exit_sig, exit_source))
+            remaining_exits.pop(exit_list_idx)
+
+    return result
+
+
+def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
+                   signal_count: int = None, pause_and_play: bool = False):
     """
     Load and send all JSON signal files from a folder
-    
+
+    IMPORTANT: This function ensures ENTRY signals are always sent before their
+    corresponding EXIT signals, even when shuffling is enabled.
+
     Args:
         folder_path: Path to folder containing *.json signal files
         seed: Seed for shuffling (0=random, positive=reproducible, negative=no shuffle)
         delay_override: Override wait time between signals (seconds). None = use signal's wait value
+        signal_count: Limit total number of signals to send (None = all).
+        pause_and_play: If True, pause after each signal and wait for Enter key
     """
     import glob
-    
+
     # Log separator for new test run
     logger.info("\n" + "-" * 100)
     logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] NEW SIGNAL SEND STARTED")
     logger.info("-" * 100 + "\n")
-    
+
     # Validate folder exists
     if not os.path.isdir(folder_path):
         logger.info(f"❌ Folder not found: {folder_path}")
         sys.exit(1)
-    
+
     # Find all .json files in folder
     json_files = sorted(glob.glob(os.path.join(folder_path, "*.json")))
-    
+
     if not json_files:
         logger.info(f"❌ No .json files found in: {folder_path}")
         sys.exit(1)
-    
+
     logger.info("\n" + "=" * 80)
     logger.info(f"📁 Loading signals from folder: {folder_path}")
     logger.info(f"   Found {len(json_files)} signal files")
     logger.info("=" * 80)
-    
-    # Load all signals from all files
-    all_signals = []
-    signal_sources = {}  # Track which file each signal came from
-    
+
+    # Load all signals from all files, separating ENTRY and EXIT
+    # Use (source_file, entry_name) as key to avoid collisions across files
+    entry_signals = []  # List of (signal, source_file)
+    exit_signals_by_entry = {}  # Maps (source_file, entry_name) -> list of (exit_signal, source_file)
+
     for json_file in json_files:
         try:
             with open(json_file, 'r') as f:
                 file_signals = json.load(f)
-            
+
+            source_file = os.path.basename(json_file)
+
             # Handle both array and single signal formats
-            if isinstance(file_signals, list):
-                for sig in file_signals:
-                    all_signals.append(sig)
-                    signal_sources[len(all_signals) - 1] = os.path.basename(json_file)
-            else:
-                all_signals.append(file_signals)
-                signal_sources[len(all_signals) - 1] = os.path.basename(json_file)
-            
-            print(f"✓ Loaded {len(file_signals) if isinstance(file_signals, list) else 1} signal(s) from {os.path.basename(json_file)}")
-        
+            if not isinstance(file_signals, list):
+                file_signals = [file_signals]
+
+            for sig in file_signals:
+                signal_type = sig.get("signal_type", "ENTRY").upper()
+
+                if signal_type == "ENTRY":
+                    entry_signals.append((sig, source_file))
+                elif signal_type == "EXIT":
+                    # Group EXIT signals by (source_file, entry_signal_id) to avoid cross-file collisions
+                    entry_ref = sig.get("entry_signal_id", "$PREVIOUS")
+                    key = (source_file, entry_ref)
+                    if key not in exit_signals_by_entry:
+                        exit_signals_by_entry[key] = []
+                    exit_signals_by_entry[key].append((sig, source_file))
+
+            print(f"✓ Loaded {len(file_signals)} signal(s) from {source_file}")
+
         except json.JSONDecodeError as e:
             print(f"❌ Invalid JSON in {os.path.basename(json_file)}: {e}")
             sys.exit(1)
         except Exception as e:
             print(f"❌ Error reading {os.path.basename(json_file)}: {e}")
             sys.exit(1)
-    
-    print(f"\n📊 Total signals loaded: {len(all_signals)}")
-    
-    # Apply shuffling if seed provided
+
+    total_entries = len(entry_signals)
+    total_exits = sum(len(exits) for exits in exit_signals_by_entry.values())
+    print(f"\n📊 Total signals loaded: {total_entries + total_exits} ({total_entries} ENTRY, {total_exits} EXIT)")
+
+    # Shuffle signals with realistic interleaving
     if seed >= 0:
-        random.seed(seed)
-        random.shuffle(all_signals)
         shuffle_type = "reproducible" if seed > 0 else "randomized"
-        print(f"🔀 Shuffled signals ({shuffle_type}, seed={seed})")
+        print(f"🔀 Shuffling signals ({shuffle_type}, seed={seed})")
+        print(f"   Entries and exits interleaved randomly, exits always after their entry")
     else:
         print(f"📌 Signal order preserved (seed={seed})")
-    
+
+    ordered_signals = shuffle_signals(entry_signals, exit_signals_by_entry, seed)
+
+    if pause_and_play:
+        print(f"⏸️  Pause-and-play enabled: will pause after each signal")
+
     print("=" * 80 + "\n")
-    
-    # Send all signals
+
+    # Limit total number of signals if signal_count specified
+    if signal_count is not None and signal_count > 0:
+        if signal_count < len(ordered_signals):
+            ordered_signals = ordered_signals[:signal_count]
+            print(f"✂️  Limited to first {signal_count} total signals")
+        else:
+            print(f"📊 Signal count {signal_count} >= total signals {len(ordered_signals)}, using all")
+
+    # Send all signals in the correct order
     total_wait_time = 0
     entry_id_registry = {}
-    
-    for i, signal_payload in enumerate(all_signals, 1):
+    signals_sent = 0
+
+    for i, (signal_payload, source_file) in enumerate(ordered_signals, 1):
         # Validate signal
         _validate_signal_payload(signal_payload, allow_signal_type=True)
-        
+
         # Get signal type for display
         signal_type = signal_payload.get("signal_type", "UNKNOWN").upper()
-        source_file = signal_sources.get(i - 1, "unknown")
-        logger.info(f"{'🔵' if signal_type == 'ENTRY' else '🔴'} [{source_file}] Signal {i}/{len(all_signals)} ({signal_type})...")
-        
+        logger.info(f"{'🔵' if signal_type == 'ENTRY' else '🔴'} [{source_file}] Signal {i}/{len(ordered_signals)} ({signal_type})...")
+
         # For EXIT signals, resolve variable reference before sending
         resolved_entry_id = None
         if signal_type == "EXIT":
@@ -339,43 +468,54 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None):
                     logger.info(f"   ✓ Resolved {entry_ref} → {resolved_entry_id[:12]}...")
                 elif entry_ref != "$PREVIOUS":
                     logger.info(f"   ⚠️  WARNING: Variable {entry_ref} not found in registry")
-        
+
         # Send signal
         result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id)
-        
+        signals_sent += 1
+
         # Capture ENTRY signal_store ID and register named variable
         if signal_type == "ENTRY" and result and result.get("signal_store_id"):
             entry_store_id = result["signal_store_id"]
-            
+
             # Register named variable if provided (e.g., "$ENTRY_1")
             entry_name = signal_payload.get("entry_name")
             if entry_name:
                 entry_id_registry[entry_name] = entry_store_id
                 print(f"   ✓ Registered {entry_name} → {entry_store_id[:12]}...")
-            
+
             # Always keep $PREVIOUS for backward compatibility
             entry_id_registry["$PREVIOUS"] = entry_store_id
-        
-        # Wait if specified
-        wait_seconds = signal_payload.get("wait", 0)
-        
-        # Apply delay override if provided
-        if delay_override is not None:
-            wait_seconds = delay_override
-        
-        if wait_seconds > 0 and i < len(all_signals):  # Don't wait after last signal
-            print(f"   ⏳ Waiting {wait_seconds} seconds before next signal...")
-            time.sleep(wait_seconds)
-            total_wait_time += wait_seconds
-        
+
+        # Pause and play mode: wait for user input after each signal
+        if pause_and_play and i < len(ordered_signals):
+            try:
+                input(f"   ⏸️  Press ENTER to continue to next signal ({i}/{len(ordered_signals)})...")
+            except EOFError:
+                # Handle non-interactive mode gracefully
+                pass
+        else:
+            # Wait if specified
+            wait_seconds = signal_payload.get("wait", 0)
+
+            # Apply delay override if provided
+            if delay_override is not None:
+                wait_seconds = delay_override
+
+            if wait_seconds > 0 and i < len(ordered_signals):  # Don't wait after last signal
+                print(f"   ⏳ Waiting {wait_seconds} seconds before next signal...")
+                time.sleep(wait_seconds)
+                total_wait_time += wait_seconds
+
         print()  # Blank line between signals
-    
+
     print("\n" + "=" * 80)
-    print(f"✅ All {len(all_signals)} Signals Sent Successfully")
+    print(f"✅ All {signals_sent} Signals Sent Successfully")
     print("=" * 80)
     if total_wait_time > 0:
         print(f"⏱️  Total wait time: {total_wait_time} seconds")
     print("")
+
+    return signals_sent
 
 
 def main():

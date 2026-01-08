@@ -149,15 +149,15 @@ wait_for_mongodb() {
     return 1
 }
 
-# Wait for PubSub emulator to be ready
-wait_for_pubsub() {
-    print_info "Waiting for PubSub emulator (max 60 seconds)..."
+# Wait for Frontend API to be ready
+wait_for_frontend_api() {
+    print_info "Waiting for Frontend API (max 60 seconds)..."
     local max_attempts=30
     local attempt=1
 
     while [ $attempt -le $max_attempts ]; do
-        if curl -s http://localhost:8085/ &>/dev/null; then
-            print_success "PubSub emulator is ready"
+        if curl -s http://localhost:8000/health &>/dev/null; then
+            print_success "Frontend API is ready"
             return 0
         fi
 
@@ -169,8 +169,8 @@ wait_for_pubsub() {
         attempt=$((attempt + 1))
     done
 
-    print_error "PubSub emulator did not start in time"
-    echo "Check logs with: make logs"
+    print_error "Frontend API did not start in time"
+    echo "Check logs with: make logs-frontend"
     return 1
 }
 
@@ -256,8 +256,8 @@ print_summary() {
     echo "Access points:"
     echo "  Frontend Dashboard:  http://localhost:5173"
     echo "                      (username: admin, password: admin)"
+    echo "  Frontend API:       http://localhost:8000"
     echo "  MongoDB:            mongodb://localhost:27018"
-    echo "  PubSub Emulator:    http://localhost:8085"
     echo "  Portfolio Builder:  http://localhost:8003"
     echo "  Dashboard Creator:  http://localhost:8004"
     echo ""
@@ -299,7 +299,7 @@ main() {
 
     # Health checks
     wait_for_mongodb
-    wait_for_pubsub
+    wait_for_frontend_api
     wait_for_services
 
     echo ""

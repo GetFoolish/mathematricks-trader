@@ -1,64 +1,99 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../services/api';
 import { Activity as ActivityIcon, TrendingUp, TrendingDown, Clock, ChevronDown, ChevronRight } from 'lucide-react';
 
 export const Activity: React.FC = () => {
   const [selectedTab, setSelectedTab] = useState<'signals' | 'orders' | 'decisions'>('signals');
-  const [environment, setEnvironment] = useState<'production' | 'staging'>('staging');
+  const [showStaging, setShowStaging] = useState(true);
+  const [showProduction, setShowProduction] = useState(false);
   const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
+
+  // Determine environment filter for API calls
+  // If both or neither selected, fetch all (no filter)
+  // If only one selected, filter by that environment
+  const environmentFilter = useMemo(() => {
+    if (showStaging && showProduction) return undefined; // Both - fetch all
+    if (showStaging) return 'staging';
+    if (showProduction) return 'production';
+    return undefined; // Neither - fetch all (or could return empty)
+  }, [showStaging, showProduction]);
 
   // Fetch signals
   const { data: signalsData, isLoading: isLoadingSignals } = useQuery({
-    queryKey: ['signals', environment],
-    queryFn: () => apiClient.getRecentSignals(50, environment),
+    queryKey: ['signals', environmentFilter],
+    queryFn: () => apiClient.getRecentSignals(50, environmentFilter),
     refetchInterval: 5000, // Refresh every 5 seconds
   });
 
   // Fetch orders
   const { data: ordersData, isLoading: isLoadingOrders } = useQuery({
-    queryKey: ['orders', environment],
-    queryFn: () => apiClient.getRecentOrders(50, environment),
+    queryKey: ['orders', environmentFilter],
+    queryFn: () => apiClient.getRecentOrders(50, environmentFilter),
     refetchInterval: 5000,
   });
 
   // Fetch decisions
   const { data: decisionsData, isLoading: isLoadingDecisions } = useQuery({
-    queryKey: ['decisions', environment],
-    queryFn: () => apiClient.getCerebroDecisions(50, environment),
+    queryKey: ['decisions', environmentFilter],
+    queryFn: () => apiClient.getCerebroDecisions(50, environmentFilter),
     refetchInterval: 5000,
   });
 
-  const signals = signalsData?.signals || [];
-  const orders = ordersData?.orders || [];
-  const decisions = decisionsData?.decisions || [];
+  // Filter results client-side based on checkboxes
+  const filterByEnvironment = (items: any[]) => {
+    if (showStaging && showProduction) return items; // Show all
+    if (!showStaging && !showProduction) return items; // Show all if neither selected
+    return items.filter(item => {
+      const env = item.environment || 'production';
+      if (showStaging && env === 'staging') return true;
+      if (showProduction && env === 'production') return true;
+      return false;
+    });
+  };
+
+  const signals = filterByEnvironment(signalsData?.signals || []);
+  const orders = filterByEnvironment(ordersData?.orders || []);
+  const decisions = filterByEnvironment(decisionsData?.decisions || []);
+
+  // Helper to display current filter state
+  const getFilterLabel = () => {
+    if (showStaging && showProduction) return 'ALL';
+    if (showStaging) return 'STAGING';
+    if (showProduction) return 'PRODUCTION';
+    return 'ALL';
+  };
 
   return (
     <div className="space-y-6">
-      {/* Environment Toggle */}
+      {/* Environment Filter Checkboxes */}
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold text-white">Trading Activity</h2>
 
-        {/* Apple-style Toggle */}
-        <div className="flex items-center gap-3">
-          <span className={`text-sm font-medium ${environment === 'production' ? 'text-white' : 'text-gray-400'}`}>
-            Production
-          </span>
-          <button
-            onClick={() => setEnvironment(environment === 'production' ? 'staging' : 'production')}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900 ${
-              environment === 'staging' ? 'bg-blue-600' : 'bg-gray-600'
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                environment === 'staging' ? 'translate-x-6' : 'translate-x-1'
-              }`}
+        {/* Checkbox filters */}
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showStaging}
+              onChange={(e) => setShowStaging(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500 focus:ring-offset-gray-900"
             />
-          </button>
-          <span className={`text-sm font-medium ${environment === 'staging' ? 'text-white' : 'text-gray-400'}`}>
-            Staging
-          </span>
+            <span className={`text-sm font-medium ${showStaging ? 'text-blue-400' : 'text-gray-400'}`}>
+              Staging
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showProduction}
+              onChange={(e) => setShowProduction(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-green-600 focus:ring-green-500 focus:ring-offset-gray-900"
+            />
+            <span className={`text-sm font-medium ${showProduction ? 'text-green-400' : 'text-gray-400'}`}>
+              Production
+            </span>
+          </label>
         </div>
       </div>
 
@@ -100,7 +135,7 @@ export const Activity: React.FC = () => {
       {selectedTab === 'signals' && (
         <div className="card">
           <h3 className="text-lg font-semibold text-white mb-4">
-            Signals - {environment.toUpperCase()}
+            Signals - {getFilterLabel()}
           </h3>
 
           {isLoadingSignals ? (
@@ -110,7 +145,7 @@ export const Activity: React.FC = () => {
             </div>
           ) : signals.length === 0 ? (
             <div className="text-center py-12">
-              <p className="text-gray-400">No signals found for {environment}</p>
+              <p className="text-gray-400">No signals found for {getFilterLabel()}</p>
               <p className="text-sm text-gray-500 mt-2">Send test signals using live_signal_tester.py</p>
             </div>
           ) : (
@@ -284,7 +319,7 @@ export const Activity: React.FC = () => {
       {selectedTab === 'orders' && (
         <div className="card">
           <h3 className="text-lg font-semibold text-white mb-4">
-            Recent Orders & Executions - {environment.toUpperCase()}
+            Recent Orders & Executions - {getFilterLabel()}
           </h3>
 
           {isLoadingOrders ? (
@@ -294,7 +329,7 @@ export const Activity: React.FC = () => {
             </div>
           ) : orders.length === 0 ? (
             <div className="text-center py-12">
-              <p className="text-gray-400">No orders found for {environment}</p>
+              <p className="text-gray-400">No orders found for {getFilterLabel()}</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -351,7 +386,7 @@ export const Activity: React.FC = () => {
         <div className="space-y-4">
           <div className="card">
             <h3 className="text-lg font-semibold text-white mb-4">
-              Cerebro Decision Log - {environment.toUpperCase()}
+              Cerebro Decision Log - {getFilterLabel()}
             </h3>
             <p className="text-sm text-gray-400 mb-4">
               Detailed position sizing calculations and risk assessments
@@ -368,7 +403,7 @@ export const Activity: React.FC = () => {
           ) : decisions.length === 0 ? (
             <div className="card text-center py-12">
               <ActivityIcon className="h-16 w-16 text-gray-600 mx-auto mb-4" />
-              <p className="text-gray-400 text-lg">No Cerebro decisions yet for {environment}</p>
+              <p className="text-gray-400 text-lg">No Cerebro decisions yet for {getFilterLabel()}</p>
               <p className="text-gray-500 text-sm mt-2">Decisions will appear here when signals are processed</p>
             </div>
           ) : (

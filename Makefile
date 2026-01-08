@@ -1,5 +1,8 @@
 .PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard clean-old-logs export-seed-data reseed-db test-signals
 
+# Auto-detect timezone from system
+export TZ := $(shell readlink /etc/localtime 2>/dev/null | sed 's|^.*/zoneinfo/||' || echo "UTC")
+
 # Default target
 help:
 	@echo "Mathematricks Trader - Docker Management"
@@ -38,7 +41,7 @@ status:
 	docker-compose ps
 
 logs:
-	docker-compose logs -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator frontend pubsub-emulator
+	docker-compose logs -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator
 
 logs-cerebro:
 	docker-compose logs -f cerebro-service
