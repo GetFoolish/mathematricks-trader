@@ -35,7 +35,7 @@ stop:
 
 restart:
 	@echo "Restarting services (excluding mongodb-init)..."
-	docker-compose restart cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend pubsub-emulator
+	docker-compose restart cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend
 
 status:
 	docker-compose ps

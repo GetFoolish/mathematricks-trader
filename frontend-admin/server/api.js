@@ -142,7 +142,9 @@ app.get('/api/v1/activity/signals', async (req, res) => {
         execution_completed_timestamp: executionCompletedTimestamp ? executionCompletedTimestamp.toISOString() : null,
         receive_lag_seconds: receiveLagSeconds,
         execution_lag_seconds: executionLagSeconds,
-        signal_type: signalType
+        signal_type: signalType,
+        execution: serializeDocument(execution),
+        pnl: serializeDocument(doc.pnl)
       };
     });
 

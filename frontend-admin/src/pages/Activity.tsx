@@ -152,6 +152,7 @@ export const Activity: React.FC = () => {
                     <th className="table-header">Price</th>
                     <th className="table-header">Cerebro Decision</th>
                     <th className="table-header">Status</th>
+                    <th className="table-header">PnL</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
@@ -259,12 +260,28 @@ export const Activity: React.FC = () => {
                               {signal.processed_by_cerebro ? 'PROCESSED' : 'PENDING'}
                             </span>
                           </td>
+                          <td className="table-cell">
+                            {signal.signal_type === 'ENTRY' ? (
+                              <span className="text-gray-500">-</span>
+                            ) : signal.pnl ? (
+                              <span className={`font-semibold ${
+                                signal.pnl.net_pnl >= 0 ? 'text-green-400' : 'text-red-400'
+                              }`}>
+                                ${signal.pnl.net_pnl.toFixed(2)}
+                                <span className="text-xs ml-1">
+                                  ({signal.pnl.pnl_percent >= 0 ? '+' : ''}{signal.pnl.pnl_percent.toFixed(2)}%)
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">-</span>
+                            )}
+                          </td>
                         </tr>
 
                         {/* Expanded details row */}
                         {isExpanded && (
                           <tr>
-                            <td colSpan={12} className="bg-gray-800/50 p-4">
+                            <td colSpan={13} className="bg-gray-800/50 p-4">
                               <div className="max-w-full overflow-x-auto space-y-4">
                                 {/* Timing details */}
                                 <div>
