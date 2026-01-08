@@ -212,6 +212,14 @@ class ApiClient {
     return response.data;
   }
 
+  async getPositions(limit: number = 50, environment?: string, status?: 'OPEN' | 'CLOSED') {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    if (status) params.status = status;
+    const response = await this.frontendApiClient.get('/api/v1/activity/positions', { params });
+    return response.data;
+  }
+
   // ============================================================================
   // Fund Management APIs (v5)
   // ============================================================================

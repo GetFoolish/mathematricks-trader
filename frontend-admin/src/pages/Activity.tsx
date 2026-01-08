@@ -4,7 +4,7 @@ import { apiClient } from '../services/api';
 import { TrendingUp, TrendingDown, Clock, ChevronDown, ChevronRight } from 'lucide-react';
 
 export const Activity: React.FC = () => {
-  const [selectedTab, setSelectedTab] = useState<'signals' | 'orders'>('signals');
+  const [selectedTab, setSelectedTab] = useState<'signals' | 'orders' | 'positions'>('signals');
   const [showStaging, setShowStaging] = useState(true);
   const [showProduction, setShowProduction] = useState(false);
   const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
@@ -33,6 +33,13 @@ export const Activity: React.FC = () => {
     refetchInterval: 5000,
   });
 
+  // Fetch positions
+  const { data: positionsData, isLoading: isLoadingPositions } = useQuery({
+    queryKey: ['positions', environmentFilter],
+    queryFn: () => apiClient.getPositions(50, environmentFilter),
+    refetchInterval: 5000,
+  });
+
   // Filter results client-side based on checkboxes
   const filterByEnvironment = (items: any[]) => {
     if (showStaging && showProduction) return items; // Show all
@@ -52,6 +59,11 @@ export const Activity: React.FC = () => {
     return timeB - timeA; // Descending (latest first)
   });
   const orders = filterByEnvironment(ordersData?.orders || []);
+
+  // Separate open and closed positions
+  const allPositions = filterByEnvironment(positionsData?.positions || []);
+  const openPositions = allPositions.filter((p: any) => p.status === 'OPEN');
+  const closedPositions = allPositions.filter((p: any) => p.status === 'CLOSED');
 
   // Helper to display current filter state
   const getFilterLabel = () => {
@@ -115,6 +127,16 @@ export const Activity: React.FC = () => {
           }`}
         >
           Orders & Executions ({orders.length})
+        </button>
+        <button
+          onClick={() => setSelectedTab('positions')}
+          className={`px-6 py-3 font-medium transition-colors ${
+            selectedTab === 'positions'
+              ? 'border-b-2 border-blue-500 text-blue-500'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          Positions ({allPositions.length})
         </button>
       </div>
 
@@ -437,6 +459,181 @@ export const Activity: React.FC = () => {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Positions Tab */}
+      {selectedTab === 'positions' && (
+        <div className="space-y-6">
+          {/* Open Positions Section */}
+          <div className="card">
+            <h3 className="text-lg font-semibold text-white mb-4">
+              Open Positions - {getFilterLabel()} ({openPositions.length})
+            </h3>
+
+            {isLoadingPositions ? (
+              <div className="text-center py-12">
+                <div className="inline-block animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-3"></div>
+                <p className="text-gray-400">Loading positions...</p>
+              </div>
+            ) : openPositions.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-gray-400">No open positions for {getFilterLabel()}</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <th className="table-header">Opened At</th>
+                      <th className="table-header">Entry Signal</th>
+                      <th className="table-header">Strategy</th>
+                      <th className="table-header">Fund</th>
+                      <th className="table-header">Symbol</th>
+                      <th className="table-header">Quantity</th>
+                      <th className="table-header">Entry Price</th>
+                      <th className="table-header">Cost Basis</th>
+                      <th className="table-header">Current Value</th>
+                      <th className="table-header">Unrealized PnL</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-700">
+                    {openPositions.map((position: any, idx: number) => (
+                      <tr key={`${position.entry_signal_id}-${idx}`} className="hover:bg-gray-700/50">
+                        <td className="table-cell text-sm">
+                          <div className="flex items-center gap-2">
+                            <Clock className="h-4 w-4 text-gray-400" />
+                            {position.opened_at ? new Date(position.opened_at).toLocaleString() : 'N/A'}
+                          </div>
+                        </td>
+                        <td className="table-cell">
+                          <span className="px-2 py-1 bg-green-900/30 text-green-400 rounded text-xs font-medium font-mono">
+                            {position.entry_signal_id}
+                          </span>
+                        </td>
+                        <td className="table-cell">
+                          <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
+                            {position.strategy_id}
+                          </span>
+                        </td>
+                        <td className="table-cell text-xs text-gray-400">{position.fund_id}</td>
+                        <td className="table-cell font-semibold">{position.instrument}</td>
+                        <td className="table-cell">{position.quantity?.toFixed(2) || 0}</td>
+                        <td className="table-cell">${position.entry_price?.toFixed(2) || 0}</td>
+                        <td className="table-cell">${position.cost_basis?.toFixed(2) || 0}</td>
+                        <td className="table-cell">${position.current_value?.toFixed(2) || 0}</td>
+                        <td className="table-cell">
+                          <span className="text-gray-500 text-xs">Pending</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Closed Positions Section */}
+          <div className="card">
+            <h3 className="text-lg font-semibold text-white mb-4">
+              Closed Positions - {getFilterLabel()} ({closedPositions.length})
+            </h3>
+
+            {isLoadingPositions ? (
+              <div className="text-center py-12">
+                <div className="inline-block animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-3"></div>
+                <p className="text-gray-400">Loading positions...</p>
+              </div>
+            ) : closedPositions.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-gray-400">No closed positions for {getFilterLabel()}</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr>
+                      <th className="table-header">Closed At</th>
+                      <th className="table-header">Entry Signal</th>
+                      <th className="table-header">Exit Signal(s)</th>
+                      <th className="table-header">Strategy</th>
+                      <th className="table-header">Fund</th>
+                      <th className="table-header">Symbol</th>
+                      <th className="table-header">Quantity</th>
+                      <th className="table-header">Entry Price</th>
+                      <th className="table-header">Exit Price</th>
+                      <th className="table-header">Cost Basis</th>
+                      <th className="table-header">Proceeds</th>
+                      <th className="table-header">Net PnL</th>
+                      <th className="table-header">PnL %</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-700">
+                    {closedPositions.map((position: any, idx: number) => {
+                      const pnl = position.pnl || {};
+                      const netPnl = pnl.net || 0;
+                      const pnlPercent = pnl.percent || 0;
+                      const isProfitable = netPnl > 0;
+
+                      return (
+                        <tr key={`${position.entry_signal_id}-${idx}`} className="hover:bg-gray-700/50">
+                          <td className="table-cell text-sm">
+                            <div className="flex items-center gap-2">
+                              <Clock className="h-4 w-4 text-gray-400" />
+                              {position.closed_at ? new Date(position.closed_at).toLocaleString() : 'N/A'}
+                            </div>
+                          </td>
+                          <td className="table-cell">
+                            <span className="px-2 py-1 bg-green-900/30 text-green-400 rounded text-xs font-medium font-mono">
+                              {position.entry_signal_id}
+                            </span>
+                          </td>
+                          <td className="table-cell">
+                            <div className="flex flex-col gap-1">
+                              {position.exit_signal_ids?.map((exitId: string, i: number) => (
+                                <span key={i} className="px-2 py-1 bg-red-900/30 text-red-400 rounded text-xs font-medium font-mono">
+                                  {exitId}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="table-cell">
+                            <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
+                              {position.strategy_id}
+                            </span>
+                          </td>
+                          <td className="table-cell text-xs text-gray-400">{position.fund_id}</td>
+                          <td className="table-cell font-semibold">{position.instrument}</td>
+                          <td className="table-cell">{position.quantity?.toFixed(2) || 0}</td>
+                          <td className="table-cell">${position.entry_price?.toFixed(2) || 0}</td>
+                          <td className="table-cell">${position.exit_price?.toFixed(2) || 0}</td>
+                          <td className="table-cell">${position.cost_basis?.toFixed(2) || 0}</td>
+                          <td className="table-cell">${position.proceeds?.toFixed(2) || 0}</td>
+                          <td className="table-cell">
+                            <div className="flex items-center gap-1">
+                              {isProfitable ? (
+                                <TrendingUp className="h-4 w-4 text-green-400" />
+                              ) : (
+                                <TrendingDown className="h-4 w-4 text-red-400" />
+                              )}
+                              <span className={isProfitable ? 'text-green-400' : 'text-red-400'}>
+                                ${netPnl.toFixed(2)}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="table-cell">
+                            <span className={isProfitable ? 'text-green-400' : 'text-red-400'}>
+                              {pnlPercent.toFixed(2)}%
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

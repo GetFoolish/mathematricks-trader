@@ -273,6 +273,109 @@ app.get('/api/v1/activity/orders', async (req, res) => {
   }
 });
 
+// GET /api/v1/activity/positions
+// Fetches positions (both open and closed) from signal_store
+app.get('/api/v1/activity/positions', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const environment = req.query.environment;
+    const status = req.query.status; // 'OPEN' or 'CLOSED'
+
+    // Query for ENTRY signals with position data
+    const query = {
+      'position.status': { $exists: true }
+    };
+    if (environment) {
+      query.environment = environment;
+    }
+    if (status) {
+      query['position.status'] = status;
+    }
+
+    const entrySignals = await signalStoreCollection
+      .find(query, {
+        projection: {
+          signal_id: 1,
+          strategy_id: 1,
+          'position': 1,
+          'execution': 1,
+          'raw.legs': 1,
+          'raw.signal_type': 1,
+          created_at: 1,
+          environment: 1
+        }
+      })
+      .sort({ 'position.opened_at': -1 })
+      .limit(limit)
+      .toArray();
+
+    // Build positions with entry and exit signal details
+    const positions = [];
+    for (const entrySignal of entrySignals) {
+      const instrument = entrySignal.raw?.legs?.[0]?.instrument || 'N/A';
+      const strategyId = entrySignal.strategy_id || 'N/A';
+      const entryPrice = entrySignal.execution?.weighted_avg_price || 0;
+      const totalQty = entrySignal.execution?.total_quantity_filled || 0;
+      const costBasis = entrySignal.execution?.total_cost_basis || 0;
+
+      // Collect unique fund_ids from execution.orders
+      const fundIds = [...new Set((entrySignal.execution?.orders || []).map(o => o.fund_id))].filter(Boolean);
+      const fundId = fundIds.join(', ') || 'N/A';
+
+      let exitSignals = [];
+      let exitPrice = null;
+      let proceeds = null;
+
+      // Fetch exit signals if position is closed
+      if (entrySignal.position.status === 'CLOSED' && entrySignal.position.exit_signals?.length > 0) {
+        // Get unique exit signal IDs
+        const uniqueExitIds = [...new Set(entrySignal.position.exit_signals.map(id => id.toString()))];
+
+        exitSignals = await signalStoreCollection
+          .find(
+            { _id: { $in: uniqueExitIds.map(id => new ObjectId(id)) } },
+            { projection: { signal_id: 1, 'execution.weighted_avg_price': 1, 'execution.total_proceeds': 1 } }
+          )
+          .toArray();
+
+        // Use first exit signal for price (they should all be the same for multi-fund)
+        if (exitSignals.length > 0) {
+          exitPrice = exitSignals[0].execution?.weighted_avg_price || 0;
+          proceeds = exitSignals[0].execution?.total_proceeds || 0;
+        }
+      }
+
+      positions.push({
+        entry_signal_id: entrySignal.signal_id,
+        exit_signal_ids: exitSignals.map(s => s.signal_id),
+        strategy_id: strategyId,
+        fund_id: fundId,
+        instrument: instrument,
+        status: entrySignal.position.status,
+        quantity: totalQty,
+        entry_price: entryPrice,
+        exit_price: exitPrice,
+        cost_basis: costBasis,
+        proceeds: proceeds,
+        current_value: entrySignal.position.status === 'OPEN' ? costBasis : proceeds, // TODO: calculate unrealized for open
+        pnl: entrySignal.position.pnl || null,
+        opened_at: entrySignal.position.opened_at,
+        closed_at: entrySignal.position.closed_at || null,
+        environment: entrySignal.environment
+      });
+    }
+
+    res.json({
+      status: 'success',
+      count: positions.length,
+      positions: serializeDocument(positions)
+    });
+  } catch (error) {
+    console.error('[API] Error fetching positions:', error);
+    res.status(500).json({ detail: error.message });
+  }
+});
+
 // GET /api/v1/activity/decisions
 // Supports both v1 (cerebro_decision) and v2 (decision) schema
 app.get('/api/v1/activity/decisions', async (req, res) => {
