@@ -566,10 +566,19 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
                 "holding_seconds": holding_seconds
             }
 
-            # Update EXIT signal (no position lifecycle, just execution)
+            # Update EXIT signal with execution AND PnL
+            # Store PnL both at root level (v1 compatibility) and in position.pnl (v2 structure)
+            exit_update = {
+                **execution_update,
+                "pnl": pnl_data,  # Root level for v1 compatibility
+                "position": {
+                    "pnl": pnl_data,
+                    "entry_signal_id": entry_signal_id
+                }
+            }
             signal_store_collection.update_one(
                 {"_id": ObjectId(mathematricks_signal_id)},
-                {"$set": execution_update}
+                {"$set": exit_update}
             )
 
             # Update ENTRY signal: set position to CLOSED with PnL
