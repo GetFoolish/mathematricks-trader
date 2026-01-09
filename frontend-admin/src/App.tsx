@@ -4,7 +4,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
-import { Dashboard } from './pages/Dashboard';
+import { Dashboards } from './pages/Dashboards';
 import { Allocations } from './pages/Allocations';
 import { Activity } from './pages/Activity';
 import { Strategies } from './pages/Strategies';
@@ -40,7 +40,7 @@ function App() {
               }
             >
               <Route index element={<Navigate to="/dashboard" replace />} />
-              <Route path="dashboard" element={<Dashboard />} />
+              <Route path="dashboard" element={<Dashboards />} />
               <Route path="allocations" element={<Allocations />} />
               <Route path="activity" element={<Activity />} />
               <Route path="strategies" element={<Strategies />} />

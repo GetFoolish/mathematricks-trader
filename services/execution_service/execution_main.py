@@ -405,6 +405,161 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
 # No need for separate publishing functions - all data in signal_store and trading_orders
 
 
+def is_mock_broker(account_id: str) -> bool:
+    """
+    Check if account is a mock broker account.
+
+    Mock brokers need manual balance updates when trades close with P&L.
+    Real brokers handle this automatically and we fetch updated balances.
+    """
+    return 'MOCK' in account_id.upper() or account_id.startswith('Mock_')
+
+
+def update_mock_broker_balance(
+    account_id: str,
+    realized_pnl: float,
+    quantity_closed: float,
+    exit_price: float
+):
+    """
+    Update mock broker account balance after trade close.
+
+    For mock brokers:
+    - Add realized P&L to cash_balance
+    - Reduce margin_used (position closed, capital freed)
+    - Update equity
+
+    Real brokers handle this automatically via their APIs.
+
+    Args:
+        account_id: Mock broker account ID
+        realized_pnl: Net P&L from the trade (after commission)
+        quantity_closed: Quantity that was closed
+        exit_price: Exit price per unit
+    """
+    try:
+        account = trading_accounts_collection.find_one({"account_id": account_id})
+        if not account:
+            logger.warning(f"⚠️ Account {account_id} not found for balance update")
+            return
+
+        # Current balances (nested under 'balances' object)
+        balances = account.get('balances', {})
+        current_cash = balances.get('cash_balance', account.get('cash_balance', 0.0))
+        current_margin = balances.get('margin_used', account.get('margin_used', 0.0))
+        current_equity = balances.get('equity', account.get('equity', 0.0))
+
+        # Calculate updates
+        # Add realized P&L to cash
+        new_cash = current_cash + realized_pnl
+
+        # Reduce margin (freed up capital from closed position)
+        # Estimate margin as 10% of notional for futures/options
+        freed_margin = (quantity_closed * exit_price) * 0.10
+        new_margin = max(0.0, current_margin - freed_margin)
+
+        # Update equity (cash + unrealized P&L + margin)
+        new_equity = current_equity + realized_pnl
+
+        # Update account document (balances are nested under 'balances')
+        update_result = trading_accounts_collection.update_one(
+            {"account_id": account_id},
+            {
+                "$set": {
+                    "balances.cash_balance": new_cash,
+                    "balances.cash": new_cash,
+                    "balances.margin_used": new_margin,
+                    "balances.equity": new_equity,
+                    "balances.last_updated": datetime.utcnow()
+                }
+            }
+        )
+
+        if update_result.modified_count > 0:
+            logger.info(
+                f"✅ Updated mock broker {account_id} balance: "
+                f"Cash: ${current_cash:.2f} → ${new_cash:.2f} "
+                f"(+${realized_pnl:.2f} P&L), "
+                f"Equity: ${current_equity:.2f} → ${new_equity:.2f}"
+            )
+
+            # IMMEDIATELY update fund total_equity (Single Source of Truth)
+            fund_id = account.get('fund_id')
+            if fund_id:
+                update_fund_total_equity(fund_id)
+        else:
+            logger.warning(f"⚠️ No account balance updated for {account_id}")
+
+    except Exception as e:
+        logger.error(f"❌ Failed to update mock broker balance for {account_id}: {e}", exc_info=True)
+
+
+def update_fund_total_equity(fund_id: str) -> float:
+    """
+    Update funds.total_equity by summing all account equities for this fund.
+
+    THIS IS THE SINGLE SOURCE OF TRUTH for fund equity calculation.
+    Called immediately after any account balance change in Execution Service.
+
+    All other services (broker_poller, cerebro, dashboard) are READ-ONLY consumers.
+
+    Args:
+        fund_id: Fund ID to update
+
+    Returns:
+        Total equity across all accounts in the fund
+    """
+    try:
+        if not fund_id:
+            logger.warning("⚠️ No fund_id provided for equity update")
+            return 0.0
+
+        # Get all accounts for this fund
+        accounts = list(trading_accounts_collection.find(
+            {"fund_id": fund_id},
+            {"balances.equity": 1, "account_id": 1}
+        ))
+
+        if not accounts:
+            logger.warning(f"⚠️ No accounts found for fund {fund_id}")
+            return 0.0
+
+        # Sum equity across all accounts (from nested balances.equity)
+        total_equity = sum(
+            acc.get('balances', {}).get('equity', 0.0)
+            for acc in accounts
+        )
+
+        # Get funds collection
+        funds_collection = mongo_client['mathematricks_trading']['funds']
+
+        # Update fund document with new total_equity
+        update_result = funds_collection.update_one(
+            {"fund_id": fund_id},
+            {
+                "$set": {
+                    "total_equity": total_equity,
+                    "updated_at": datetime.utcnow()
+                }
+            },
+            upsert=True  # Create if doesn't exist
+        )
+
+        if update_result.modified_count > 0 or update_result.upserted_id:
+            logger.info(
+                f"💰 Updated fund {fund_id} total_equity: ${total_equity:,.2f} "
+                f"(from {len(accounts)} accounts)"
+            )
+        else:
+            logger.debug(f"Fund {fund_id} total_equity unchanged: ${total_equity:,.2f}")
+
+        return total_equity
+
+    except Exception as e:
+        logger.error(f"❌ Failed to update fund total_equity for {fund_id}: {e}", exc_info=True)
+        return 0.0
+
+
 def update_signal_store_with_execution(order_data: Dict[str, Any], execution_data: Dict[str, Any]):
     """
     Update signal_store with execution results and calculate PnL for EXIT signals.
@@ -599,6 +754,11 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
             logger.debug(f"Entry signal: {entry_signal['signal_id']} → position CLOSED")
             logger.debug(f"Exit signal: {order_data.get('signal_id')}")
             logger.debug(f"Gross P&L: ${gross_pnl:.2f} | Net P&L: ${net_pnl:.2f} ({pnl_percent:.2f}%)")
+
+            # Update mock broker account balances with realized P&L
+            account_id = order_data.get('account_id')
+            if account_id and is_mock_broker(account_id):
+                update_mock_broker_balance(account_id, net_pnl, quantity, exit_price)
 
     except Exception as e:
         logger.error(f"❌ Error updating signal_store with execution: {e}", exc_info=True)

@@ -414,6 +414,244 @@ app.get('/api/v1/activity/decisions', async (req, res) => {
   }
 });
 
+// ============================================================================
+// Dashboard Management Endpoints (v5)
+// ============================================================================
+
+// GET /api/v1/dashboards - List all dashboards
+app.get('/api/v1/dashboards', async (req, res) => {
+  try {
+    const fundId = req.query.fund_id;
+    const createdBy = req.query.created_by;
+
+    const query = {};
+    if (fundId) query.fund_id = fundId;
+    if (createdBy) query.created_by = createdBy;
+
+    const dashboards = await db.collection('dashboards')
+      .find(query)
+      .sort({ created_at: -1 })
+      .toArray();
+
+    res.json({ status: 'success', dashboards: dashboards.map(serializeDocument) });
+  } catch (error) {
+    console.error('[API] Error fetching dashboards:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/v1/dashboards/:dashboard_id - Get specific dashboard
+app.get('/api/v1/dashboards/:dashboard_id', async (req, res) => {
+  try {
+    const { dashboard_id } = req.params;
+
+    const dashboard = await db.collection('dashboards').findOne({ dashboard_id });
+
+    if (!dashboard) {
+      return res.status(404).json({ error: 'Dashboard not found' });
+    }
+
+    res.json(serializeDocument(dashboard));
+  } catch (error) {
+    console.error('[API] Error fetching dashboard:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/v1/dashboards - Create new dashboard
+app.post('/api/v1/dashboards', async (req, res) => {
+  try {
+    const { name, description, created_by, fund_id, widgets, grid_config } = req.body;
+
+    const dashboard = {
+      dashboard_id: `dashboard-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name,
+      description: description || '',
+      created_by: created_by || 'anonymous',
+      fund_id: fund_id || null,
+      is_locked: false,
+      widgets: widgets || [],
+      grid_config: grid_config || { cols: 12, row_height: 100 },
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+
+    await db.collection('dashboards').insertOne(dashboard);
+
+    res.json({ status: 'success', dashboard_id: dashboard.dashboard_id });
+  } catch (error) {
+    console.error('[API] Error creating dashboard:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/v1/dashboards/:dashboard_id - Update dashboard
+app.put('/api/v1/dashboards/:dashboard_id', async (req, res) => {
+  try {
+    const { dashboard_id } = req.params;
+    const updates = req.body;
+
+    // Don't allow updating dashboard_id or created_at
+    delete updates.dashboard_id;
+    delete updates.created_at;
+
+    // Set updated_at
+    updates.updated_at = new Date();
+
+    const result = await db.collection('dashboards').updateOne(
+      { dashboard_id },
+      { $set: updates }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: 'Dashboard not found' });
+    }
+
+    res.json({ status: 'success', modified: result.modifiedCount });
+  } catch (error) {
+    console.error('[API] Error updating dashboard:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/v1/dashboards/:dashboard_id - Delete dashboard
+app.delete('/api/v1/dashboards/:dashboard_id', async (req, res) => {
+  try {
+    const { dashboard_id } = req.params;
+
+    const result = await db.collection('dashboards').deleteOne({ dashboard_id });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Dashboard not found' });
+    }
+
+    res.json({ status: 'success', deleted: result.deletedCount });
+  } catch (error) {
+    console.error('[API] Error deleting dashboard:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Widget Data Endpoints (v5)
+// ============================================================================
+
+// GET /api/v1/widgets/:widget_type/data - Get widget data with staleness info
+app.get('/api/v1/widgets/:widget_type/data', async (req, res) => {
+  try {
+    const { widget_type } = req.params;
+    const { fund_id, account_filter, date_range_days, group_by } = req.query;
+
+    // Build filters object to match Python generator format
+    let filters = {};
+    if (widget_type === 'AccountStatement') {
+      filters = {
+        account_filter: account_filter || null,
+        date_range_days: date_range_days ? parseInt(date_range_days) : 30,
+        group_by: group_by || 'date'
+      };
+    }
+    // FundBalances and other widgets use empty filters
+
+    // Create filters hash (same logic as Python generators)
+    // Note: Python's json.dumps uses spaces after colons and commas by default
+    const crypto = await import('crypto');
+    const filtersStr = JSON.stringify(filters, Object.keys(filters).sort(), 0).replace(/,/g, ', ').replace(/:/g, ': ');
+    const filtersHash = crypto.createHash('md5').update(filtersStr).digest('hex');
+
+    // Query widget_data collection
+    const query = {
+      widget_type,
+      fund_id: fund_id || null,
+      filters_hash: filtersHash
+    };
+
+    const widgetData = await db.collection('widget_data').findOne(query);
+
+    if (!widgetData) {
+      return res.status(404).json({ error: 'Widget data not found' });
+    }
+
+    // Calculate staleness
+    const now = new Date();
+    const computedAt = new Date(widgetData.computed_at);
+    const ageSeconds = (now - computedAt) / 1000;
+    const isStale = ageSeconds > widgetData.ttl;
+
+    res.json({
+      data: widgetData.data,
+      computed_at: widgetData.computed_at,
+      age_seconds: ageSeconds,
+      is_stale: isStale
+    });
+  } catch (error) {
+    console.error('[API] Error fetching widget data:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/v1/widgets/:widget_type/reload - Force reload widget
+app.post('/api/v1/widgets/:widget_type/reload', async (req, res) => {
+  try {
+    const { widget_type } = req.params;
+    const { fund_id, account_filter, date_range_days, group_by } = req.body;
+
+    // Call dashboard_creator service to regenerate widget
+    const axios = await import('axios');
+    const dashboardCreatorUrl = process.env.DASHBOARD_CREATOR_URL || 'http://localhost:8004';
+
+    const response = await axios.default.post(
+      `${dashboardCreatorUrl}/api/v1/widgets/${widget_type}/generate`,
+      { fund_id, account_filter, date_range_days, group_by }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    console.error('[API] Error reloading widget:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/v1/dashboards/:dashboard_id/reload-all - Reload all widgets in dashboard
+app.post('/api/v1/dashboards/:dashboard_id/reload-all', async (req, res) => {
+  try {
+    const { dashboard_id } = req.params;
+
+    // Get dashboard
+    const dashboard = await db.collection('dashboards').findOne({ dashboard_id });
+
+    if (!dashboard) {
+      return res.status(404).json({ error: 'Dashboard not found' });
+    }
+
+    // Reload each widget
+    const axios = await import('axios');
+    const dashboardCreatorUrl = process.env.DASHBOARD_CREATOR_URL || 'http://localhost:8004';
+
+    const reloadPromises = dashboard.widgets.map(widget => {
+      const payload = {
+        fund_id: dashboard.fund_id,
+        ...widget.config
+      };
+
+      return axios.default.post(
+        `${dashboardCreatorUrl}/api/v1/widgets/${widget.widget_type}/generate`,
+        payload
+      ).catch(err => {
+        console.error(`Failed to reload widget ${widget.widget_id}:`, err.message);
+        return { error: err.message };
+      });
+    });
+
+    await Promise.all(reloadPromises);
+
+    res.json({ status: 'success', reloaded: dashboard.widgets.length });
+  } catch (error) {
+    console.error('[API] Error reloading dashboard widgets:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'frontend-api' });
