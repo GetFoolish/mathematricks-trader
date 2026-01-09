@@ -4,7 +4,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735984000,
     "signalID": "sig_florida_forex_001",
-    "entry_name": "$ENTRY_1",
+    "entry_name": "$FLORIDA_FOREX_1",
     "account_equity": 3136000,
     "signal_legs": [
       {
@@ -30,7 +30,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735984060,
     "signalID": "sig_florida_forex_002",
-    "entry_name": "$ENTRY_2",
+    "entry_name": "$FLORIDA_FOREX_2",
     "account_equity": 976000,
     "signal_legs": [
       {
@@ -56,7 +56,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735984180,
     "signalID": "sig_florida_forex_003",
-    "entry_signal_id": "$ENTRY_1",
+    "entry_signal_id": "$FLORIDA_FOREX_1",
     "account_equity": 885000,
     "signal_legs": [
       {
@@ -80,7 +80,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735984240,
     "signalID": "sig_florida_forex_004",
-    "entry_signal_id": "$ENTRY_2",
+    "entry_signal_id": "$FLORIDA_FOREX_2",
     "account_equity": 1129000,
     "signal_legs": [
       {
@@ -104,7 +104,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735984330,
     "signalID": "sig_florida_forex_005",
-    "entry_name": "$ENTRY_3",
+    "entry_name": "$FLORIDA_FOREX_3",
     "account_equity": 1206000,
     "signal_legs": [
       {
@@ -130,7 +130,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735984390,
     "signalID": "sig_florida_forex_006",
-    "entry_name": "$ENTRY_4",
+    "entry_name": "$FLORIDA_FOREX_4",
     "account_equity": 1060000,
     "signal_legs": [
       {
@@ -156,7 +156,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735984510,
     "signalID": "sig_florida_forex_007",
-    "entry_signal_id": "$ENTRY_3",
+    "entry_signal_id": "$FLORIDA_FOREX_3",
     "account_equity": 1658000,
     "signal_legs": [
       {
@@ -180,7 +180,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735984570,
     "signalID": "sig_florida_forex_008",
-    "entry_signal_id": "$ENTRY_4",
+    "entry_signal_id": "$FLORIDA_FOREX_4",
     "account_equity": 1029000,
     "signal_legs": [
       {
@@ -204,7 +204,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735984660,
     "signalID": "sig_florida_forex_009",
-    "entry_name": "$ENTRY_5",
+    "entry_name": "$FLORIDA_FOREX_5",
     "account_equity": 695000,
     "signal_legs": [
       {
@@ -230,7 +230,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735984780,
     "signalID": "sig_florida_forex_010",
-    "entry_signal_id": "$ENTRY_5",
+    "entry_signal_id": "$FLORIDA_FOREX_5",
     "account_equity": 1063000,
     "signal_legs": [
       {
