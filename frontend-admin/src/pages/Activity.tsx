@@ -1,13 +1,59 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../services/api';
-import { TrendingUp, TrendingDown, Clock, ChevronDown, ChevronRight } from 'lucide-react';
+import { TrendingUp, TrendingDown, Clock, ChevronDown, ChevronRight, Download } from 'lucide-react';
 
 export const Activity: React.FC = () => {
-  const [selectedTab, setSelectedTab] = useState<'signals' | 'orders' | 'positions'>('signals');
+  const [selectedTab, setSelectedTab] = useState<'signal-legs' | 'orders' | 'trading-signals'>('signal-legs');
   const [showStaging, setShowStaging] = useState(true);
   const [showProduction, setShowProduction] = useState(false);
   const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
+
+  // CSV download utility
+  const downloadCSV = (data: any[], filename: string) => {
+    if (data.length === 0) return;
+
+    // Get all unique keys from all objects
+    const allKeys = new Set<string>();
+    data.forEach(item => {
+      Object.keys(item).forEach(key => {
+        // Skip nested objects/arrays for simplicity
+        if (typeof item[key] !== 'object' || item[key] === null) {
+          allKeys.add(key);
+        }
+      });
+    });
+
+    const headers = Array.from(allKeys);
+
+    // Create CSV content
+    const csvContent = [
+      headers.join(','), // Header row
+      ...data.map(row =>
+        headers.map(header => {
+          const value = row[header];
+          // Handle null/undefined
+          if (value === null || value === undefined) return '';
+          // Handle strings with commas or quotes
+          if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+            return `"${value.replace(/"/g, '""')}"`;
+          }
+          return value;
+        }).join(',')
+      )
+    ].join('\n');
+
+    // Create blob and download
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Determine environment filter for API calls
   // If both or neither selected, fetch all (no filter)
@@ -33,10 +79,10 @@ export const Activity: React.FC = () => {
     refetchInterval: 5000,
   });
 
-  // Fetch positions
-  const { data: positionsData, isLoading: isLoadingPositions } = useQuery({
-    queryKey: ['positions', environmentFilter],
-    queryFn: () => apiClient.getPositions(50, environmentFilter),
+  // Fetch trading signals (aggregated view)
+  const { data: tradingSignalsData, isLoading: isLoadingTradingSignals } = useQuery({
+    queryKey: ['trading-signals', environmentFilter],
+    queryFn: () => apiClient.getTradingSignals(50, environmentFilter),
     refetchInterval: 5000,
   });
 
@@ -60,10 +106,29 @@ export const Activity: React.FC = () => {
   });
   const orders = filterByEnvironment(ordersData?.orders || []);
 
-  // Separate open and closed positions
-  const allPositions = filterByEnvironment(positionsData?.positions || []);
-  const openPositions = allPositions.filter((p: any) => p.status === 'OPEN');
-  const closedPositions = allPositions.filter((p: any) => p.status === 'CLOSED');
+  // Filter and sort trading signals: PENDING > OPEN > PARTIAL > CLOSED, then by entry time (latest first)
+  const tradingSignals = filterByEnvironment(tradingSignalsData?.trading_signals || []).sort((a: any, b: any) => {
+    // Define status priority: PENDING (highest), OPEN, PARTIAL, CLOSED (lowest)
+    const statusPriority = (status: string) => {
+      if (status === 'PENDING') return 4;
+      if (status === 'OPEN') return 3;
+      if (status === 'PARTIAL') return 2;
+      return 1; // CLOSED, etc.
+    };
+
+    const priorityA = statusPriority(a.status || '');
+    const priorityB = statusPriority(b.status || '');
+
+    // First sort by status priority
+    if (priorityA !== priorityB) {
+      return priorityB - priorityA; // Higher priority first
+    }
+
+    // Then sort by entry time (latest first)
+    const timeA = a.opened_at ? new Date(a.opened_at).getTime() : 0;
+    const timeB = b.opened_at ? new Date(b.opened_at).getTime() : 0;
+    return timeB - timeA; // Descending (latest first)
+  });
 
   // Helper to display current filter state
   const getFilterLabel = () => {
@@ -109,14 +174,14 @@ export const Activity: React.FC = () => {
       {/* Tabs */}
       <div className="flex space-x-2 border-b border-gray-700">
         <button
-          onClick={() => setSelectedTab('signals')}
+          onClick={() => setSelectedTab('signal-legs')}
           className={`px-6 py-3 font-medium transition-colors ${
-            selectedTab === 'signals'
+            selectedTab === 'signal-legs'
               ? 'border-b-2 border-blue-500 text-blue-500'
               : 'text-gray-400 hover:text-white'
           }`}
         >
-          Signals ({signals.length})
+          Signal Legs ({signals.length})
         </button>
         <button
           onClick={() => setSelectedTab('orders')}
@@ -129,23 +194,33 @@ export const Activity: React.FC = () => {
           Orders & Executions ({orders.length})
         </button>
         <button
-          onClick={() => setSelectedTab('positions')}
+          onClick={() => setSelectedTab('trading-signals')}
           className={`px-6 py-3 font-medium transition-colors ${
-            selectedTab === 'positions'
+            selectedTab === 'trading-signals'
               ? 'border-b-2 border-blue-500 text-blue-500'
               : 'text-gray-400 hover:text-white'
           }`}
         >
-          Positions ({allPositions.length})
+          Trading Signals ({tradingSignals.length})
         </button>
       </div>
 
-      {/* Recent Signals Tab */}
-      {selectedTab === 'signals' && (
+      {/* Signal Legs Tab */}
+      {selectedTab === 'signal-legs' && (
         <div className="card">
-          <h3 className="text-lg font-semibold text-white mb-4">
-            Signals - {getFilterLabel()}
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-white">
+              Signal Legs - {getFilterLabel()}
+            </h3>
+            <button
+              onClick={() => downloadCSV(signals, `signal-legs-${new Date().toISOString()}.csv`)}
+              disabled={signals.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Download CSV
+            </button>
+          </div>
 
           {isLoadingSignals ? (
             <div className="text-center py-12">
@@ -170,7 +245,8 @@ export const Activity: React.FC = () => {
                     <th className="table-header">Symbol</th>
                     <th className="table-header">Action</th>
                     <th className="table-header">Direction</th>
-                    <th className="table-header">Qty</th>
+                    <th className="table-header">Raw Qty</th>
+                    <th className="table-header">Cerebro Qty</th>
                     <th className="table-header">Price</th>
                     <th className="table-header">Cerebro Decision</th>
                     <th className="table-header">Status</th>
@@ -262,6 +338,15 @@ export const Activity: React.FC = () => {
                             </div>
                           </td>
                           <td className="table-cell">{signal.quantity || 'N/A'}</td>
+                          <td className="table-cell">
+                            {signal.final_quantity ? (
+                              <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
+                                {signal.final_quantity}
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">-</span>
+                            )}
+                          </td>
                           <td className="table-cell">${signal.price?.toFixed(2) || 'N/A'}</td>
                           <td className="table-cell">
                             {hasDecision ? (
@@ -378,9 +463,19 @@ export const Activity: React.FC = () => {
       {/* Orders & Executions Tab */}
       {selectedTab === 'orders' && (
         <div className="card">
-          <h3 className="text-lg font-semibold text-white mb-4">
-            Recent Orders & Executions - {getFilterLabel()}
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-white">
+              Recent Orders & Executions - {getFilterLabel()}
+            </h3>
+            <button
+              onClick={() => downloadCSV(orders, `orders-executions-${new Date().toISOString()}.csv`)}
+              disabled={orders.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Download CSV
+            </button>
+          </div>
 
           {isLoadingOrders ? (
             <div className="text-center py-12">
@@ -462,178 +557,135 @@ export const Activity: React.FC = () => {
         </div>
       )}
 
-      {/* Positions Tab */}
-      {selectedTab === 'positions' && (
-        <div className="space-y-6">
-          {/* Open Positions Section */}
-          <div className="card">
-            <h3 className="text-lg font-semibold text-white mb-4">
-              Open Positions - {getFilterLabel()} ({openPositions.length})
+      {/* Trading Signals Tab */}
+      {selectedTab === 'trading-signals' && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-white">
+              Trading Signals - {getFilterLabel()} ({tradingSignals.length})
             </h3>
-
-            {isLoadingPositions ? (
-              <div className="text-center py-12">
-                <div className="inline-block animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-3"></div>
-                <p className="text-gray-400">Loading positions...</p>
-              </div>
-            ) : openPositions.length === 0 ? (
-              <div className="text-center py-12">
-                <p className="text-gray-400">No open positions for {getFilterLabel()}</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr>
-                      <th className="table-header">Opened At</th>
-                      <th className="table-header">Entry Signal</th>
-                      <th className="table-header">Strategy</th>
-                      <th className="table-header">Fund</th>
-                      <th className="table-header">Symbol</th>
-                      <th className="table-header">Quantity</th>
-                      <th className="table-header">Entry Price</th>
-                      <th className="table-header">Cost Basis</th>
-                      <th className="table-header">Current Value</th>
-                      <th className="table-header">Unrealized PnL</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-700">
-                    {openPositions.map((position: any, idx: number) => (
-                      <tr key={`${position.entry_signal_id}-${idx}`} className="hover:bg-gray-700/50">
-                        <td className="table-cell text-sm">
-                          <div className="flex items-center gap-2">
-                            <Clock className="h-4 w-4 text-gray-400" />
-                            {position.opened_at ? new Date(position.opened_at).toLocaleString() : 'N/A'}
-                          </div>
-                        </td>
-                        <td className="table-cell">
-                          <span className="px-2 py-1 bg-green-900/30 text-green-400 rounded text-xs font-medium font-mono">
-                            {position.entry_signal_id}
-                          </span>
-                        </td>
-                        <td className="table-cell">
-                          <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
-                            {position.strategy_id}
-                          </span>
-                        </td>
-                        <td className="table-cell text-xs text-gray-400">{position.fund_id}</td>
-                        <td className="table-cell font-semibold">{position.instrument}</td>
-                        <td className="table-cell">{position.quantity?.toFixed(2) || 0}</td>
-                        <td className="table-cell">${position.entry_price?.toFixed(2) || 0}</td>
-                        <td className="table-cell">${position.cost_basis?.toFixed(2) || 0}</td>
-                        <td className="table-cell">${position.current_value?.toFixed(2) || 0}</td>
-                        <td className="table-cell">
-                          <span className="text-gray-500 text-xs">Pending</span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <button
+              onClick={() => downloadCSV(tradingSignals, `trading-signals-${new Date().toISOString()}.csv`)}
+              disabled={tradingSignals.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Download CSV
+            </button>
           </div>
 
-          {/* Closed Positions Section */}
-          <div className="card">
-            <h3 className="text-lg font-semibold text-white mb-4">
-              Closed Positions - {getFilterLabel()} ({closedPositions.length})
-            </h3>
+          {isLoadingTradingSignals ? (
+            <div className="text-center py-12">
+              <div className="inline-block animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-3"></div>
+              <p className="text-gray-400">Loading trading signals...</p>
+            </div>
+          ) : tradingSignals.length === 0 ? (
+            <div className="text-center py-12">
+              <p className="text-gray-400">No trading signals for {getFilterLabel()}</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <th className="table-header">Signal ID</th>
+                    <th className="table-header">Instrument</th>
+                    <th className="table-header">Strategy</th>
+                    <th className="table-header">Status</th>
+                    <th className="table-header">Position</th>
+                    <th className="table-header">Entry Time</th>
+                    <th className="table-header">Exit Time</th>
+                    <th className="table-header">P&L</th>
+                    <th className="table-header">Legs</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-700">
+                  {tradingSignals.map((signal: any) => (
+                    <tr key={signal.signal_id} className="hover:bg-gray-700/50">
+                      <td className="table-cell">
+                        <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium font-mono">
+                          {signal.signal_id}
+                        </span>
+                      </td>
+                      <td className="table-cell font-semibold">{signal.instrument}</td>
+                      <td className="table-cell">
+                        <span className="px-2 py-1 bg-purple-900/30 text-purple-400 rounded text-xs font-medium">
+                          {signal.strategy_id}
+                        </span>
+                      </td>
+                      <td className="table-cell">
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          signal.status === 'OPEN'
+                            ? 'bg-green-900/30 text-green-400'
+                            : signal.status === 'CLOSED'
+                            ? 'bg-gray-700 text-gray-300'
+                            : signal.status === 'PARTIAL'
+                            ? 'bg-yellow-900/30 text-yellow-400'
+                            : 'bg-yellow-900/30 text-yellow-400'
+                        }`}>
+                          {signal.status}
+                          {signal.status === 'PARTIAL' && signal.remaining_quantity !== undefined && (
+                            <span className="ml-1 text-xs">({signal.remaining_quantity} left)</span>
+                          )}
+                        </span>
+                      </td>
+                      <td className="table-cell">
+                        {(() => {
+                          const entryQty = signal.entry_quantity || 0;
+                          const exitQty = signal.exit_quantity || 0;
+                          const remainingQty = signal.remaining_quantity || 0;
 
-            {isLoadingPositions ? (
-              <div className="text-center py-12">
-                <div className="inline-block animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-3"></div>
-                <p className="text-gray-400">Loading positions...</p>
-              </div>
-            ) : closedPositions.length === 0 ? (
-              <div className="text-center py-12">
-                <p className="text-gray-400">No closed positions for {getFilterLabel()}</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr>
-                      <th className="table-header">Closed At</th>
-                      <th className="table-header">Entry Signal</th>
-                      <th className="table-header">Exit Signal(s)</th>
-                      <th className="table-header">Strategy</th>
-                      <th className="table-header">Fund</th>
-                      <th className="table-header">Symbol</th>
-                      <th className="table-header">Quantity</th>
-                      <th className="table-header">Entry Price</th>
-                      <th className="table-header">Exit Price</th>
-                      <th className="table-header">Cost Basis</th>
-                      <th className="table-header">Proceeds</th>
-                      <th className="table-header">Net PnL</th>
-                      <th className="table-header">PnL %</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-700">
-                    {closedPositions.map((position: any, idx: number) => {
-                      const pnl = position.pnl || {};
-                      const netPnl = pnl.net || 0;
-                      const pnlPercent = pnl.percent || 0;
-                      const isProfitable = netPnl > 0;
+                          if (entryQty === 0) {
+                            return <span className="text-gray-500 text-xs">-</span>;
+                          }
 
-                      return (
-                        <tr key={`${position.entry_signal_id}-${idx}`} className="hover:bg-gray-700/50">
-                          <td className="table-cell text-sm">
-                            <div className="flex items-center gap-2">
-                              <Clock className="h-4 w-4 text-gray-400" />
-                              {position.closed_at ? new Date(position.closed_at).toLocaleString() : 'N/A'}
-                            </div>
-                          </td>
-                          <td className="table-cell">
-                            <span className="px-2 py-1 bg-green-900/30 text-green-400 rounded text-xs font-medium font-mono">
-                              {position.entry_signal_id}
-                            </span>
-                          </td>
-                          <td className="table-cell">
-                            <div className="flex flex-col gap-1">
-                              {position.exit_signal_ids?.map((exitId: string, i: number) => (
-                                <span key={i} className="px-2 py-1 bg-red-900/30 text-red-400 rounded text-xs font-medium font-mono">
-                                  {exitId}
+                          const filledPercent = (exitQty / entryQty) * 100;
+                          const isFullyClosed = remainingQty === 0 && exitQty > 0;
+                          const hasOpenPosition = remainingQty > 0;
+
+                          return (
+                            <div className="flex flex-col gap-1 min-w-[120px]">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium whitespace-nowrap">
+                                  {exitQty}/{entryQty}
                                 </span>
-                              ))}
+                              </div>
+                              <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+                                <div
+                                  className={`h-full transition-all duration-300 ${
+                                    isFullyClosed ? 'bg-green-500' : hasOpenPosition ? 'bg-orange-500' : 'bg-gray-600'
+                                  }`}
+                                  style={{ width: `${Math.min(filledPercent, 100)}%` }}
+                                />
+                              </div>
                             </div>
-                          </td>
-                          <td className="table-cell">
-                            <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
-                              {position.strategy_id}
-                            </span>
-                          </td>
-                          <td className="table-cell text-xs text-gray-400">{position.fund_id}</td>
-                          <td className="table-cell font-semibold">{position.instrument}</td>
-                          <td className="table-cell">{position.quantity?.toFixed(2) || 0}</td>
-                          <td className="table-cell">${position.entry_price?.toFixed(2) || 0}</td>
-                          <td className="table-cell">${position.exit_price?.toFixed(2) || 0}</td>
-                          <td className="table-cell">${position.cost_basis?.toFixed(2) || 0}</td>
-                          <td className="table-cell">${position.proceeds?.toFixed(2) || 0}</td>
-                          <td className="table-cell">
-                            <div className="flex items-center gap-1">
-                              {isProfitable ? (
-                                <TrendingUp className="h-4 w-4 text-green-400" />
-                              ) : (
-                                <TrendingDown className="h-4 w-4 text-red-400" />
-                              )}
-                              <span className={isProfitable ? 'text-green-400' : 'text-red-400'}>
-                                ${netPnl.toFixed(2)}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="table-cell">
-                            <span className={isProfitable ? 'text-green-400' : 'text-red-400'}>
-                              {pnlPercent.toFixed(2)}%
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="table-cell text-sm">
+                        {signal.opened_at ? new Date(signal.opened_at).toLocaleString() : '-'}
+                      </td>
+                      <td className="table-cell text-sm">
+                        {signal.closed_at ? new Date(signal.closed_at).toLocaleString() : '-'}
+                      </td>
+                      <td className="table-cell">
+                        {signal.pnl ? (
+                          <span className={signal.pnl.net >= 0 ? 'text-green-400' : 'text-red-400'}>
+                            ${signal.pnl.net.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-500">-</span>
+                        )}
+                      </td>
+                      <td className="table-cell text-xs text-gray-400">
+                        1 ENTRY + {signal.exit_legs.length} EXIT
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>

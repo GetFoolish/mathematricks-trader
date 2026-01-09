@@ -47,7 +47,7 @@ function serializeDocument(doc) {
 }
 
 // GET /api/v1/activity/signals
-// Supports both v1 (signal_data, cerebro_decision) and v2 (raw, decision) schema
+// CONSOLIDATED SCHEMA v3: Each document has legs[] array, return each leg as a signal row
 app.get('/api/v1/activity/signals', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
@@ -64,124 +64,106 @@ app.get('/api/v1/activity/signals', async (req, res) => {
       .limit(limit)
       .toArray();
 
-    const signals = docs.map(doc => {
-      // Support both v1 (signal_data) and v2 (raw) schema
-      const raw = doc.raw || {};
-      const signalData = doc.signal_data || {};
+    // Flatten legs: each leg becomes a separate signal row
+    const signals = [];
+    for (const doc of docs) {
+      const legs = doc.legs || [];
 
-      // Get first leg from v2 raw.legs or v1 signal_data.signal
-      let firstLeg = {};
-      if (raw.legs && raw.legs.length > 0) {
-        firstLeg = raw.legs[0];
-      } else {
-        let signalDetails = signalData.signal || {};
-        if (Array.isArray(signalDetails) && signalDetails.length > 0) {
-          firstLeg = signalDetails[0];
-        } else {
-          firstLeg = signalDetails;
+      for (const leg of legs) {
+        const raw = leg.raw || {};
+        const decision = leg.decision || null;
+        const execution = leg.execution || null;
+        const position = doc.position || {};
+
+        // Get first leg from raw.legs (the actual BUY/SELL actions)
+        let firstLeg = {};
+        if (raw.legs && raw.legs.length > 0) {
+          firstLeg = raw.legs[0];
         }
-      }
 
-      // Support both v1 (cerebro_decision) and v2 (decision) schema
-      const decision = doc.decision || doc.cerebro_decision || null;
-      let decisionStatus = null;
-      if (decision) {
-        decisionStatus = decision.status || decision.decision || 'PENDING';
-      }
+        // Decision status
+        let decisionStatus = decision ? (decision.status || 'PENDING') : null;
 
-      // Get signal type from v2 raw or v1 signal_data
-      let signalType = raw.signal_type || signalData.signal_type || 'UNKNOWN';
-      if (signalType === 'UNKNOWN') {
-        const action = (firstLeg.action || '').toUpperCase();
-        if (['ENTRY', 'BUY'].includes(action)) signalType = 'ENTRY';
-        else if (['EXIT', 'SELL', 'CLOSE'].includes(action)) signalType = 'EXIT';
-      }
+        // Signal type
+        let signalType = leg.leg_type || raw.signal_type || 'UNKNOWN';
 
-      // Calculate timestamps and lags
-      const signalSentEpoch = raw.sent_epoch || signalData.signal_sent_EPOCH;
-      let signalSentTimestamp = null;
-      if (signalSentEpoch) {
-        signalSentTimestamp = new Date(signalSentEpoch * 1000).toISOString();
-      }
+        // Calculate timestamps and lags
+        const signalSentEpoch = raw.sent_epoch;
+        let signalSentTimestamp = null;
+        if (signalSentEpoch) {
+          signalSentTimestamp = new Date(signalSentEpoch * 1000).toISOString();
+        }
 
-      let signalReceivedTimestamp = raw.received_at || doc.created_at;
-      if (typeof signalReceivedTimestamp === 'string') {
-        signalReceivedTimestamp = new Date(signalReceivedTimestamp);
-      }
+        let signalReceivedTimestamp = raw.received_at;
+        if (typeof signalReceivedTimestamp === 'string') {
+          signalReceivedTimestamp = new Date(signalReceivedTimestamp);
+        }
 
-      let receiveLagSeconds = null;
-      if (signalSentEpoch && signalReceivedTimestamp) {
-        receiveLagSeconds = (signalReceivedTimestamp.getTime() / 1000) - signalSentEpoch;
-      }
+        let receiveLagSeconds = null;
+        if (signalSentEpoch && signalReceivedTimestamp) {
+          receiveLagSeconds = (signalReceivedTimestamp.getTime() / 1000) - signalSentEpoch;
+        }
 
-      // Execution timestamp - support v2 (execution.orders[]) and v1 (execution.filled_at)
-      const execution = doc.execution;
-      let executionCompletedTimestamp = null;
-      let executionLagSeconds = null;
+        // Execution timestamp
+        let executionCompletedTimestamp = null;
+        let executionLagSeconds = null;
 
-      if (execution) {
-        // v2: check orders array
-        if (execution.orders && execution.orders.length > 0) {
+        if (execution && execution.orders && execution.orders.length > 0) {
           const lastOrder = execution.orders[execution.orders.length - 1];
           if (lastOrder.filled_at) {
             executionCompletedTimestamp = new Date(lastOrder.filled_at);
           }
         }
-        // v1: check filled_at directly
-        else if (execution.filled_at) {
-          executionCompletedTimestamp = new Date(execution.filled_at);
+        // Fallback to decision timestamp
+        if (!executionCompletedTimestamp && decision && decision.timestamp) {
+          executionCompletedTimestamp = new Date(decision.timestamp);
         }
-      }
-      // Fallback to decision timestamp
-      if (!executionCompletedTimestamp && decision && decision.timestamp) {
-        executionCompletedTimestamp = new Date(decision.timestamp);
-      }
 
-      if (executionCompletedTimestamp && signalSentEpoch) {
-        executionLagSeconds = (executionCompletedTimestamp.getTime() / 1000) - signalSentEpoch;
-      }
+        if (executionCompletedTimestamp && signalSentEpoch) {
+          executionLagSeconds = (executionCompletedTimestamp.getTime() / 1000) - signalSentEpoch;
+        }
 
-      // Get PnL from v2 position.pnl or v1 doc.pnl
-      const position = doc.position || {};
-      const pnl = position.pnl || doc.pnl || null;
+        // Get PnL from position
+        const pnl = position.pnl || null;
 
-      // Get final quantity from v2 decision.legs or v1 cerebro_decision.final_quantity
-      let finalQuantity = firstLeg.quantity;
-      if (decision) {
-        if (decision.legs && decision.legs.length > 0) {
+        // Get final quantity from decision.legs or execution
+        let finalQuantity = firstLeg.quantity;
+        if (decision && decision.legs && decision.legs.length > 0) {
           finalQuantity = decision.legs[0].quantity;
-        } else if (decision.final_quantity !== undefined) {
-          finalQuantity = decision.final_quantity;
+        } else if (execution && execution.total_quantity_filled) {
+          // For EXIT legs, decision.legs is empty but execution has the actual quantity
+          finalQuantity = execution.total_quantity_filled;
         }
-      }
 
-      return {
-        signal_id: doc.signal_id,
-        strategy_id: doc.strategy_id || signalData.strategy_name || 'Unknown',
-        timestamp: serializeDocument(doc.created_at),
-        created_at: serializeDocument(doc.created_at),
-        instrument: firstLeg.instrument || firstLeg.ticker,
-        action: firstLeg.action,
-        direction: firstLeg.direction,
-        price: firstLeg.price || firstLeg.entry_price,
-        quantity: firstLeg.quantity,
-        final_quantity: finalQuantity,
-        environment: doc.environment || 'production',
-        processed_by_cerebro: decision !== null,
-        receive_lag_ms: doc.receive_lag_ms || 0,
-        decision: serializeDocument(decision),
-        decision_status: decisionStatus,
-        signal_sent_timestamp: signalSentTimestamp,
-        signal_received_timestamp: signalReceivedTimestamp ? signalReceivedTimestamp.toISOString() : null,
-        execution_completed_timestamp: executionCompletedTimestamp ? executionCompletedTimestamp.toISOString() : null,
-        receive_lag_seconds: receiveLagSeconds,
-        execution_lag_seconds: executionLagSeconds,
-        signal_type: signalType,
-        execution: serializeDocument(execution),
-        position: serializeDocument(position),
-        pnl: serializeDocument(pnl)
-      };
-    });
+        signals.push({
+          signal_id: leg.leg_id || doc.signal_id,  // Use leg_id as unique identifier
+          base_signal_id: doc.signal_id,  // Parent signal ID
+          strategy_id: doc.strategy_id || 'Unknown',
+          timestamp: serializeDocument(raw.received_at || doc.created_at),
+          created_at: serializeDocument(raw.received_at || doc.created_at),
+          instrument: firstLeg.instrument || doc.instrument,
+          action: firstLeg.action,
+          direction: firstLeg.direction,
+          price: firstLeg.price,
+          quantity: firstLeg.quantity,
+          final_quantity: finalQuantity,
+          environment: doc.environment || 'production',
+          processed_by_cerebro: decision !== null,
+          receive_lag_ms: receiveLagSeconds ? Math.round(receiveLagSeconds * 1000) : 0,
+          decision: serializeDocument(decision),
+          decision_status: decisionStatus,
+          signal_sent_timestamp: signalSentTimestamp,
+          signal_received_timestamp: signalReceivedTimestamp ? signalReceivedTimestamp.toISOString() : null,
+          execution_completed_timestamp: executionCompletedTimestamp ? executionCompletedTimestamp.toISOString() : null,
+          receive_lag_seconds: receiveLagSeconds,
+          execution_lag_seconds: executionLagSeconds,
+          signal_type: signalType,
+          execution: serializeDocument(execution),
+          position: serializeDocument(position),
+          pnl: serializeDocument(pnl)
+        });
+      }
+    }
 
     res.json({ status: 'success', count: signals.length, signals });
   } catch (error) {
@@ -191,70 +173,70 @@ app.get('/api/v1/activity/signals', async (req, res) => {
 });
 
 // GET /api/v1/activity/orders
-// Fetches execution orders from signal_store.execution.orders[] (v2 schema)
+// Fetches execution orders from signal_store.legs[].execution.orders[] (CONSOLIDATED schema v3)
 app.get('/api/v1/activity/orders', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     const environment = req.query.environment;
 
-    // Query for signals with execution.orders
+    // Query for signals with any leg having execution.orders
     const query = {
-      'execution.orders': { $exists: true, $ne: [] }
+      'legs.execution.orders': { $exists: true, $ne: [] }
     };
     if (environment) {
       query.environment = environment;
     }
 
     const signals = await signalStoreCollection
-      .find(query, {
-        projection: {
-          signal_id: 1,
-          'execution.orders': 1,
-          created_at: 1,
-          environment: 1,
-          'raw.legs': 1
-        }
-      })
+      .find(query)
       .sort({ created_at: -1 })
       .limit(limit)
       .toArray();
 
-    // Flatten execution.orders[] from all signals into a single array
+    // Flatten execution.orders[] from ALL legs of all signals into a single array
     const orders = [];
     signals.forEach(signal => {
-      const instrument = signal.raw?.legs?.[0]?.instrument || 'N/A';
-      const signalType = signal.raw?.signal_type || 'UNKNOWN';
+      const instrument = signal.instrument || 'N/A';
 
-      signal.execution.orders.forEach(order => {
-        // Generate shorter, more readable order ID
-        // Format: {signal_id}_{fund}_{broker_short}
-        const brokerShort = (order.account_id || 'UNK').replace(/[-_]MOCK/g, '').replace(/IBKR-/g, '');
-        const shortOrderId = `${signal.signal_id}_${order.fund_id}_${brokerShort}`;
+      // Iterate through each leg in the legs array
+      (signal.legs || []).forEach(leg => {
+        if (!leg.execution || !leg.execution.orders) return;
 
-        // Determine status based on filled quantity
-        let status = 'FILLED';
-        if (order.quantity_filled === 0) {
-          status = 'PENDING';
-        } else if (order.quantity_filled < order.quantity_requested) {
-          status = 'PARTIAL';
-        }
+        const signalType = leg.leg_type || 'UNKNOWN';
 
-        orders.push({
-          signal_id: signal.signal_id,
-          order_id: shortOrderId,
-          full_order_id: order.order_id, // Keep full ID for reference
-          broker_order_id: order.broker_order_id,
-          broker: order.account_id || 'N/A', // Broker/account
-          fund_id: order.fund_id,
-          instrument: instrument,
-          signal_type: signalType,
-          quantity_requested: order.quantity_requested,
-          quantity_filled: order.quantity_filled,
-          avg_fill_price: order.avg_fill_price,
-          filled_at: order.filled_at,
-          status: status,
-          environment: signal.environment,
-          fills: order.fills
+        leg.execution.orders.forEach(order => {
+          // Generate shorter, more readable order ID
+          // Format: {signal_id}_{fund}_{broker_short}
+          const brokerShort = (order.account_id || 'UNK').replace(/[-_]MOCK/g, '').replace(/IBKR-/g, '');
+          const shortOrderId = `${signal.signal_id}_${order.fund_id}_${brokerShort}`;
+
+          // Determine status based on filled quantity
+          let status = 'FILLED';
+          if (order.quantity_filled === 0) {
+            status = 'PENDING';
+          } else if (order.quantity_filled < order.quantity_requested) {
+            status = 'PARTIAL';
+          }
+
+          orders.push({
+            signal_id: signal.signal_id,
+            leg_id: leg.leg_id,
+            leg_type: signalType,
+            order_id: shortOrderId,
+            full_order_id: order.order_id, // Keep full ID for reference
+            broker_order_id: order.broker_order_id,
+            broker: order.account_id || 'N/A', // Broker/account
+            fund_id: order.fund_id,
+            instrument: instrument,
+            signal_type: signalType,
+            quantity_requested: order.quantity_requested,
+            quantity_filled: order.quantity_filled,
+            avg_fill_price: order.avg_fill_price,
+            filled_at: order.filled_at,
+            status: status,
+            environment: signal.environment,
+            fills: order.fills
+          });
         });
       });
     });
@@ -297,10 +279,9 @@ app.get('/api/v1/activity/positions', async (req, res) => {
         projection: {
           signal_id: 1,
           strategy_id: 1,
+          instrument: 1,
           'position': 1,
-          'execution': 1,
-          'raw.legs': 1,
-          'raw.signal_type': 1,
+          'legs': 1,
           created_at: 1,
           environment: 1
         }
@@ -312,14 +293,19 @@ app.get('/api/v1/activity/positions', async (req, res) => {
     // Build positions with entry and exit signal details
     const positions = [];
     for (const entrySignal of entrySignals) {
-      const instrument = entrySignal.raw?.legs?.[0]?.instrument || 'N/A';
+      // CONSOLIDATED SCHEMA v3: Get ENTRY leg (first leg)
+      const entryLeg = entrySignal.legs?.find(leg => leg.leg_type === 'ENTRY') || entrySignal.legs?.[0] || {};
+      const entryRaw = entryLeg.raw || {};
+      const entryExecution = entryLeg.execution || {};
+
+      const instrument = entryRaw.legs?.[0]?.instrument || entrySignal.instrument || 'N/A';
       const strategyId = entrySignal.strategy_id || 'N/A';
-      const entryPrice = entrySignal.execution?.weighted_avg_price || 0;
-      const totalQty = entrySignal.execution?.total_quantity_filled || 0;
-      const costBasis = entrySignal.execution?.total_cost_basis || 0;
+      const entryPrice = entryExecution.weighted_avg_price || 0;
+      const totalQty = entryExecution.total_quantity_filled || 0;
+      const costBasis = entryExecution.total_cost_basis || 0;
 
       // Collect unique fund_ids from execution.orders
-      const fundIds = [...new Set((entrySignal.execution?.orders || []).map(o => o.fund_id))].filter(Boolean);
+      const fundIds = [...new Set((entryExecution.orders || []).map(o => o.fund_id))].filter(Boolean);
       const fundId = fundIds.join(', ') || 'N/A';
 
       let exitSignals = [];
@@ -372,6 +358,72 @@ app.get('/api/v1/activity/positions', async (req, res) => {
     });
   } catch (error) {
     console.error('[API] Error fetching positions:', error);
+    res.status(500).json({ detail: error.message });
+  }
+});
+
+// GET /api/v1/activity/trading-signals
+// Fetches complete trading signals using CONSOLIDATED schema (ONE document per signal)
+app.get('/api/v1/activity/trading-signals', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const environment = req.query.environment;
+
+    // Query for signal documents (each document represents ONE complete signal with ALL legs)
+    const query = {};
+    if (environment) query.environment = environment;
+
+    const signals = await signalStoreCollection
+      .find(query)
+      .sort({ created_at: -1 })
+      .limit(limit)
+      .toArray();
+
+    // Transform to trading signals format
+    const tradingSignals = signals.map(signal => {
+      // Get ENTRY leg (should be first leg in array)
+      const entryLeg = signal.legs?.find(leg => leg.leg_type === 'ENTRY') || signal.legs?.[0];
+      const exitLegs = signal.legs?.filter(leg => leg.leg_type === 'EXIT' || leg.leg_type === 'SCALE_OUT') || [];
+
+      return {
+        signal_id: signal.signal_id,
+        instrument: signal.instrument,
+        strategy_id: signal.strategy_id,
+        environment: signal.environment,
+
+        // Position info
+        status: signal.position?.status || 'PENDING',
+        opened_at: serializeDocument(signal.position?.opened_at),
+        closed_at: serializeDocument(signal.position?.closed_at),
+
+        // P&L info (cumulative for PARTIAL, final for CLOSED)
+        pnl: serializeDocument(signal.position?.pnl),
+
+        // Partial exit info
+        partial_exit_count: signal.position?.partial_exit_count,
+        remaining_quantity: signal.position?.remaining_quantity,
+        entry_quantity: signal.position?.entry_quantity,
+        exit_quantity: signal.position?.exit_quantity,
+
+        // Legs
+        legs: serializeDocument(signal.legs),
+        entry_leg: serializeDocument(entryLeg),
+        exit_legs: exitLegs.map(serializeDocument),
+
+        // Metadata
+        created_at: serializeDocument(signal.created_at),
+        updated_at: serializeDocument(signal.updated_at)
+      };
+    });
+
+    res.json({
+      status: 'success',
+      count: tradingSignals.length,
+      trading_signals: tradingSignals
+    });
+
+  } catch (error) {
+    console.error('[API] Error fetching trading signals:', error);
     res.status(500).json({ detail: error.message });
   }
 });

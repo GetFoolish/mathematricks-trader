@@ -37,15 +37,11 @@ class MongoDBWatcher:
         # Connect to MongoDB
         self.connect()
 
-    def _build_signal_store_doc(self, raw_signal_doc: dict, signal_array: list) -> dict:
+    def _build_leg_data(self, raw_signal_doc: dict, signal_array: list, leg_index: int) -> dict:
         """
-        Build a signal_store document using v2 schema.
+        Build data for a single leg to be added to the legs array.
 
-        v2 Schema focuses on:
-        - `raw`: Slim audit trail of original signal (no duplication)
-        - `decision`: Cerebro's final trading decision (populated later)
-        - `execution`: Order execution details (populated later)
-        - `position`: Position lifecycle tracking (populated later)
+        Returns leg object that will be appended to the signal document's legs array.
         """
         # Build raw.legs from signal array
         raw_legs = []
@@ -72,14 +68,27 @@ class MongoDBWatcher:
                 raw_leg['option_type'] = leg['option_type']
             raw_legs.append(raw_leg)
 
-        # Build the v2 document
-        return {
-            # === IDENTITY ===
-            "signal_id": raw_signal_doc['signalID'],
-            "strategy_id": raw_signal_doc['strategy_name'],
-            "environment": raw_signal_doc.get('environment', 'production'),
+        # Determine leg_type from first leg's action (or signal_type if available)
+        signal_type = raw_signal_doc.get('signal_type', 'ENTRY').upper()
+        first_leg_action = signal_array[0].get('action', 'UNKNOWN').upper() if signal_array else 'UNKNOWN'
 
-            # === RAW SIGNAL (slim audit trail) ===
+        # Use signal_type if available, otherwise infer from action
+        if signal_type in ['ENTRY', 'EXIT', 'SCALE_IN', 'SCALE_OUT']:
+            leg_type = signal_type
+        elif first_leg_action in ['BUY', 'SELL', 'SHORT', 'COVER']:
+            # Map action to leg_type (legacy support)
+            leg_type = 'ENTRY' if first_leg_action in ['BUY', 'SHORT'] else 'EXIT'
+        else:
+            leg_type = 'UNKNOWN'
+
+        # Generate leg_id: signal_id + "__" + leg_type (lowercase) + leg_index
+        signal_id = raw_signal_doc['signalID']
+        leg_id = f"{signal_id}__{leg_type.lower()}_{leg_index}"
+
+        return {
+            "leg_id": leg_id,
+            "leg_type": leg_type,
+            "leg_index": leg_index,
             "raw": {
                 "_id": raw_signal_doc['_id'],  # Reference to trading_signals_raw
                 "received_at": raw_signal_doc.get('received_at', datetime.datetime.utcnow()),
@@ -87,20 +96,62 @@ class MongoDBWatcher:
                 "entry_name": raw_signal_doc.get('entry_name'),
                 "exit_name": raw_signal_doc.get('exit_name'),
                 "account_equity": raw_signal_doc.get('account_equity'),
-                "signal_type": raw_signal_doc.get('signal_type', 'ENTRY'),
+                "signal_type": signal_type,
                 "legs": raw_legs
             },
+            "decision": None,  # Will be populated by cerebro
+            "execution": None,  # Will be populated by execution service
+            "created_at": datetime.datetime.utcnow()
+        }
 
-            # === CEREBRO DECISION (populated by cerebro_main.py) ===
-            "decision": None,
+    def _build_signal_store_doc(self, raw_signal_doc: dict, signal_array: list) -> dict:
+        """
+        Build a signal_store document using CONSOLIDATED schema.
 
-            # === EXECUTION (populated by execution_main.py) ===
-            "execution": None,
+        NEW APPROACH: ONE document per signal that contains ALL legs.
+        - ENTRY leg creates the document
+        - EXIT/SCALE legs are appended to the legs array
 
-            # === POSITION LIFECYCLE (populated by execution_main.py) ===
-            "position": None,
+        This replaces the old approach of separate documents per leg.
+        """
+        signal_id = raw_signal_doc['signalID']
+        signal_type = raw_signal_doc.get('signal_type', 'ENTRY').upper()
 
-            # === TIMESTAMPS ===
+        # For EXIT signals, we need the parent signal ID
+        is_exit_or_scale = signal_type in ['EXIT', 'SCALE_IN', 'SCALE_OUT']
+        parent_signal_id = raw_signal_doc.get('entry_signal_id') if is_exit_or_scale else None
+
+        if is_exit_or_scale and not parent_signal_id:
+            self.logger.warning(f"EXIT/SCALE signal {signal_id} missing entry_signal_id - cannot link to parent")
+
+        # Get instrument info from first leg
+        first_leg = signal_array[0] if signal_array else {}
+        instrument = first_leg.get('instrument') or first_leg.get('ticker')
+
+        # Build the base signal document (for new ENTRY signals)
+        return {
+            # === IDENTITY ===
+            "signal_id": signal_id,  # Signal ID from ENTRY leg
+            "base_signal_id": signal_id,  # Same as signal_id for ENTRY, used to find parent for EXIT
+            "strategy_id": raw_signal_doc['strategy_name'],
+            "environment": raw_signal_doc.get('environment', 'production'),
+            "instrument": instrument,
+
+            # === LEGS ARRAY (ONE DOCUMENT PER SIGNAL!) ===
+            "legs": [],  # Will be appended to
+
+            # === POSITION STATUS ===
+            "position": {
+                "status": "PENDING",  # PENDING → OPEN → PARTIAL → CLOSED
+                "entry_quantity": 0,
+                "exit_quantity": 0,
+                "remaining_quantity": 0,
+                "pnl": None,
+                "opened_at": None,
+                "closed_at": None
+            },
+
+            # === METADATA ===
             "created_at": datetime.datetime.utcnow(),
             "updated_at": datetime.datetime.utcnow()
         }
@@ -172,14 +223,50 @@ class MongoDBWatcher:
                         logger.warning(f"⚠️ Invalid signal array for {raw_signal_doc.get('signalID')}, skipping")
                         continue
 
-                    # CREATE NEW DOCUMENT IN signal_store (v2 schema)
-                    signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
+                    # CONSOLIDATED SCHEMA: ONE document per signal
+                    signal_type = raw_signal_doc.get('signal_type', 'ENTRY').upper()
+                    is_exit_or_scale = signal_type in ['EXIT', 'SCALE_IN', 'SCALE_OUT']
+                    parent_signal_id = raw_signal_doc.get('entry_signal_id') if is_exit_or_scale else None
 
-                    # Insert into signal_store
-                    result = self.signal_store_collection.insert_one(signal_store_doc)
-                    mathematricks_signal_id = result.inserted_id
+                    if is_exit_or_scale and parent_signal_id:
+                        # EXIT/SCALE: Find parent signal and append leg
+                        parent_doc = self.signal_store_collection.find_one({"base_signal_id": parent_signal_id})
 
-                    logger.info(f"📝 Created signal_store document: {mathematricks_signal_id} for signal {raw_signal_doc['signalID']}")
+                        if parent_doc:
+                            # Calculate leg index
+                            leg_index = len(parent_doc.get('legs', []))
+
+                            # Build leg data
+                            leg_data = self._build_leg_data(raw_signal_doc, signal_array, leg_index)
+
+                            # Append leg to parent document
+                            self.signal_store_collection.update_one(
+                                {"_id": parent_doc['_id']},
+                                {
+                                    "$push": {"legs": leg_data},
+                                    "$set": {"updated_at": datetime.datetime.utcnow()}
+                                }
+                            )
+
+                            mathematricks_signal_id = parent_doc['_id']
+                            logger.info(f"📝 Appended {signal_type} leg to signal_store document: {mathematricks_signal_id}")
+                        else:
+                            logger.error(f"❌ Parent signal {parent_signal_id} not found for EXIT/SCALE signal {raw_signal_doc['signalID']}")
+                            # Skip this signal
+                            continue
+                    else:
+                        # ENTRY: Create new signal document
+                        signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
+
+                        # Add first leg (the ENTRY leg)
+                        entry_leg = self._build_leg_data(raw_signal_doc, signal_array, 0)
+                        signal_store_doc['legs'] = [entry_leg]
+
+                        # Insert into signal_store
+                        result = self.signal_store_collection.insert_one(signal_store_doc)
+                        mathematricks_signal_id = result.inserted_id
+
+                        logger.info(f"📝 Created new signal_store document: {mathematricks_signal_id} for ENTRY signal {raw_signal_doc['signalID']}")
 
                     # UPDATE trading_signals_raw with link
                     self.mongodb_collection.update_one(
@@ -307,14 +394,50 @@ class MongoDBWatcher:
                             logger.warning(f"⚠️ Invalid signal array for {raw_signal_doc.get('signalID')}")
                             continue
 
-                        # CREATE NEW DOCUMENT IN signal_store (v2 schema)
-                        signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
+                        # CONSOLIDATED SCHEMA: ONE document per signal
+                        signal_type = raw_signal_doc.get('signal_type', 'ENTRY').upper()
+                        is_exit_or_scale = signal_type in ['EXIT', 'SCALE_IN', 'SCALE_OUT']
+                        parent_signal_id = raw_signal_doc.get('entry_signal_id') if is_exit_or_scale else None
 
-                        # Insert into signal_store
-                        result = self.signal_store_collection.insert_one(signal_store_doc)
-                        mathematricks_signal_id = result.inserted_id
+                        if is_exit_or_scale and parent_signal_id:
+                            # EXIT/SCALE: Find parent signal and append leg
+                            parent_doc = self.signal_store_collection.find_one({"base_signal_id": parent_signal_id})
 
-                        logger.info(f"📝 Created signal_store document: {mathematricks_signal_id} for signal {raw_signal_doc['signalID']}")
+                            if parent_doc:
+                                # Calculate leg index
+                                leg_index = len(parent_doc.get('legs', []))
+
+                                # Build leg data
+                                leg_data = self._build_leg_data(raw_signal_doc, signal_array, leg_index)
+
+                                # Append leg to parent document
+                                self.signal_store_collection.update_one(
+                                    {"_id": parent_doc['_id']},
+                                    {
+                                        "$push": {"legs": leg_data},
+                                        "$set": {"updated_at": datetime.datetime.utcnow()}
+                                    }
+                                )
+
+                                mathematricks_signal_id = parent_doc['_id']
+                                logger.info(f"📝 Appended {signal_type} leg to signal_store document: {mathematricks_signal_id}")
+                            else:
+                                logger.error(f"❌ Parent signal {parent_signal_id} not found for {signal_type} signal {raw_signal_doc['signalID']}")
+                                # Skip this signal
+                                continue
+                        else:
+                            # ENTRY: Create new signal document
+                            signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
+
+                            # Add first leg (the ENTRY leg)
+                            entry_leg = self._build_leg_data(raw_signal_doc, signal_array, 0)
+                            signal_store_doc['legs'] = [entry_leg]
+
+                            # Insert into signal_store
+                            result = self.signal_store_collection.insert_one(signal_store_doc)
+                            mathematricks_signal_id = result.inserted_id
+
+                            logger.info(f"📝 Created new signal_store document: {mathematricks_signal_id} for ENTRY signal {raw_signal_doc['signalID']}")
 
                         # UPDATE trading_signals_raw with link
                         self.mongodb_collection.update_one(

@@ -473,18 +473,18 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
         result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id)
         signals_sent += 1
 
-        # Capture ENTRY signal_store ID and register named variable
-        if signal_type == "ENTRY" and result and result.get("signal_store_id"):
-            entry_store_id = result["signal_store_id"]
+        # Capture ENTRY signal_id and register named variable
+        if signal_type == "ENTRY" and result and result.get("signal_id"):
+            entry_signal_id = result["signal_id"]  # This is the signalID string, NOT MongoDB ObjectId
 
             # Register named variable if provided (e.g., "$ENTRY_1")
             entry_name = signal_payload.get("entry_name")
             if entry_name:
-                entry_id_registry[entry_name] = entry_store_id
-                print(f"   ✓ Registered {entry_name} → {entry_store_id[:12]}...")
+                entry_id_registry[entry_name] = entry_signal_id
+                logger.info(f"   ✓ Registered {entry_name} → {entry_signal_id}")
 
             # Always keep $PREVIOUS for backward compatibility
-            entry_id_registry["$PREVIOUS"] = entry_store_id
+            entry_id_registry["$PREVIOUS"] = entry_signal_id
 
         # Pause and play mode: wait for user input after each signal
         if pause_and_play and i < len(ordered_signals):
@@ -711,18 +711,18 @@ See sample files in services/signal_ingestion/sample_signals/
             # Send signal (pass signal_type lowercase and resolved_entry_id)
             result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id)
 
-            # Capture ENTRY signal_store ID and register named variable
-            if signal_type == "ENTRY" and result and result.get("signal_store_id"):
-                entry_store_id = result["signal_store_id"]
+            # Capture ENTRY signal_id and register named variable
+            if signal_type == "ENTRY" and result and result.get("signal_id"):
+                entry_signal_id = result["signal_id"]  # This is the signalID string, NOT MongoDB ObjectId
 
                 # Register named variable if provided (e.g., "$ENTRY_1")
                 entry_name = signal_payload.get("entry_name")
                 if entry_name:
-                    entry_id_registry[entry_name] = entry_store_id
-                    print(f"✓ Registered {entry_name} → {entry_store_id[:12]}...")
+                    entry_id_registry[entry_name] = entry_signal_id
+                    print(f"✓ Registered {entry_name} → {entry_signal_id}")
 
                 # Always keep $PREVIOUS for backward compatibility
-                entry_id_registry["$PREVIOUS"] = entry_store_id
+                entry_id_registry["$PREVIOUS"] = entry_signal_id
 
             # Wait if specified
             wait_seconds = signal_payload.get("wait", 0)

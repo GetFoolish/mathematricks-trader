@@ -7,6 +7,9 @@ Clears:
 - signal_store
 - trading_orders
 
+Resets:
+- trading_accounts: balances reset to initial_equity, open_positions cleared
+
 Usage:
     python scripts/junk/clear_test_data.py
 """
@@ -45,6 +48,47 @@ def clear_test_data():
         before_count = db[coll_name].count_documents({})
         result = db[coll_name].delete_many({})
         print(f"  {coll_name}: deleted {result.deleted_count} documents (was {before_count})")
+
+    # Reset trading account balances to initial equity
+    print("\nResetting trading account balances...")
+    accounts = db['trading_accounts'].find({})
+    reset_count = 0
+    for account in accounts:
+        initial_equity = account.get('authentication_details', {}).get('initial_equity', 1000000.0)
+
+        # Reset balances to initial state
+        reset_balances = {
+            'equity': initial_equity,
+            'cash': initial_equity / 2,  # Half in cash
+            'cash_balance': initial_equity / 2,
+            'margin_used': 0.0,
+            'margin_available': initial_equity / 2,
+            'buying_power': initial_equity * 2,  # 2x leverage
+            'unrealized_pnl': 0.0,
+            'realized_pnl': 0.0,
+        }
+
+        db['trading_accounts'].update_one(
+            {'_id': account['_id']},
+            {
+                '$set': {
+                    'balances.equity': reset_balances['equity'],
+                    'balances.cash': reset_balances['cash'],
+                    'balances.cash_balance': reset_balances['cash_balance'],
+                    'balances.margin_used': reset_balances['margin_used'],
+                    'balances.margin_available': reset_balances['margin_available'],
+                    'balances.buying_power': reset_balances['buying_power'],
+                    'balances.unrealized_pnl': reset_balances['unrealized_pnl'],
+                    'balances.realized_pnl': reset_balances['realized_pnl'],
+                    'open_positions': []
+                }
+            }
+        )
+        reset_count += 1
+        print(f"  {account.get('account_id', account.get('_id'))}: reset to ${initial_equity:,.2f} equity")
+
+    if reset_count > 0:
+        print(f"  Total accounts reset: {reset_count}")
 
     # Restart execution-service to clear in-memory duplicate tracking
     print("\nRestarting execution-service to clear in-memory state...")

@@ -35,6 +35,7 @@ from precision_service import get_precision_service
 # Fund allocation logic imports
 from fund_allocation_logic import (
     get_active_allocations_for_strategy,
+    calculate_fund_equity,
     get_strategy_allocation_for_fund,
     get_available_accounts_for_strategy,
     distribute_capital_across_accounts
@@ -885,7 +886,7 @@ def check_and_cancel_pending_entry(signal: Dict[str, Any], signal_type_info: Dic
 
 def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) -> Optional[Dict[str, Any]]:
     """
-    Query signal_store for open entry signal (CONSOLIDATED SCHEMA v3)
+    Query signal_store for open entry signal
 
     Args:
         strategy_id: Strategy identifier
@@ -900,22 +901,26 @@ def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) ->
         # It's the ACTION that differs: ENTRY=BUY/SELL_SHORT, EXIT=SELL/BUY_TO_COVER
         entry_direction = direction
 
-        # CONSOLIDATED SCHEMA v3: Query for document with position.status = OPEN
-        # The document root has: strategy_id, instrument, position.status
-        # Each leg in legs[] has: decision.status, execution.status
+        # Try v2 schema first: raw.legs[].instrument, position.status, decision.status
         entry_signal = signal_store_collection.find_one({
             "strategy_id": strategy_id,
-            "instrument": instrument,
+            "raw.legs.instrument": instrument,
+            "raw.legs.direction": entry_direction,
             "position.status": "OPEN",
-            # Check that at least one leg has APPROVED decision and FILLED execution
-            "legs": {
-                "$elemMatch": {
-                    "leg_type": "ENTRY",
-                    "decision.status": {"$in": ["APPROVED", "RESIZE"]},
-                    "execution.status": "FILLED"
-                }
-            }
+            "decision.status": {"$in": ["APPROVED", "RESIZE"]},
+            "execution.status": "FILLED"
         })
+
+        # Fallback to v1 schema
+        if not entry_signal:
+            entry_signal = signal_store_collection.find_one({
+                "strategy_id": strategy_id,
+                "instrument": instrument,
+                "direction": entry_direction,
+                "position_status": "OPEN",
+                "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},
+                "execution.status": "FILLED"
+            })
 
         if entry_signal:
             logger.info(f"✅ Found open entry signal: {entry_signal.get('signal_id')} for {instrument} {entry_direction}")
@@ -1353,37 +1358,13 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     # Initialize signal processing logger on first signal
     signal_logger = get_signal_processing_logger()
 
-    # Extract raw signal data and legs based on schema version
-    # CONSOLIDATED SCHEMA (v3): legs at signal.legs[] with raw data at signal.legs[].raw
-    # OLD SCHEMA (v2): legs at signal.raw.legs[]
+    # Extract raw signal data (v2: signal.raw, v1: signal.signal_data or signal itself)
+    raw_obj = signal.get('raw', {})
+    raw_signal_id = str(raw_obj.get('_id')) if raw_obj.get('_id') else None  # For matching leg in consolidated schema
+    raw_signal = signal.get('signal_data', signal)  # v1 compatibility
 
-    # Try consolidated schema first: signal.legs[]
-    legs_array = signal.get('legs')  # Consolidated schema
-
-    if legs_array and isinstance(legs_array, list) and len(legs_array) > 0:
-        # CONSOLIDATED SCHEMA: Extract raw data and legs from first leg that needs processing
-        # Find first leg without decision (needs cerebro processing)
-        current_leg = None
-        for leg in legs_array:
-            if not leg.get('decision'):
-                current_leg = leg
-                break
-
-        if not current_leg:
-            logger.debug(f"All legs already have decisions, skipping signal {signal_id}")
-            return
-
-        # Extract raw data from the current leg
-        raw_obj = current_leg.get('raw', {})
-        raw_signal_id = str(raw_obj.get('_id')) if raw_obj.get('_id') else None
-        raw_signal = raw_obj  # For compatibility with code that uses raw_signal
-        legs = raw_obj.get('legs', [])  # The actual signal legs (BUY/SELL actions)
-    else:
-        # OLD SCHEMA (v2): signal.raw.legs or signal.signal_data
-        raw_obj = signal.get('raw', {})
-        raw_signal_id = str(raw_obj.get('_id')) if raw_obj.get('_id') else None
-        raw_signal = signal.get('signal_data', signal)  # v1 compatibility
-        legs = raw_obj.get('legs') or raw_signal.get('legs') or raw_signal.get('signal_legs') or raw_signal.get('signal')
+    # Extract legs (v2: raw.legs, v1: signal_data.legs/signal_legs/signal)
+    legs = raw_obj.get('legs') or raw_signal.get('legs') or raw_signal.get('signal_legs') or raw_signal.get('signal')
     if not legs or len(legs) == 0:
         logger.error(f"❌ No legs found in signal {signal_id} - cannot process")
         decision = build_decision_v2(
@@ -1391,15 +1372,11 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             reason="NO_LEGS_IN_SIGNAL",
             signal=signal
         )
-        update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
+        update_signal_store_with_decision(signal_store_id, decision)
         return
 
     # Build normalized signal from first leg (for compatibility with existing code)
     first_leg = legs[0]
-
-    # Get the signal-level leg_index from current_leg (for CONSOLIDATED schema)
-    signal_leg_index = current_leg.get('leg_index', 0) if 'current_leg' in locals() and current_leg else 0
-
     normalized_signal = {
         'signal_id': signal_id,
         'strategy_id': signal.get('strategy_id'),
@@ -1412,7 +1389,6 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         'price': first_leg.get('price'),
         'order_type': first_leg.get('order_type', 'MARKET'),
         'signal_type': raw_obj.get('signal_type') or raw_signal.get('signal_type'),
-        'signal_leg_index': signal_leg_index,  # Index of this leg in the signal_store legs[] array
         'entry_signal_id': raw_obj.get('entry_signal_id') or raw_signal.get('entry_signal_id'),
         'entry_name': raw_obj.get('entry_name'),
         'exit_name': raw_obj.get('exit_name'),
@@ -1433,7 +1409,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             reason="SLIPPAGE_EXCEEDED",
             signal=signal
         )
-        update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
+        update_signal_store_with_decision(signal_store_id, decision)
         logger.info(f"Signal {signal_id} rejected due to slippage")
         return
 
@@ -1448,7 +1424,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             reason="STRATEGY_NOT_FOUND",
             signal=signal
         )
-        update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
+        update_signal_store_with_decision(signal_store_id, decision)
         return
 
     # ============================================================================
@@ -1464,7 +1440,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             reason="NO_ACTIVE_ALLOCATIONS",
             signal=signal
         )
-        update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
+        update_signal_store_with_decision(signal_store_id, decision)
         return
     
     logger.info(f"📊 Found {len(active_allocations)} ACTIVE allocation(s) for strategy {strategy_id}")
@@ -1553,7 +1529,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 reason="ACCOUNT_STATE_UNAVAILABLE",
                 signal=signal
             )
-            update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
+            update_signal_store_with_decision(signal_store_id, decision)
             return
 
         # Step 3: Build context (raw_obj, raw_signal, legs, normalized_signal already extracted at function start)
@@ -1618,7 +1594,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     reason=f"No pending orders found to cancel for {instrument}",
                     signal=signal
                 )
-                update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
+                update_signal_store_with_decision(signal_store_id, decision)
                 return
 
             # Cancel all matching pending orders
@@ -1651,7 +1627,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 signal=signal
             )
             decision['cancelled_orders'] = cancelled_count
-            update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
+            update_signal_store_with_decision(signal_store_id, decision)
 
             logger.info(f"✅ CANCEL signal processed - cancelled {cancelled_count} order(s)")
             return  # Don't process CANCEL signal as a new order
@@ -1753,23 +1729,13 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                             reason=f"ENTRY_CANCELLED: Entry signal {cancelled_entry.get('signal_id')} was pending (not filled) - cancelled entry and rejected exit",
                             signal=signal
                         )
-                        update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
+                        update_signal_store_with_decision(signal_store_id, decision)
                         return
                     # If no pending entry found either, entry_signal remains None and will be rejected below
 
-            # Check for execution data - CONSOLIDATED SCHEMA v3: execution is in legs[].execution
-            if entry_signal:
-                # Find the ENTRY leg
-                entry_leg = None
-                for leg in entry_signal.get('legs', []):
-                    if leg.get('leg_type') == 'ENTRY':
-                        entry_leg = leg
-                        break
-
-                execution = entry_leg.get('execution', {}) if entry_leg else {}
-                entry_quantity_filled = execution.get('total_quantity_filled') or execution.get('quantity_filled')
-            else:
-                entry_quantity_filled = None
+            # Check for execution data - support v2 (total_quantity_filled) and v1 (quantity_filled)
+            execution = entry_signal.get('execution', {}) if entry_signal else {}
+            entry_quantity_filled = execution.get('total_quantity_filled') or execution.get('quantity_filled')
 
             if entry_signal and entry_quantity_filled:
 
@@ -1781,11 +1747,13 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 if is_multi_leg and legs:
                     logger.info(f"🔀 Multi-leg EXIT signal: Processing {len(legs)} legs")
 
-                    # Get leg_results from entry signal - CONSOLIDATED SCHEMA v3: decision is in legs[].decision
-                    # Find the ENTRY leg and get its decision
-                    entry_decision = entry_leg.get('decision', {}) if entry_leg else {}
-                    # Legs are directly on decision
+                    # Get leg_results from entry signal - support both v2 (decision.legs) and v1 (cerebro_decision)
+                    entry_decision = entry_signal.get('decision') or entry_signal.get('cerebro_decision', {})
+                    # v2: legs are directly on decision
                     entry_leg_results = entry_decision.get('legs', [])
+                    # v1 fallback: legs are in risk_assessment.metadata.leg_results
+                    if not entry_leg_results:
+                        entry_leg_results = entry_decision.get('risk_assessment', {}).get('metadata', {}).get('leg_results', [])
 
                     if entry_leg_results:
                         logger.info(f"✅ Found entry leg_results with {len(entry_leg_results)} legs")
@@ -2327,30 +2295,14 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         logger.warning(f"Leg {leg_index+1} quantity is 0 for account {target_account_name}, skipping")
                         continue
 
-                    # Generate unique order ID: signal_fund_account_signalleg_tradingleg
-                    # IMPORTANT: Include signal_leg_index to differentiate ENTRY/EXIT orders for same signal
-                    signal_leg_idx = normalized_signal.get('signal_leg_index', 0)
+                    # Generate unique order ID: signal_fund_account_leg
                     if len(leg_results) > 1:
-                        order_id = f"{signal_id}_{fund_id}_{target_account_name}_SL{signal_leg_idx}_TL{leg_index}_ORD"
+                        order_id = f"{signal_id}_{fund_id}_{target_account_name}_LEG{leg_index}_ORD"
                     else:
-                        order_id = f"{signal_id}_{fund_id}_{target_account_name}_SL{signal_leg_idx}_ORD"
+                        order_id = f"{signal_id}_{fund_id}_{target_account_name}_ORD"
 
                     # Get optional fields from raw_obj (v2) or first_leg (already in normalized)
                     first_leg = legs[0] if legs else {}
-
-                    # For EXIT signals, determine the closing action
-                    signal_type = normalized_signal.get('signal_type')
-                    order_direction = leg_result.get('direction')
-                    order_action = leg_result.get('action')
-
-                    # For EXIT signals, set action to close the position
-                    if signal_type in ['EXIT', 'SCALE_OUT']:
-                        # If direction is LONG, we SELL to close
-                        # If direction is SHORT, we BUY_TO_COVER to close
-                        if order_direction == 'LONG':
-                            order_action = 'SELL'
-                        elif order_direction == 'SHORT':
-                            order_action = 'BUY_TO_COVER'
 
                     trading_order = {
                         "order_id": order_id,
@@ -2362,10 +2314,9 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         "account": target_account_name,  # DEPRECATED: Keep for backward compatibility
                         "timestamp": datetime.utcnow(),
                         "instrument": leg_result.get('instrument'),
-                        "direction": order_direction,
-                        "action": order_action,
-                        "signal_type": signal_type,  # ENTRY or EXIT (for execution service)
-                        "side": "SELL" if signal_type in ['EXIT', 'SCALE_OUT'] else "BUY",  # Explicit side for execution service
+                        "direction": leg_result.get('direction'),
+                        "action": leg_result.get('action'),
+                        "signal_type": normalized_signal.get('signal_type'),  # ENTRY or EXIT (for execution service)
                         "order_type": leg_result.get('order_type', 'MARKET'),
                         "price": leg_result.get('price_used', 0),
                         "quantity": leg_quantity,
@@ -2462,33 +2413,23 @@ def watch_signals():
     logger.info("Starting MongoDB Change Stream watcher for signals...")
     
     # Watch for new signals in signal_store collection
-    # CONSOLIDATED SCHEMA v3: Watch for both 'insert' (new signals) and 'update' (new legs added)
     pipeline = [
         {
             '$match': {
-                'operationType': {'$in': ['insert', 'update']},
-                # Don't filter on cerebro_decision - we'll check legs array for unprocessed legs
+                'operationType': 'insert',
+                'fullDocument.cerebro_decision.status': {'$in': ['PENDING_PROCESSING', None]},
+                'fullDocument.status': {'$ne': 'REJECTED'}
             }
         }
     ]
     
     while True:
         try:
-            with signal_store_collection.watch(pipeline, full_document='updateLookup') as stream:
+            with signal_store_collection.watch(pipeline) as stream:
                 logger.info("✅ CerebroService listening for signals via MongoDB Change Streams...")
                 for change in stream:
                     try:
-                        # Get fullDocument - for updates, this requires full_document='updateLookup'
-                        signal_data = change.get('fullDocument')
-
-                        if not signal_data:
-                            # If fullDocument is not available, fetch it manually
-                            doc_id = change['documentKey']['_id']
-                            signal_data = signal_store_collection.find_one({'_id': doc_id})
-                            if not signal_data:
-                                logger.warning(f"Document not found for _id: {doc_id}")
-                                continue
-
+                        signal_data = change['fullDocument']
                         signal_id = signal_data.get('signal_id', 'UNKNOWN')
 
                         # Extract the _id from signal_store as mathematricks_signal_id
