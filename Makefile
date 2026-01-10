@@ -35,7 +35,7 @@ stop:
 
 restart:
 	@echo "Restarting services (excluding mongodb-init)..."
-	docker-compose restart cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend pubsub-emulator
+	docker-compose restart cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend
 
 status:
 	docker-compose ps
@@ -97,10 +97,17 @@ clean:
 	@sleep 5
 
 clean-old-logs:
-	@echo "Clearing Docker logs by restarting containers..."
-	@echo "Note: This preserves container state but clears log buffers"
-	docker-compose restart
-	@echo "✅ Logs cleared. Containers restarted with fresh log buffers."
+	@echo "Truncating Docker container logs (no restart needed)..."
+	@for container in $$(docker-compose ps -q 2>/dev/null); do \
+		log_path=$$(docker inspect $$container --format='{{.LogPath}}' 2>/dev/null); \
+		if [ -n "$$log_path" ] && [ -f "$$log_path" ]; then \
+			name=$$(docker inspect $$container --format='{{.Name}}' | sed 's/^\///'); \
+			size_before=$$(du -h "$$log_path" 2>/dev/null | cut -f1); \
+			sudo truncate -s 0 "$$log_path" 2>/dev/null && \
+			echo "  ✓ $$name: $$size_before -> 0"; \
+		fi; \
+	done
+	@echo "✅ Logs truncated. Containers still running."
 
 clean:
 	@echo "WARNING: This will remove all containers and volumes."

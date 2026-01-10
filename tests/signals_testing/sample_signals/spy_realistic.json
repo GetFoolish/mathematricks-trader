@@ -4,7 +4,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735987000,
     "signalID": "sig_spy_001",
-    "entry_name": "$ENTRY_1",
+    "entry_name": "$SPY_1",
     "account_equity": 528000,
     "signal_legs": [
       {
@@ -31,7 +31,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735987060,
     "signalID": "sig_spy_002",
-    "entry_name": "$ENTRY_2",
+    "entry_name": "$SPY_2",
     "account_equity": 283000,
     "signal_legs": [
       {
@@ -58,7 +58,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735987180,
     "signalID": "sig_spy_003",
-    "entry_signal_id": "$ENTRY_1",
+    "entry_signal_id": "$SPY_1",
     "account_equity": 792000,
     "signal_legs": [
       {
@@ -83,7 +83,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735987240,
     "signalID": "sig_spy_004",
-    "entry_signal_id": "$ENTRY_2",
+    "entry_signal_id": "$SPY_2",
     "account_equity": 139000,
     "signal_legs": [
       {
@@ -108,7 +108,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735987330,
     "signalID": "sig_spy_005",
-    "entry_name": "$ENTRY_3",
+    "entry_name": "$SPY_3",
     "account_equity": 309000,
     "signal_legs": [
       {
@@ -135,7 +135,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735987390,
     "signalID": "sig_spy_006",
-    "entry_name": "$ENTRY_4",
+    "entry_name": "$SPY_4",
     "account_equity": 114000,
     "signal_legs": [
       {
@@ -162,7 +162,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735987510,
     "signalID": "sig_spy_007",
-    "entry_signal_id": "$ENTRY_3",
+    "entry_signal_id": "$SPY_3",
     "account_equity": 143000,
     "signal_legs": [
       {
@@ -187,7 +187,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735987570,
     "signalID": "sig_spy_008",
-    "entry_signal_id": "$ENTRY_4",
+    "entry_signal_id": "$SPY_4",
     "account_equity": 315000,
     "signal_legs": [
       {
@@ -212,7 +212,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735987660,
     "signalID": "sig_spy_009",
-    "entry_name": "$ENTRY_5",
+    "entry_name": "$SPY_5",
     "account_equity": 493000,
     "signal_legs": [
       {
@@ -239,7 +239,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735987780,
     "signalID": "sig_spy_010",
-    "entry_signal_id": "$ENTRY_5",
+    "entry_signal_id": "$SPY_5",
     "account_equity": 417000,
     "signal_legs": [
       {

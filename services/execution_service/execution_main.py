@@ -195,7 +195,7 @@ def get_active_accounts_from_service() -> List[Dict[str, Any]]:
 def initialize_broker_pool():
     """
     Initialize broker pool by creating broker instances for all active accounts.
-    Falls back to single IBKR broker if AccountDataService unavailable.
+    Requires AccountDataService to provide accounts - no fallback broker created.
     """
     global broker_pool
 
@@ -205,22 +205,9 @@ def initialize_broker_pool():
     accounts = get_active_accounts_from_service()
 
     if not accounts:
-        # Fallback: Always create Mock broker (safer for testing and development)
-        logger.warning("No accounts from AccountDataService - creating Mock broker as fallback")
-        account_id = "Mock_Paper"
-        broker_config = {
-            "broker": "Mock",
-            "account_id": account_id,
-            "initial_equity": 1000000.0
-        }
-
-        try:
-            broker_instance = BrokerFactory.create_broker(broker_config)
-            broker_pool[account_id] = broker_instance
-            logger.info(f"✅ Created fallback Mock broker for account: {account_id}")
-        except Exception as e:
-            logger.error(f"❌ Failed to create fallback Mock broker: {str(e)}")
-
+        # No fallback - require AccountDataService to provide accounts
+        logger.warning("⚠️ No accounts from AccountDataService - broker pool will be empty")
+        logger.warning("⚠️ Execution service will not be able to execute orders until accounts are configured")
         return
 
     # Create broker instance for each active account
@@ -405,9 +392,169 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
 # No need for separate publishing functions - all data in signal_store and trading_orders
 
 
+def is_mock_broker(account_id: str) -> bool:
+    """
+    Check if account is a mock broker account.
+
+    Mock brokers need manual balance updates when trades close with P&L.
+    Real brokers handle this automatically and we fetch updated balances.
+    """
+    return 'MOCK' in account_id.upper() or account_id.startswith('Mock_')
+
+
+def update_mock_broker_balance(
+    account_id: str,
+    realized_pnl: float,
+    quantity_closed: float,
+    exit_price: float
+):
+    """
+    Update mock broker account balance after trade close.
+
+    For mock brokers:
+    - Add realized P&L to cash_balance
+    - Reduce margin_used (position closed, capital freed)
+    - Update equity
+
+    Real brokers handle this automatically via their APIs.
+
+    Args:
+        account_id: Mock broker account ID
+        realized_pnl: Net P&L from the trade (after commission)
+        quantity_closed: Quantity that was closed
+        exit_price: Exit price per unit
+    """
+    try:
+        account = trading_accounts_collection.find_one({"account_id": account_id})
+        if not account:
+            logger.warning(f"⚠️ Account {account_id} not found for balance update")
+            return
+
+        # Current balances (nested under 'balances' object)
+        balances = account.get('balances', {})
+        current_cash = balances.get('cash_balance', account.get('cash_balance', 0.0))
+        current_margin = balances.get('margin_used', account.get('margin_used', 0.0))
+        current_equity = balances.get('equity', account.get('equity', 0.0))
+
+        # Calculate updates
+        # Add realized P&L to cash
+        new_cash = current_cash + realized_pnl
+
+        # Reduce margin (freed up capital from closed position)
+        # Estimate margin as 10% of notional for futures/options
+        freed_margin = (quantity_closed * exit_price) * 0.10
+        new_margin = max(0.0, current_margin - freed_margin)
+
+        # Update equity (cash + unrealized P&L + margin)
+        new_equity = current_equity + realized_pnl
+
+        # Update account document (balances are nested under 'balances')
+        update_result = trading_accounts_collection.update_one(
+            {"account_id": account_id},
+            {
+                "$set": {
+                    "balances.cash_balance": new_cash,
+                    "balances.cash": new_cash,
+                    "balances.margin_used": new_margin,
+                    "balances.equity": new_equity,
+                    "balances.last_updated": datetime.utcnow()
+                }
+            }
+        )
+
+        if update_result.modified_count > 0:
+            logger.info(
+                f"✅ Updated mock broker {account_id} balance: "
+                f"Cash: ${current_cash:.2f} → ${new_cash:.2f} "
+                f"(+${realized_pnl:.2f} P&L), "
+                f"Equity: ${current_equity:.2f} → ${new_equity:.2f}"
+            )
+
+            # IMMEDIATELY update fund total_equity (Single Source of Truth)
+            fund_id = account.get('fund_id')
+            if fund_id:
+                update_fund_total_equity(fund_id)
+        else:
+            logger.warning(f"⚠️ No account balance updated for {account_id}")
+
+    except Exception as e:
+        logger.error(f"❌ Failed to update mock broker balance for {account_id}: {e}", exc_info=True)
+
+
+def update_fund_total_equity(fund_id: str) -> float:
+    """
+    Update funds.total_equity by summing all account equities for this fund.
+
+    THIS IS THE SINGLE SOURCE OF TRUTH for fund equity calculation.
+    Called immediately after any account balance change in Execution Service.
+
+    All other services (broker_poller, cerebro, dashboard) are READ-ONLY consumers.
+
+    Args:
+        fund_id: Fund ID to update
+
+    Returns:
+        Total equity across all accounts in the fund
+    """
+    try:
+        if not fund_id:
+            logger.warning("⚠️ No fund_id provided for equity update")
+            return 0.0
+
+        # Get all accounts for this fund
+        accounts = list(trading_accounts_collection.find(
+            {"fund_id": fund_id},
+            {"balances.equity": 1, "account_id": 1}
+        ))
+
+        if not accounts:
+            logger.warning(f"⚠️ No accounts found for fund {fund_id}")
+            return 0.0
+
+        # Sum equity across all accounts (from nested balances.equity)
+        total_equity = sum(
+            acc.get('balances', {}).get('equity', 0.0)
+            for acc in accounts
+        )
+
+        # Get funds collection
+        funds_collection = mongo_client['mathematricks_trading']['funds']
+
+        # Update fund document with new total_equity
+        update_result = funds_collection.update_one(
+            {"fund_id": fund_id},
+            {
+                "$set": {
+                    "total_equity": total_equity,
+                    "updated_at": datetime.utcnow()
+                }
+            },
+            upsert=True  # Create if doesn't exist
+        )
+
+        if update_result.modified_count > 0 or update_result.upserted_id:
+            logger.info(
+                f"💰 Updated fund {fund_id} total_equity: ${total_equity:,.2f} "
+                f"(from {len(accounts)} accounts)"
+            )
+        else:
+            logger.debug(f"Fund {fund_id} total_equity unchanged: ${total_equity:,.2f}")
+
+        return total_equity
+
+    except Exception as e:
+        logger.error(f"❌ Failed to update fund total_equity for {fund_id}: {e}", exc_info=True)
+        return 0.0
+
+
 def update_signal_store_with_execution(order_data: Dict[str, Any], execution_data: Dict[str, Any]):
     """
-    Update signal_store with execution results and calculate PnL for EXIT signals
+    Update signal_store with execution results and calculate PnL for EXIT signals.
+
+    CONSOLIDATED SCHEMA (v3):
+    - signal_store has ONE document per signal with legs[] array
+    - Each leg has its own execution data: legs[i].execution
+    - Position status calculated from ALL legs: position.status (PENDING → OPEN → PARTIAL → CLOSED)
 
     Args:
         order_data: Original order data from trading order
@@ -424,111 +571,267 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
 
         logger.debug(f"Updating signal_store for mathematricks_signal_id: {mathematricks_signal_id}")
 
-        # Use signal_type to determine ENTRY vs EXIT (not action, since action can be BUY/SELL for both)
+        # Use signal_type to determine ENTRY vs EXIT vs SCALE
         signal_type = order_data.get('signal_type') or 'ENTRY'
         signal_type = signal_type.upper()
-        is_exit = signal_type == 'EXIT'
+        is_exit_or_scale_out = signal_type in ['EXIT', 'SCALE_OUT']
+        signal_id = order_data.get('signal_id')  # Base signal ID for this leg
 
-        # Prepare execution update
-        execution_update = {
-            "execution": {
-                "order_id": order_data.get('order_id'),
-                "broker_order_id": execution_data.get('broker_order_id'),
-                "status": "FILLED",
-                "avg_fill_price": execution_data['avg_fill_price'],
-                "quantity_filled": execution_data['quantity_filled'],
-                "fills": execution_data.get('fills', []),
-                "filled_at": datetime.utcnow()
-            },
-            "updated_at": datetime.utcnow()
+        # Get the parent signal document (CONSOLIDATED SCHEMA)
+        signal_doc = signal_store_collection.find_one({"_id": ObjectId(mathematricks_signal_id)})
+        if not signal_doc:
+            logger.error(f"❌ Signal document {mathematricks_signal_id} not found")
+            return
+
+        # Find the leg matching this signal_id
+        legs = signal_doc.get('legs', [])
+        leg_index = None
+        current_leg = None
+
+        logger.debug(f"Looking for leg in signal document with {len(legs)} legs")
+        logger.debug(f"Looking for signal_type={signal_type}, raw_signal_mongodb_id={order_data.get('raw_signal_mongodb_id')}")
+
+        for idx, leg in enumerate(legs):
+            logger.debug(f"Leg {idx}: leg_type={leg.get('leg_type')}, raw._id={leg.get('raw', {}).get('_id')}")
+
+            if leg.get('raw', {}).get('_id') == order_data.get('raw_signal_mongodb_id'):
+                leg_index = idx
+                current_leg = leg
+                logger.debug(f"✅ Matched leg by raw._id at index {idx}")
+                break
+            # Fallback: match by leg_type if we can't find by _id
+            if leg_index is None and leg.get('leg_type') == signal_type:
+                if signal_type == 'ENTRY' or (is_exit_or_scale_out and idx > 0):
+                    leg_index = idx
+                    current_leg = leg
+                    logger.debug(f"✅ Matched leg by leg_type at index {idx}")
+                    break
+
+        if leg_index is None:
+            logger.error(f"❌ Could not find leg for signal_type={signal_type} in signal document")
+            logger.error(f"   Signal doc has {len(legs)} legs:")
+            for idx, leg in enumerate(legs):
+                logger.error(f"   Leg {idx}: type={leg.get('leg_type')}, leg_id={leg.get('leg_id')}")
+            return
+
+        # Build order document
+        order_doc = {
+            "order_id": order_data.get('order_id'),
+            "broker_order_id": execution_data.get('broker_order_id'),
+            "fund_id": order_data.get('fund_id'),
+            "account_id": order_data.get('account_id'),
+            "quantity_requested": order_data.get('quantity', 0),
+            "quantity_filled": execution_data['quantity_filled'],
+            "avg_fill_price": execution_data['avg_fill_price'],
+            "filled_at": datetime.utcnow(),
+            "fills": execution_data.get('fills', [])
         }
 
-        if not is_exit:
-            # ENTRY signal: Set position_status to OPEN
-            execution_update["position_status"] = "OPEN"
-            execution_update["execution"]["total_cost_basis"] = (
-                execution_data['avg_fill_price'] * execution_data['quantity_filled']
-            )
+        # Build/update execution for this leg
+        existing_leg_execution = current_leg.get('execution')
+        if existing_leg_execution and existing_leg_execution.get('orders'):
+            # Append to existing orders
+            existing_orders = existing_leg_execution.get('orders', [])
+            existing_orders.append(order_doc)
+            total_filled = sum(o.get('quantity_filled', 0) for o in existing_orders)
+            total_value = sum(o.get('quantity_filled', 0) * o.get('avg_fill_price', 0) for o in existing_orders)
+            weighted_avg = total_value / total_filled if total_filled > 0 else 0
 
-            # Update signal_store
-            result = signal_store_collection.update_one(
-                {"_id": ObjectId(mathematricks_signal_id)},
-                {"$set": execution_update}
-            )
-            if result.matched_count > 0:
-                logger.info(f"✅ Updated signal_store {mathematricks_signal_id} with ENTRY execution (position OPEN)")
-            else:
-                logger.error(f"❌ Failed to update signal_store - signal {mathematricks_signal_id} not found in database")
-
+            leg_execution = {
+                "status": "FILLED",
+                "orders": existing_orders,
+                "total_quantity_filled": total_filled,
+                "weighted_avg_price": weighted_avg,
+                "total_cost_basis": total_value if not is_exit_or_scale_out else None,
+                "total_proceeds": total_value if is_exit_or_scale_out else None
+            }
         else:
-            # EXIT signal: Calculate PnL and update entry signal
-            entry_signal_id = order_data.get('entry_signal_id')
-            if not entry_signal_id:
-                logger.warning("⚠️ EXIT signal missing entry_signal_id - cannot calculate PnL")
-                # Still update this exit signal
-                signal_store_collection.update_one(
-                    {"_id": ObjectId(mathematricks_signal_id)},
-                    {"$set": execution_update}
-                )
-                return
-
-            # Get entry signal
-            entry_signal = signal_store_collection.find_one({"_id": ObjectId(entry_signal_id)})
-            if not entry_signal or not entry_signal.get('execution'):
-                logger.error(f"❌ Entry signal {entry_signal_id} not found or has no execution data")
-                return
-
-            # Calculate PnL
-            entry_price = entry_signal['execution']['avg_fill_price']
-            exit_price = execution_data['avg_fill_price']
-            quantity = execution_data['quantity_filled']
-
-            gross_pnl = (exit_price - entry_price) * quantity
-            commission = execution_data.get('commission', 0)  # TODO: Get actual commissions
-            net_pnl = gross_pnl - commission
-
-            entry_cost_basis = entry_signal['execution'].get('total_cost_basis', entry_price * quantity)
-            pnl_percent = (net_pnl / entry_cost_basis) * 100 if entry_cost_basis > 0 else 0
-
-            holding_period_seconds = (
-                datetime.utcnow() - entry_signal['execution']['filled_at']
-            ).total_seconds()
-
-            # Prepare PnL data
-            pnl_data = {
-                "gross_pnl": gross_pnl,
-                "commission": commission,
-                "net_pnl": net_pnl,
-                "pnl_percent": pnl_percent,
-                "holding_period_seconds": holding_period_seconds
+            # First order for this leg
+            total_value = execution_data['quantity_filled'] * execution_data['avg_fill_price']
+            leg_execution = {
+                "status": "FILLED",
+                "orders": [order_doc],
+                "total_quantity_filled": execution_data['quantity_filled'],
+                "weighted_avg_price": execution_data['avg_fill_price'],
+                "total_cost_basis": total_value if not is_exit_or_scale_out else None,
+                "total_proceeds": total_value if is_exit_or_scale_out else None
             }
 
-            execution_update["pnl"] = pnl_data
+        # Update the specific leg's execution using positional operator
+        signal_store_collection.update_one(
+            {
+                "_id": ObjectId(mathematricks_signal_id),
+                f"legs.{leg_index}.leg_id": current_leg['leg_id']
+            },
+            {
+                "$set": {
+                    f"legs.{leg_index}.execution": leg_execution,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
 
-            # Update EXIT signal
+        logger.debug(f"✅ Updated leg {leg_index} ({signal_type}) with execution data")
+
+        # Now calculate position status based on ALL legs
+        # Refresh the document to get updated legs
+        signal_doc = signal_store_collection.find_one({"_id": ObjectId(mathematricks_signal_id)})
+        legs = signal_doc.get('legs', [])
+
+        # Find ENTRY leg and calculate quantities
+        entry_leg = next((leg for leg in legs if leg.get('leg_type') == 'ENTRY'), None)
+        if not entry_leg or not entry_leg.get('execution'):
+            logger.warning(f"⚠️ ENTRY leg not yet executed, skipping position status update")
+            return
+
+        entry_execution = entry_leg['execution']
+        entry_quantity = entry_execution.get('total_quantity_filled', 0)
+        entry_price = entry_execution.get('weighted_avg_price', 0)
+        entry_cost_basis = entry_execution.get('total_cost_basis', entry_price * entry_quantity)
+
+        # Get entry filled_at
+        entry_filled_at = entry_execution['orders'][0].get('filled_at') if entry_execution.get('orders') else None
+        holding_seconds = (datetime.utcnow() - entry_filled_at).total_seconds() if entry_filled_at else 0
+
+        # Calculate total exit quantity from ALL exit/scale_out legs
+        total_exit_quantity = 0
+        cumulative_gross_pnl = 0
+        cumulative_net_pnl = 0
+        cumulative_commission = 0
+
+        exit_legs = [leg for leg in legs if leg.get('leg_type') in ['EXIT', 'SCALE_OUT']]
+        for exit_leg in exit_legs:
+            if exit_leg.get('execution'):
+                exit_exec = exit_leg['execution']
+                exit_qty = exit_exec.get('total_quantity_filled', 0)
+                exit_price_leg = exit_exec.get('weighted_avg_price', 0)
+
+                total_exit_quantity += exit_qty
+
+                # Calculate P&L for this exit leg
+                gross_pnl = (exit_price_leg - entry_price) * exit_qty
+                commission = sum(o.get('commission', 0) for o in exit_exec.get('orders', []))
+                net_pnl = gross_pnl - commission
+
+                cumulative_gross_pnl += gross_pnl
+                cumulative_net_pnl += net_pnl
+                cumulative_commission += commission
+
+        # Determine position status
+        remaining_quantity = entry_quantity - total_exit_quantity
+        partial_exit_count = len(exit_legs)
+
+        if total_exit_quantity >= entry_quantity:
+            # Position fully closed
+            position_status = "CLOSED"
+            cumulative_pnl_percent = (cumulative_net_pnl / entry_cost_basis) * 100 if entry_cost_basis > 0 else 0
+
+            cumulative_pnl_data = {
+                "gross": cumulative_gross_pnl,
+                "net": cumulative_net_pnl,
+                "percent": cumulative_pnl_percent,
+                "commission": cumulative_commission,
+                "holding_seconds": holding_seconds
+            }
+
+            # Update position status
             signal_store_collection.update_one(
                 {"_id": ObjectId(mathematricks_signal_id)},
-                {"$set": execution_update}
-            )
-
-            # Update ENTRY signal: add to exit_signals array and set CLOSED
-            signal_store_collection.update_one(
-                {"_id": ObjectId(entry_signal_id)},
                 {
-                    "$push": {"exit_signals": ObjectId(mathematricks_signal_id)},
                     "$set": {
-                        "position_status": "CLOSED",
-                        "pnl_realized": net_pnl,
-                        "closed_at": datetime.utcnow(),
+                        "position.status": "CLOSED",
+                        "position.closed_at": datetime.utcnow(),
+                        "position.pnl": cumulative_pnl_data,
+                        "position.partial_exit_count": partial_exit_count,
+                        "position.remaining_quantity": 0,
+                        "position.entry_quantity": entry_quantity,
+                        "position.exit_quantity": total_exit_quantity,
                         "updated_at": datetime.utcnow()
                     }
                 }
             )
 
-            logger.debug(f"Updated signal_store with EXIT execution and PnL")
-            logger.debug(f"Entry signal: {entry_signal['signal_id']} → position CLOSED")
-            logger.debug(f"Exit signal: {order_data.get('signal_id')}")
-            logger.debug(f"Gross P&L: ${gross_pnl:.2f} | Net P&L: ${net_pnl:.2f} ({pnl_percent:.2f}%)")
+            logger.debug(f"✅ Position CLOSED: {partial_exit_count} exits, {total_exit_quantity}/{entry_quantity}, P&L: ${cumulative_net_pnl:.2f}")
+
+        elif total_exit_quantity > 0:
+            # Partial exit
+            position_status = "PARTIAL"
+            cumulative_pnl_percent = (cumulative_net_pnl / entry_cost_basis) * 100 if entry_cost_basis > 0 else 0
+
+            cumulative_pnl_data = {
+                "gross": cumulative_gross_pnl,
+                "net": cumulative_net_pnl,
+                "percent": cumulative_pnl_percent,
+                "commission": cumulative_commission,
+                "holding_seconds": holding_seconds
+            }
+
+            # Update position status
+            signal_store_collection.update_one(
+                {"_id": ObjectId(mathematricks_signal_id)},
+                {
+                    "$set": {
+                        "position.status": "PARTIAL",
+                        "position.pnl": cumulative_pnl_data,
+                        "position.partial_exit_count": partial_exit_count,
+                        "position.remaining_quantity": remaining_quantity,
+                        "position.entry_quantity": entry_quantity,
+                        "position.exit_quantity": total_exit_quantity,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+
+            logger.debug(f"✅ Position PARTIAL: {partial_exit_count} exits, {total_exit_quantity}/{entry_quantity} exited, {remaining_quantity} remaining, P&L: ${cumulative_net_pnl:.2f}")
+
+        else:
+            # Only ENTRY executed, no exits yet
+            position_status = "OPEN"
+
+            signal_store_collection.update_one(
+                {"_id": ObjectId(mathematricks_signal_id)},
+                {
+                    "$set": {
+                        "position.status": "OPEN",
+                        "position.opened_at": entry_filled_at or datetime.utcnow(),
+                        "position.entry_quantity": entry_quantity,
+                        "position.exit_quantity": 0,
+                        "position.remaining_quantity": entry_quantity,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+
+            logger.debug(f"✅ Position OPEN: Entry executed with {entry_quantity} quantity")
+
+        # Update mock broker balance if this was an exit
+        if is_exit_or_scale_out and cumulative_net_pnl != 0:
+            account_id = order_data.get('account_id')
+            if account_id and is_mock_broker(account_id):
+                # Get THIS account's specific order data from the exit leg
+                current_exit_leg = legs[leg_index]
+                if current_exit_leg.get('execution'):
+                    # Find the specific order for this account (not total leg quantity)
+                    account_order = None
+                    for order in current_exit_leg['execution'].get('orders', []):
+                        if order.get('account_id') == account_id:
+                            account_order = order
+                            break
+
+                    if account_order:
+                        this_exit_qty = account_order.get('quantity_filled', 0)
+                        this_exit_price = account_order.get('avg_fill_price', 0)
+
+                        # Find THIS account's entry price from the ENTRY leg
+                        account_entry_price = entry_price  # Default to consolidated price
+                        if entry_leg and entry_leg.get('execution'):
+                            for entry_order in entry_leg['execution'].get('orders', []):
+                                if entry_order.get('account_id') == account_id:
+                                    account_entry_price = entry_order.get('avg_fill_price', entry_price)
+                                    break
+
+                        this_exit_pnl = (this_exit_price - account_entry_price) * this_exit_qty
+                        update_mock_broker_balance(account_id, this_exit_pnl, this_exit_qty, this_exit_price)
 
     except Exception as e:
         logger.error(f"❌ Error updating signal_store with execution: {e}", exc_info=True)

@@ -1,0 +1,12 @@
+{
+  "run_id": "test_run_20260109_221455",
+  "timestamp": "2026-01-09T22:14:55.099536+00:00",
+  "folder": "tests/signals_testing/sample_signals",
+  "seed": 1,
+  "delay": 10,
+  "status": "success",
+  "signals_sent": 30,
+  "duration_seconds": 301.21459197998047,
+  "start_time": "2026-01-09T22:14:55.099536+00:00",
+  "end_time": "2026-01-09T22:19:56.314187+00:00"
+}

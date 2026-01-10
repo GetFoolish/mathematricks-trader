@@ -1,517 +1,779 @@
 # Cerebro Service
 
+The Cerebro Service is the intelligent position sizing and portfolio management engine of the Mathematricks Trading System. It determines optimal position sizes based on fund allocations, validates margin requirements, and routes orders to appropriate trading accounts.
+
+## Table of Contents
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Key Components](#key-components)
+- [Position Sizing Logic](#position-sizing-logic)
+- [Fund Architecture](#fund-architecture)
+- [Account Routing](#account-routing)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Monitoring](#monitoring)
+
+---
+
 ## Overview
 
-The Cerebro Service is the intelligent decision-making engine of the Mathematricks Trader system. It processes trading signals, performs risk analysis, calculates optimal position sizes, enforces margin constraints, and determines the final order quantities to be executed.
+### Purpose
+- **Position Sizing**: Calculate optimal position sizes based on portfolio allocations
+- **Fund Management**: Support multi-fund architecture with percentage-based allocations
+- **Risk Management**: Validate margin requirements and prevent over-leveraging
+- **Account Routing**: Intelligently distribute orders across compatible trading accounts
+- **Decision Recording**: Update signal_store with cerebro decision data
 
-## Location
+### Technology Stack
+- **Python 3.11+**
+- **PyMongo** (MongoDB Change Streams)
+- **FastAPI** client (Account Data Service communication)
+- **Docker** (containerization)
 
-`/services/cerebro_service/`
-
-## Key Responsibilities
-
-1. Receive standardized signals from Signal Ingestion Service
-2. Query Account Data Service for current account state
-3. Analyze signals and determine ENTRY vs EXIT actions
-4. Check for conflicting open positions
-5. Calculate margin requirements for proposed trades
-6. Apply position sizing algorithms with risk constraints
-7. Enforce 30% slippage rule for margin safety
-8. Generate trading order decisions
-9. Publish orders to Execution Service
-10. Store all decisions in MongoDB for audit trail
-
-## Main Files
-
-### cerebro_main.py (97KB)
-- Pub/Sub subscriber for signals
-- Main orchestration and decision logic
-- Position sizing algorithms
-- Margin constraint enforcement
-- Order generation
-
-### position_manager.py
-- Tracks open positions by strategy and account
-- Manages deployed capital
-- Calculates position PnL
-- Provides position lookups
-
-### broker_adapter.py
-- Abstraction layer for broker interactions
-- Queries account balances and positions
-- Performs margin impact calculations
-- Handles broker API differences
-
-### precision_service.py
-- Broker-specific quantity rounding
-- Ensures order quantities meet broker requirements
-- Handles lot sizes, tick sizes, minimum quantities
-- Supports stocks, futures, options, forex, crypto
-
-### margin_calculation/
-Folder containing asset-class-specific margin calculators
-
-## Key Classes
-
-### PositionManager
-Manages position tracking:
-- `get_open_position(strategy, symbol)` - Retrieve current position
-- `add_position(position)` - Record new position
-- `update_position(position_id, updates)` - Update existing position
-- `close_position(position_id)` - Mark position as closed
-- `get_deployed_capital(strategy)` - Calculate capital in use
-
-### CerebroBrokerAdapter
-Broker communication layer:
-- `get_account_state(account_name)` - Fetch balances and positions
-- `get_margin_available()` - Query available margin
-- `preview_margin_impact(order)` - Calculate margin requirement
-- `validate_order(order)` - Pre-execution validation
-
-### MarginCalculatorFactory
-Creates asset-class-specific calculators:
-- `create(asset_class)` - Returns appropriate calculator
-- Supported classes: STOCK, FUTURE, CRYPTO, OPTION, FOREX
-
-## Signal Processing Workflow
-
+### Location
 ```
-1. Receive Signal from Pub/Sub
-   ↓
-2. Query Account Data Service
-   - Get current balances
-   - Get open positions
-   - Get available margin
-   ↓
-3. Analyze Signal
-   - Determine ENTRY or EXIT
-   - Check for conflicts
-   - Validate signal structure
-   ↓
-4. Calculate Margin Requirement
-   - Use MarginCalculatorFactory
-   - Asset-class specific calculation
-   - Apply broker rules
-   ↓
-5. Position Sizing
-   - Apply 30% slippage rule
-   - Check margin constraints
-   - Apply max position size limits
-   - Calculate final quantity
-   ↓
-6. Generate Decision
-   - APPROVED or REJECTED
-   - Final quantity and price
-   - Rationale/notes
-   ↓
-7. Publish to Execution Service
-   - Pub/Sub: trading-orders topic
-   ↓
-8. Store Decision in MongoDB
-   - Update signal_store collection
-   - Audit trail
+services/cerebro_service/
+├── cerebro_main.py              # Main entry point with Change Stream watcher
+├── position_sizing.py           # Core position sizing logic
+├── fund_allocation_logic.py     # Fund-based capital allocation
+├── broker_adapter.py            # Margin calculation via broker API
+├── precision_service.py         # Instrument-specific rounding
+├── position_manager.py          # Position tracking
+├── portfolio_constructor/       # Portfolio optimization strategies
+│   ├── max_cagr.py
+│   └── max_hybrid.py
+└── margin_calculation/          # Broker-specific margin calculators
+    ├── ibkr_margin.py
+    └── zerodha_margin.py
 ```
 
-## Margin Calculation
+---
 
-### Base Margin Calculator
-Location: `margin_calculation/base.py`
+## Architecture
 
-Abstract base class:
+### Service Model
+The Cerebro Service operates as a **MongoDB Change Stream watcher** that:
+
+1. Watches `signal_store` collection for new legs without cerebro decisions
+2. Retrieves fund allocation percentages from `portfolio_allocations`
+3. Calculates position sizes based on strategy allocation
+4. Validates margin requirements via Account Data Service
+5. Creates orders in `trading_orders` collection
+6. Updates `signal_store.legs[].decision` field with cerebro data
+
+### Design Philosophy
+- **Fund-First**: All capital allocation starts at the fund level
+- **Strategy-Based**: Each strategy gets a percentage of fund equity
+- **Account-Agnostic**: Capital distributed across accounts automatically
+- **Risk-Aware**: Margin validation prevents over-leveraging
+- **Deterministic**: Same inputs always produce same position sizes
+
+---
+
+## Key Components
+
+### 1. `cerebro_main.py`
+**Main service orchestrator with MongoDB Change Stream watching**
+
+**Key Functions**:
 ```python
-class MarginCalculator(ABC):
-    @abstractmethod
-    def calculate_margin_requirement(
-        self,
-        symbol: str,
-        quantity: int,
-        price: float,
-        side: str
-    ) -> float:
-        pass
+def watch_signal_store():
+    """
+    Watch signal_store for new legs needing cerebro decisions
+
+    Pipeline:
+    - Match documents where legs[].decision is null
+    - Process each leg sequentially
+    - Calculate position size
+    - Create trading orders
+    - Update signal_store with decision data
+    """
 ```
 
-### Stock Margin Calculator
-Location: `margin_calculation/stock.py`
-
-- Standard margin: 50% (2x leverage)
-- Calculation: `position_value * 0.5`
-- No day trading margin implemented yet
-
-### Future Margin Calculator
-Location: `margin_calculation/future.py`
-
-- Broker-specific initial margin
-- Queries broker for contract specifications
-- Maintenance margin tracking
-- Handles various contract multipliers
-
-### Crypto Margin Calculator
-Location: `margin_calculation/crypto.py`
-
-- Collateral-based margin (IBKR specific)
-- Uses `cashQty` for crypto orders
-- Different rules for BTC, ETH, altcoins
-- No leverage for most crypto pairs
-
-### Forex Margin Calculator
-Location: `margin_calculation/forex.py`
-
-- Percentage-based margin
-- Typically 2-5% of notional value
-- Currency pair specific
-- Handles cross-currency calculations
-
-### Option Margin Calculator
-Location: `margin_calculation/option.py`
-
-- Portfolio margin approach
-- SPAN margin for IBKR
-- Considers strategy type (covered, naked, spreads)
-- Complex calculation with Greeks
-
-## Position Sizing Algorithm
-
-### 30% Slippage Rule
-Cerebro applies a conservative 30% buffer to margin calculations:
+**Change Stream Pipeline**:
 ```python
-max_position_value = margin_available / (margin_requirement * 1.3)
+pipeline = [
+    {
+        "$match": {
+            "operationType": {"$in": ["insert", "update"]},
+            "fullDocument.legs": {
+                "$elemMatch": {"decision": None}  # Find legs without decisions
+            }
+        }
+    }
+]
 ```
 
-This ensures:
-- Protection against sudden price moves
-- Margin buffer for existing positions
-- Prevents margin calls
+---
 
-### Max Position Size Constraint
-From environment variable `MAX_POSITION_SIZE_PCT` (default: 10%):
+### 2. `position_sizing.py`
+**Core position sizing calculation logic**
+
+**Main Function**:
 ```python
-max_position_value = min(
-    max_position_value,
-    total_equity * (MAX_POSITION_SIZE_PCT / 100)
-)
+def calculate_position_size(
+    signal_id: str,
+    strategy_id: str,
+    instrument: str,
+    raw_quantity: int,
+    signal_price: float,
+    fund_id: str
+) -> dict:
+    """
+    Calculate cerebro position size based on fund allocation
+
+    Steps:
+    1. Get fund's total equity from trading_accounts
+    2. Retrieve strategy allocation % from portfolio_allocations
+    3. Calculate allocated capital = fund_equity * allocation_%
+    4. Determine position size based on signal and allocation
+    5. Round to instrument-specific lot sizes
+    6. Validate margin requirements
+    7. Distribute across compatible accounts
+
+    Returns:
+        {
+            "strategy_allocation": 0.15,           # 15% of fund
+            "allocated_capital": 150000.00,        # $150k allocated
+            "cerebro_quantity": 300,               # Calculated quantity
+            "accounts": [                          # Account distribution
+                {"account_id": "OANDA_MOCK", "quantity": 150, "fund_id": "fund_001"},
+                {"account_id": "VANTAGE_MOCK", "quantity": 150, "fund_id": "fund_001"}
+            ],
+            "margin_required": 30000.00,
+            "cerebro_timestamp": "2024-01-09T12:00:05Z"
+        }
+    """
 ```
 
-### Final Quantity Calculation
+**Position Sizing Formula**:
 ```python
-final_quantity = floor(max_position_value / current_price)
-final_quantity = apply_broker_precision(final_quantity, symbol, broker)
+# 1. Get fund equity
+fund_equity = sum(account.equity for account in fund_accounts)
+
+# 2. Get strategy allocation percentage
+allocation = get_active_allocation(fund_id, strategy_id)  # e.g., 0.15 = 15%
+
+# 3. Calculate allocated capital
+allocated_capital = fund_equity * allocation
+
+# 4. Calculate position size
+# Method A: Price-based sizing
+cerebro_quantity = allocated_capital / signal_price
+
+# Method B: Quantity scaling (if raw quantity provided)
+scaling_factor = allocated_capital / signal_account_equity
+cerebro_quantity = raw_quantity * scaling_factor
+
+# 5. Round to lot size
+cerebro_quantity = round_to_lot_size(cerebro_quantity, instrument)
+
+# 6. Distribute across accounts
+account_distribution = distribute_across_accounts(cerebro_quantity, strategy_id, fund_id)
 ```
 
-## MongoDB Collections
+---
 
-### signal_store (Read/Write)
-Cerebro updates with its decision:
+### 3. `fund_allocation_logic.py`
+**Fund-based capital allocation retrieval**
+
+**Key Functions**:
+
+#### `get_active_allocation()`
+```python
+def get_active_allocation(fund_id: str, strategy_id: str) -> float:
+    """
+    Get active allocation percentage for strategy within fund
+
+    Query:
+    - Find portfolio_allocations document with status=ACTIVE for fund_id
+    - Extract allocations[strategy_id] percentage
+    - Return as decimal (0.15 = 15%)
+
+    Example:
+    {
+        "fund_id": "fund_001",
+        "status": "ACTIVE",
+        "allocations": {
+            "SPY": 0.20,           # 20%
+            "TLT": 0.15,           # 15%
+            "Com1-Met": 0.10       # 10%
+        }
+    }
+
+    Returns:
+        0.15  # 15% allocation for Com1-Met strategy
+    """
+```
+
+#### `get_fund_equity()`
+```python
+def get_fund_equity(fund_id: str) -> float:
+    """
+    Calculate total fund equity across all accounts
+
+    Query:
+    - Find all trading_accounts where fund_id matches
+    - Sum account.balances.equity for each account
+
+    Example:
+    fund_001 has 3 accounts:
+    - OANDA_MOCK: $500,000
+    - VANTAGE_MOCK: $300,000
+    - IBKR_LIVE: $200,000
+    Total fund equity: $1,000,000
+
+    Returns:
+        1000000.00
+    """
+```
+
+---
+
+### 4. `broker_adapter.py`
+**Margin calculation via broker APIs**
+
+**Key Functions**:
+
+#### `calculate_margin_requirement()`
+```python
+def calculate_margin_requirement(
+    account_id: str,
+    instrument: str,
+    quantity: int,
+    price: float,
+    order_type: str = "MARKET"
+) -> float:
+    """
+    Calculate margin required for position via broker API
+
+    Steps:
+    1. Determine broker type (IBKR/Zerodha/Mock)
+    2. Query Account Data Service for margin preview
+    3. Return margin requirement
+
+    API Call:
+    POST /accounts/margin-preview
+    {
+        "account_id": "OANDA_MOCK",
+        "instrument": "SPY",
+        "quantity": 100,
+        "price": 450.25,
+        "order_type": "MARKET"
+    }
+
+    Returns:
+        9005.00  # $9,005 margin required
+    """
+```
+
+---
+
+### 5. `precision_service.py`
+**Instrument-specific quantity rounding**
+
+**Purpose**: Different instruments have different lot sizes and precision requirements
+
+**Examples**:
+```python
+# Stocks: Round to nearest whole share
+round_to_lot_size(100.7, "AAPL") → 101
+
+# Futures: Round to contract lot sizes
+round_to_lot_size(3.2, "ES")  → 3   # E-mini S&P 500 contracts
+round_to_lot_size(4.8, "GC")  → 5   # Gold futures contracts
+
+# Forex: Round to micro lots
+round_to_lot_size(0.15, "EUR/USD") → 0.1  # 10,000 units
+
+# Options: Round to whole contracts
+round_to_lot_size(7.3, "SPX_C_4500") → 7  # Option contracts
+```
+
+**Implementation**:
+```python
+LOT_SIZES = {
+    "STOCK": 1,           # Whole shares
+    "FUTURE": 1,          # Whole contracts
+    "FOREX": 0.01,        # Micro lots (1,000 units)
+    "OPTION": 1,          # Whole contracts
+    "CRYPTO": 0.00000001  # Satoshi for BTC
+}
+
+def round_to_lot_size(quantity: float, instrument: str) -> int:
+    instrument_type = get_instrument_type(instrument)
+    lot_size = LOT_SIZES.get(instrument_type, 1)
+    return round(quantity / lot_size) * lot_size
+```
+
+---
+
+### 6. `position_manager.py`
+**Position tracking and aggregation**
+
+**Key Functions**:
+
+#### `get_open_positions()`
+```python
+def get_open_positions(account_id: str, instrument: str = None) -> list:
+    """
+    Get open positions for account, optionally filtered by instrument
+
+    Query:
+    - Find trading_accounts document by account_id
+    - Return open_positions[] array
+    - Filter by instrument if specified
+
+    Returns:
+        [
+            {
+                "instrument": "SPY",
+                "quantity": 100,
+                "avg_entry_price": 450.25,
+                "current_price": 455.50,
+                "unrealized_pnl": 525.00
+            }
+        ]
+    """
+```
+
+#### `update_position_tracking()`
+```python
+def update_position_tracking(
+    account_id: str,
+    instrument: str,
+    quantity_change: int,
+    price: float
+):
+    """
+    Update account's open_positions array
+
+    ENTRY (quantity_change > 0):
+    - Add new position or increase existing position
+    - Update avg_entry_price using weighted average
+
+    EXIT (quantity_change < 0):
+    - Decrease position or remove if fully closed
+    - Calculate realized P&L
+    - Update account.balances.realized_pnl
+    """
+```
+
+---
+
+## Position Sizing Logic
+
+### Calculation Flow
+
+```
+1. SIGNAL ARRIVES
+   ↓
+   Raw Signal: SPY ENTRY, Qty=100, Price=$450, Strategy Equity=$50k
+
+2. GET FUND EQUITY
+   ↓
+   Query trading_accounts where fund_id="fund_001"
+   Total Fund Equity = $1,000,000
+
+3. GET STRATEGY ALLOCATION
+   ↓
+   Query portfolio_allocations (status=ACTIVE)
+   SPY Strategy Allocation = 15%
+
+4. CALCULATE ALLOCATED CAPITAL
+   ↓
+   Allocated Capital = $1,000,000 × 0.15 = $150,000
+
+5. DETERMINE POSITION SIZE
+   ↓
+   Method: Scale raw quantity by capital ratio
+   Scaling Factor = $150,000 / $50,000 = 3.0
+   Cerebro Quantity = 100 × 3.0 = 300 shares
+
+6. VALIDATE MARGIN
+   ↓
+   Call Account Data Service: /accounts/margin-preview
+   Margin Required = $60,000 (assuming 50% margin)
+   Available Margin = $500,000 ✓ (sufficient)
+
+7. DISTRIBUTE ACROSS ACCOUNTS
+   ↓
+   Find accounts with fund_id="fund_001" and asset_class="EQUITY"
+   - OANDA_MOCK: 150 shares
+   - VANTAGE_MOCK: 150 shares
+   Total: 300 shares
+
+8. CREATE ORDERS
+   ↓
+   Insert into trading_orders collection:
+   - Order 1: OANDA_MOCK, 150 shares, PENDING
+   - Order 2: VANTAGE_MOCK, 150 shares, PENDING
+
+9. UPDATE SIGNAL_STORE
+   ↓
+   Update signal_store.legs[0].decision:
+   {
+       "strategy_allocation": 0.15,
+       "allocated_capital": 150000.00,
+       "cerebro_quantity": 300,
+       "legs": [
+           {"account_id": "OANDA_MOCK", "quantity": 150},
+           {"account_id": "VANTAGE_MOCK", "quantity": 150}
+       ]
+   }
+```
+
+---
+
+## Fund Architecture
+
+### Fund Structure (v5)
+
+The system supports a **multi-fund architecture** where:
+
+1. **Funds** are top-level entities that own multiple accounts
+2. **Accounts** belong to exactly one fund
+3. **Strategies** are allocated a percentage of fund equity
+4. **Capital** is distributed across accounts automatically
+
+### Example Fund Setup
+
 ```json
+// funds collection
 {
-  "signal_id": "sig_1732450800_5678",
-  "received_time": "2024-11-24T10:30:00Z",
-  "signal_data": { ... },
-  "cerebro_decision": {
-    "decision": "APPROVED",
-    "final_quantity": 100,
-    "final_price": 235.00,
-    "margin_required": 11750.00,
-    "margin_available": 250000.00,
-    "rationale": "Position sized within margin constraints",
-    "timestamp": "2024-11-24T10:30:05Z"
-  },
-  "order_id": null,
-  "status": "APPROVED"
+    "_id": ObjectId("..."),
+    "fund_id": "fund_001",
+    "name": "Vandan's Main Fund",
+    "total_equity": 1000000.00,
+    "accounts": ["OANDA_MOCK", "VANTAGE_MOCK", "IBKR_LIVE"],
+    "status": "ACTIVE",
+    "created_at": "2024-01-01T00:00:00Z"
+}
+
+// trading_accounts collection
+{
+    "account_id": "OANDA_MOCK",
+    "fund_id": "fund_001",              // Belongs to fund_001
+    "broker": "OANDA",
+    "balances": {
+        "equity": 500000.00
+    },
+    "asset_classes": {
+        "EQUITY": true,
+        "FUTURE": true,
+        "FOREX": true
+    }
+}
+
+{
+    "account_id": "VANTAGE_MOCK",
+    "fund_id": "fund_001",              // Belongs to fund_001
+    "broker": "VANTAGE",
+    "balances": {
+        "equity": 300000.00
+    },
+    "asset_classes": {
+        "EQUITY": true,
+        "FUTURE": true
+    }
+}
+
+// portfolio_allocations collection
+{
+    "allocation_id": "alloc_001",
+    "fund_id": "fund_001",
+    "status": "ACTIVE",                  // Only one ACTIVE per fund
+    "allocations": {
+        "SPY": 0.20,                     // 20% to SPY strategy
+        "TLT": 0.15,                     // 15% to TLT strategy
+        "Com1-Met": 0.10,                // 10% to Com1-Met strategy
+        "Florida-Forex": 0.05            // 5% to Florida-Forex
+    },
+    "created_at": "2024-01-01T00:00:00Z",
+    "approved_at": "2024-01-01T12:00:00Z"
 }
 ```
 
-### positions (Read/Write)
-Track open positions:
-```json
-{
-  "_id": "pos_abc123",
-  "strategy_name": "SPX 1-Day Options",
-  "account_id": "acc_abc123",
-  "symbol": "SPY",
-  "side": "LONG",
-  "quantity": 100,
-  "avg_entry_price": 235.00,
-  "current_price": 237.00,
-  "unrealized_pnl": 200.00,
-  "opened_at": "2024-11-24T10:30:00Z",
-  "status": "OPEN"
-}
+### Capital Allocation Example
+
+**Scenario**: SPY strategy (20% allocation) receives ENTRY signal
+
+```python
+# 1. Get fund equity
+fund_accounts = get_fund_accounts("fund_001")
+fund_equity = sum([500000, 300000, 200000])  # $1M total
+
+# 2. Get strategy allocation
+allocation = get_active_allocation("fund_001", "SPY")  # 0.20 = 20%
+
+# 3. Calculate allocated capital
+allocated_capital = 1000000 * 0.20 = $200,000
+
+# 4. Determine position size
+signal_price = $450
+cerebro_quantity = 200000 / 450 = 444 shares (rounded to 444)
+
+# 5. Distribute across accounts (proportional to account equity)
+total_equity = 1000000
+account_quantities = [
+    ("OANDA_MOCK", 444 * (500000/1000000)),    # 222 shares
+    ("VANTAGE_MOCK", 444 * (300000/1000000)),  # 133 shares
+    ("IBKR_LIVE", 444 * (200000/1000000))      # 89 shares
+]
 ```
 
-## Pub/Sub Integration
+---
 
-### Subscribed Topics
+## Account Routing
 
-**standardized-signals**
-- Receives standardized signals from Signal Ingestion Service
-- Message format: JSON with signal_id, signal_data, metadata
+### Routing Logic
 
-### Published Topics
+Cerebro intelligently routes orders to compatible accounts based on:
 
-**trading-orders**
-- Sends approved orders to Execution Service
-- Message format:
-```json
-{
-  "signal_id": "sig_1732450800_5678",
-  "order_type": "MARKET",
-  "symbol": "SPY",
-  "side": "BUY",
-  "quantity": 100,
-  "account_id": "acc_abc123",
-  "strategy_name": "SPX 1-Day Options"
-}
+1. **Fund Ownership**: Account must belong to the strategy's fund
+2. **Asset Class Compatibility**: Account must support the instrument's asset class
+3. **Strategy Permissions**: Strategy must list account in `strategies.accounts[]`
+4. **Margin Availability**: Account must have sufficient margin
+
+### Routing Algorithm
+
+```python
+def route_order_to_accounts(
+    strategy_id: str,
+    fund_id: str,
+    instrument: str,
+    total_quantity: int
+) -> list:
+    """
+    Distribute order across compatible accounts
+
+    Steps:
+    1. Get instrument asset class (EQUITY, FUTURE, FOREX, OPTION)
+    2. Find accounts where:
+       - fund_id matches
+       - asset_classes[instrument_type] = true
+       - account_id in strategy.accounts[]
+    3. Check margin availability for each account
+    4. Distribute quantity proportionally by account equity
+    5. Return list of (account_id, quantity) tuples
+    """
+
+    # Example
+    instrument_type = get_instrument_type(instrument)  # "EQUITY"
+    compatible_accounts = []
+
+    for account in get_fund_accounts(fund_id):
+        # Check asset class support
+        if not account.asset_classes.get(instrument_type):
+            continue
+
+        # Check strategy permissions
+        strategy = get_strategy(strategy_id)
+        if account.account_id not in strategy.accounts:
+            continue
+
+        # Check margin availability
+        required_margin = calculate_margin(account, instrument, quantity, price)
+        if account.balances.margin_available < required_margin:
+            continue
+
+        compatible_accounts.append(account)
+
+    # Distribute quantity proportionally
+    total_equity = sum(acc.balances.equity for acc in compatible_accounts)
+    distribution = []
+
+    for account in compatible_accounts:
+        proportion = account.balances.equity / total_equity
+        account_quantity = round(total_quantity * proportion)
+        distribution.append((account.account_id, account_quantity))
+
+    return distribution
 ```
 
-## Decision Logic
+### Example Routing Scenarios
 
-### ENTRY Signals
-1. Check for existing position in same symbol
-2. If position exists and same direction → REJECT (no pyramiding)
-3. If position exists and opposite direction → REJECT (must exit first)
-4. Calculate margin requirement
-5. Apply position sizing
-6. Generate BUY/SELL order
+**Scenario 1: Equity Signal (SPY)**
+```
+Strategy: SPY (EQUITY asset class)
+Fund: fund_001
+Signal: BUY 300 shares
 
-### EXIT Signals
-1. Look for open position in symbol
-2. If no position exists → REJECT
-3. If position exists → Generate closing order
-4. Quantity = full position size (close entire position)
-5. Update position status to CLOSING
+Compatible Accounts:
+✓ OANDA_MOCK (equity=$500k, asset_classes={EQUITY:true})
+✓ VANTAGE_MOCK (equity=$300k, asset_classes={EQUITY:true})
+✗ IBKR_FUTURES (asset_classes={FUTURE:true, EQUITY:false})
 
-### Signal Type Detection
-Cerebro determines signal type from the `signal_type` field:
-- `signal_type: "ENTRY"` → Entry signal
-- `signal_type: "EXIT"` → Exit signal
-- `action: "EXIT"` → Also treated as exit (legacy support)
+Distribution:
+- OANDA_MOCK: 187 shares (62.5% of 300)
+- VANTAGE_MOCK: 113 shares (37.5% of 300)
+```
+
+**Scenario 2: Futures Signal (GC - Gold)**
+```
+Strategy: Com1-Met (FUTURE asset class)
+Fund: fund_001
+Signal: BUY 10 contracts
+
+Compatible Accounts:
+✓ OANDA_MOCK (equity=$500k, asset_classes={FUTURE:true})
+✗ VANTAGE_MOCK (asset_classes={EQUITY:true, FUTURE:false})
+✓ IBKR_FUTURES (equity=$200k, asset_classes={FUTURE:true})
+
+Distribution:
+- OANDA_MOCK: 7 contracts (71% of 10)
+- IBKR_FUTURES: 3 contracts (29% of 10)
+```
+
+---
 
 ## Configuration
 
 ### Environment Variables
-```bash
-# Account Data Service URL
-ACCOUNT_DATA_SERVICE_URL=http://localhost:8082
-
-# Risk limits
-MAX_POSITION_SIZE_PCT=10
-MAX_BROKER_ALLOCATION_PCT=40
-
-# Margin safety buffer (hardcoded in cerebro_main.py)
-SLIPPAGE_BUFFER=0.30  # 30%
-
-# Mock broker for testing
-USE_MOCK_BROKER=false
-```
-
-## Error Handling
-
-1. **Account Query Failures**
-   - Logs error
-   - Rejects signal with reason
-   - Does not publish to Execution Service
-
-2. **Invalid Signals**
-   - Validates required fields
-   - Rejects malformed signals
-   - Stores rejection reason in signal_store
-
-3. **Margin Constraint Violations**
-   - Calculates safe position size
-   - If quantity < minimum tradeable → REJECT
-   - Logs constraint details
-
-4. **Conflicting Positions**
-   - Detects existing positions
-   - Rejects new ENTRY if position exists
-   - Logs conflict details
-
-## Logging
-
-Logs to:
-- Console (real-time output)
-- `logs/cerebro_service.log` (service-specific)
-- `logs/signal_processing.log` (unified signal journey)
-
-Log format:
-```
-Timestamp | [CEREBRO] | Message
-```
-
-Example log entries:
-```
-2024-11-24 10:30:05 | [CEREBRO] | Processing signal: sig_1732450800_5678
-2024-11-24 10:30:06 | [CEREBRO] | Account state: Equity=$1000000, Available=$250000
-2024-11-24 10:30:07 | [CEREBRO] | Margin required: $11750, Available: $250000
-2024-11-24 10:30:08 | [CEREBRO] | Position sized: 100 shares of SPY at $235.00
-2024-11-24 10:30:09 | [CEREBRO] | Decision: APPROVED, Publishing to trading-orders
-```
-
-## Portfolio Constructors (Research)
-
-Located in `portfolio_constructor/`:
-
-### Max CAGR Strategy
-File: `max_cagr/strategy.py`
-- Maximizes compound annual growth rate
-- Uses historical returns
-- Optimizes for long-term growth
-
-### Max Sharpe Strategy
-File: `max_sharpe/strategy.py`
-- Maximizes risk-adjusted returns
-- Uses Sharpe ratio optimization
-- Balances return vs volatility
-
-### Max CAGR v2 Strategy
-File: `max_cagr_v2/strategy.py`
-- Enhanced CAGR optimization
-- Considers drawdown constraints
-- Improved risk management
-
-### Max Hybrid Strategy
-File: `max_hybrid/strategy.py`
-- Combines CAGR and Sharpe approaches
-- Weighted multi-objective optimization
-- Balanced growth and stability
-
-**Note:** These are research modules for portfolio optimization, not actively used in live signal processing.
-
-## Precision Service
-
-The precision service ensures order quantities meet broker requirements.
-
-### Key Functions
-
-**apply_broker_precision(quantity, symbol, broker)**
-- Rounds quantity to broker-acceptable value
-- Handles lot sizes (e.g., options contracts)
-- Respects minimum quantities
-
-### Broker-Specific Rules
-
-**IBKR:**
-- Stocks: Whole shares (round down)
-- Options: Whole contracts
-- Futures: Whole contracts
-- Forex: Depends on pair (typically 1000 units)
-- Crypto: Uses `cashQty` (USD amount)
-
-**Zerodha:**
-- Stocks: Whole shares
-- Options: Lot size multiples (Nifty: 50, BankNifty: 25)
-- Futures: Lot size multiples
-
-## Dependencies
-
-- **Google Cloud Pub/Sub** - Signal input/output
-- **MongoDB** - Decision storage
-- **Account Data Service API** - Account state queries
-- **BrokerFactory** - Margin calculations
-- **Telegram notifier** - Critical alerts
-- **Python packages**:
-  - `google-cloud-pubsub>=2.18.4`
-  - `pymongo>=4.6.1`
-  - `requests>=2.31.0`
-  - `numpy>=2.3.4`
-  - `pandas>=2.3.3`
-
-## Startup Command
 
 ```bash
-# Via mvp_demo_start.py
-python mvp_demo_start.py
+# .env file
 
-# Manual startup
-python services/cerebro_service/cerebro_main.py
+# Account Data Service URL (for margin calculations)
+ACCOUNT_DATA_SERVICE_URL=http://account-data-service:8082
 
-# With mock broker
-python services/cerebro_service/cerebro_main.py --use-mock-broker
+# Mock Broker Mode (for testing)
+USE_MOCK_BROKER=true
+
+# Default Account (fallback if routing fails)
+DEFAULT_ACCOUNT_ID=Mock_Paper
+
+# MongoDB Connection
+MONGODB_URI=mongodb://mongodb:27017/mathematricks_trading
 ```
 
-## Health Checks
+### Docker Compose Configuration
 
-Check service status:
+```yaml
+# docker-compose.yml
+services:
+  cerebro-service:
+    build: ./services/cerebro_service
+    container_name: mathematricks-trader-cerebro-service-1
+    command: python cerebro_main.py --staging
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - ACCOUNT_DATA_SERVICE_URL=${ACCOUNT_DATA_SERVICE_URL}
+      - USE_MOCK_BROKER=${USE_MOCK_BROKER}
+    ports:
+      - "5678:5678"  # Python debugger
+    depends_on:
+      - mongodb
+      - account-data-service
+    networks:
+      - tradenet
+    restart: unless-stopped
+```
+
+---
+
+## Usage
+
+### Starting the Service
+
 ```bash
-python mvp_demo_status.py
+# Via Docker Compose (Recommended)
+make start
+
+# View Cerebro logs
+make logs-cerebro
+
+# Restart Cerebro only
+docker restart mathematricks-trader-cerebro-service-1
+
+# Standalone (Development)
+cd services/cerebro_service
+python cerebro_main.py --staging
 ```
 
-View logs:
+### Verifying Position Sizing
+
+#### Check signal_store for Decision Data
 ```bash
-tail -f logs/cerebro_service.log
-tail -f logs/signal_processing.log
+# MongoDB shell
+docker exec -it mathematricks-trader-mongodb-1 mongosh mathematricks_trading
+
+> db.signal_store.find({signal_id: "sig_spy_001"}).pretty()
+
+# Expected output (legs[0].decision should be populated):
+{
+    "signal_id": "sig_spy_001",
+    "legs": [
+        {
+            "leg_type": "ENTRY",
+            "decision": {
+                "strategy_allocation": 0.20,
+                "allocated_capital": 200000.00,
+                "cerebro_quantity": 444,
+                "legs": [
+                    {"account_id": "OANDA_MOCK", "quantity": 222},
+                    {"account_id": "VANTAGE_MOCK", "quantity": 222}
+                ]
+            }
+        }
+    ]
+}
 ```
 
-Monitor Pub/Sub subscriptions:
+#### Check trading_orders Collection
 ```bash
-gcloud pubsub subscriptions list
+> db.trading_orders.find({signal_id: "sig_spy_001"}).pretty()
+
+# Expected output (2 orders created):
+[
+    {
+        "order_id": "ord_001",
+        "signal_id": "sig_spy_001",
+        "account_id": "OANDA_MOCK",
+        "quantity": 222,
+        "status": "PENDING"
+    },
+    {
+        "order_id": "ord_002",
+        "signal_id": "sig_spy_001",
+        "account_id": "VANTAGE_MOCK",
+        "quantity": 222,
+        "status": "PENDING"
+    }
+]
 ```
 
-## Testing
+---
 
-### Send Test Signal
-```bash
-cd tests/signals_testing
-python send_test_signal.py --file equity_simple_signal_1.json
+## Monitoring
+
+### Log Files
+- **Docker**: `docker logs mathematricks-trader-cerebro-service-1`
+- **Local**: `logs/cerebro_service.log`
+
+### Log Format
+```
+2024-01-09 12:00:05 INFO  [cerebro] Processing ENTRY leg for signal: sig_spy_001
+2024-01-09 12:00:05 INFO  [cerebro] Fund equity: $1,000,000.00
+2024-01-09 12:00:05 INFO  [cerebro] Strategy allocation: 20%
+2024-01-09 12:00:05 INFO  [cerebro] Allocated capital: $200,000.00
+2024-01-09 12:00:05 INFO  [cerebro] Cerebro quantity: 444 shares
+2024-01-09 12:00:05 INFO  [cerebro] Distributed to 2 accounts
+2024-01-09 12:00:05 INFO  [cerebro] Created 2 trading orders
+2024-01-09 12:00:05 INFO  [cerebro] Updated signal_store with decision data
 ```
 
-### Monitor Processing
-```bash
-# Watch unified signal journey
-tail -f logs/signal_processing.log | grep CEREBRO
+### Key Metrics
+1. **Position Sizing Accuracy**: Verify cerebro quantities match allocation percentages
+2. **Margin Utilization**: Monitor margin usage across accounts
+3. **Account Distribution**: Verify orders distributed correctly
+4. **Processing Latency**: Time from signal arrival to order creation
+5. **Rejection Rate**: Orders rejected due to insufficient margin
 
-# Watch Cerebro-specific logs
-tail -f logs/cerebro_service.log
-```
-
-### Check Decision in MongoDB
-```bash
-mongosh
-use mathematricks_trading
-db.signal_store.findOne({"signal_id": "sig_1732450800_5678"})
-```
+---
 
 ## Related Documentation
-
-- [Signal Ingestion Service](signal_ingestion.md) - Sends signals to Cerebro
-- [Account Data Service](account_data_service.md) - Provides account state
-- [Execution Service](execution_service.md) - Receives orders from Cerebro
-- [Brokers](brokers.md) - Broker abstraction layer
-- [Testing Signals](signals_testing.md) - How to test signal flow
-
-## Common Issues
-
-### Signals Not Being Processed
-- Check Pub/Sub subscription: `standardized-signals`
-- Verify Cerebro service is running
-- Look for errors in `cerebro_service.log`
-- Ensure MongoDB is accessible
-
-### All Signals Rejected
-- Check Account Data Service is running (port 8082)
-- Verify account has sufficient margin
-- Check `MAX_POSITION_SIZE_PCT` setting
-- Look for account query errors in logs
-
-### Incorrect Position Sizing
-- Verify margin calculation for asset class
-- Check 30% slippage buffer application
-- Ensure broker precision rules are correct
-- Test with `USE_MOCK_BROKER=true`
-
-### Margin Calculation Errors
-- Check broker connection in Account Data Service
-- Verify symbol format matches broker
-- Look for margin calculation errors in logs
-- Test margin preview API directly
-
-## Performance Considerations
-
-- Cerebro processes signals sequentially (no parallel processing)
-- Account queries add ~100-200ms latency per signal
-- Margin calculations are typically fast (<50ms)
-- MongoDB writes are asynchronous
-- Pub/Sub publish is fast (~10-50ms)
-
-Total signal processing time: ~300-500ms per signal
+- [Signal Ingestion Service](signal_ingestion_service.md) - Signal processing
+- [Account Data Service](account_data_service.md) - Account state management
+- [Execution Service](execution_service.md) - Order execution
+- [Setup Guide](../Setup.md) - Initial setup

@@ -15,6 +15,12 @@ import type {
   CreateAccountRequest,
   UpdateAccountRequest,
   StrategyAccountMapping,
+  Dashboard,
+  CreateDashboardRequest,
+  UpdateDashboardRequest,
+  WidgetData,
+  WidgetType,
+  WidgetConfig,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
@@ -212,6 +218,21 @@ class ApiClient {
     return response.data;
   }
 
+  async getPositions(limit: number = 50, environment?: string, status?: 'OPEN' | 'CLOSED') {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    if (status) params.status = status;
+    const response = await this.frontendApiClient.get('/api/v1/activity/positions', { params });
+    return response.data;
+  }
+
+  async getTradingSignals(limit: number = 50, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.frontendApiClient.get('/api/v1/activity/trading-signals', { params });
+    return response.data;
+  }
+
   // ============================================================================
   // Fund Management APIs (v5)
   // ============================================================================
@@ -277,6 +298,76 @@ class ApiClient {
   async getStrategyAccounts(strategyId: string): Promise<StrategyAccountMapping> {
     const response = await this.portfolioBuilderClient.get(`/api/v1/strategies/${strategyId}/accounts`);
     return response.data;
+  }
+
+  // ============================================================================
+  // Dashboard Management (v5)
+  // ============================================================================
+
+  async getDashboards(fundId?: string, createdBy?: string): Promise<Dashboard[]> {
+    const params = new URLSearchParams();
+    if (fundId) params.append('fund_id', fundId);
+    if (createdBy) params.append('created_by', createdBy);
+
+    const response = await this.frontendApiClient.get<{ status: string; dashboards: Dashboard[] }>(
+      `/api/v1/dashboards?${params.toString()}`
+    );
+    return response.data.dashboards;
+  }
+
+  async getDashboard(dashboardId: string): Promise<Dashboard> {
+    const response = await this.frontendApiClient.get<Dashboard>(
+      `/api/v1/dashboards/${dashboardId}`
+    );
+    return response.data;
+  }
+
+  async createDashboard(data: CreateDashboardRequest): Promise<{ dashboard_id: string }> {
+    const response = await this.frontendApiClient.post<{ status: string; dashboard_id: string }>(
+      '/api/v1/dashboards',
+      data
+    );
+    return { dashboard_id: response.data.dashboard_id };
+  }
+
+  async updateDashboard(dashboardId: string, updates: UpdateDashboardRequest): Promise<void> {
+    await this.frontendApiClient.put(`/api/v1/dashboards/${dashboardId}`, updates);
+  }
+
+  async deleteDashboard(dashboardId: string): Promise<void> {
+    await this.frontendApiClient.delete(`/api/v1/dashboards/${dashboardId}`);
+  }
+
+  // ============================================================================
+  // Widget Data (v5)
+  // ============================================================================
+
+  async getWidgetData<T = any>(
+    widgetType: WidgetType,
+    fundId?: string,
+    config?: WidgetConfig
+  ): Promise<WidgetData<T>> {
+    const params = new URLSearchParams();
+    if (fundId) params.append('fund_id', fundId);
+    if (config?.account_filter) params.append('account_filter', config.account_filter);
+    if (config?.date_range_days) params.append('date_range_days', config.date_range_days.toString());
+    if (config?.group_by) params.append('group_by', config.group_by);
+
+    const response = await this.frontendApiClient.get<WidgetData<T>>(
+      `/api/v1/widgets/${widgetType}/data?${params.toString()}`
+    );
+    return response.data;
+  }
+
+  async reloadWidget(widgetType: WidgetType, fundId?: string, config?: WidgetConfig): Promise<void> {
+    await this.frontendApiClient.post(`/api/v1/widgets/${widgetType}/reload`, {
+      fund_id: fundId,
+      ...config,
+    });
+  }
+
+  async reloadAllWidgets(dashboardId: string): Promise<void> {
+    await this.frontendApiClient.post(`/api/v1/dashboards/${dashboardId}/reload-all`);
   }
 
   // ============================================================================
