@@ -69,7 +69,7 @@ def validate_live_vs_backtest(
         Dict with validation results:
         - is_valid: bool (always True for now)
         - warnings: List[str]
-        - action: str ("APPROVE" or "REJECT")
+        - action: str ("APPROVED" or "REJECTED")
         - live_days: int
         - backtest_days: int
         - validation_implemented: bool
@@ -113,7 +113,7 @@ def validate_live_vs_backtest(
     return {
         "is_valid": True,
         "warnings": ["Validation not yet implemented - auto-approving"],
-        "action": "APPROVE",
+        "action": "APPROVED",
         "live_days": len(live_returns) if live_returns is not None else 0,
         "backtest_days": len(backtest_returns),
         "validation_implemented": False
@@ -699,7 +699,7 @@ class MaxHybridConstructor(PortfolioConstructor):
             }
 
             return SignalDecision(
-                action="APPROVE",
+                action="APPROVED",
                 quantity=calculated_shares,  # FIX: Calculate from allocated capital, not signal.quantity
                 reason=f"MaxHybrid allocation: {allocation_pct:.1f}% (Total portfolio: {total_allocation:.1f}%)",
                 allocated_capital=allocated_capital,

@@ -116,7 +116,8 @@ class ForexMarginCalculator(BaseMarginCalculator):
         self,
         ticker: str,
         quantity: float,
-        price: float
+        price: float,
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Fetch margin requirement for forex from broker

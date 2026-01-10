@@ -661,75 +661,52 @@ class BrokerPoller:
 
     def _log_fund_summary(self, accounts: List[Dict]):
         """
-        PHASE 7: Log aggregated fund-level summary
-        Shows total equity and breakdown by account for each fund
-        
+        Log fund-level summary (READ-ONLY).
+
+        Does NOT calculate or update funds.total_equity.
+        Execution Service is the single source of truth for fund equity.
+
         Args:
             accounts: List of account documents with fund_id and balances
         """
-        # Group accounts by fund
+        # Group accounts by fund for display only
         funds_data = {}
-        
+
         for account in accounts:
             fund_id = account.get('fund_id', 'NO_FUND')
             balances = account.get('balances', {})
             equity = balances.get('equity', 0)
-            margin_used = balances.get('margin_used', 0)
-            unrealized_pnl = balances.get('unrealized_pnl', 0)
-            
+
             if fund_id not in funds_data:
-                funds_data[fund_id] = {
-                    'total_equity': 0,
-                    'total_margin_used': 0,
-                    'total_unrealized_pnl': 0,
-                    'accounts': []
-                }
-            
-            funds_data[fund_id]['total_equity'] += equity
-            funds_data[fund_id]['total_margin_used'] += margin_used
-            funds_data[fund_id]['total_unrealized_pnl'] += unrealized_pnl
+                funds_data[fund_id] = {'accounts': []}
+
             funds_data[fund_id]['accounts'].append({
                 'account_id': account.get('account_id'),
                 'broker': account.get('broker'),
                 'equity': equity
             })
-        
-        # Log fund-level summaries AND persist to MongoDB
-        if funds_data:
+
+        # READ fund total_equity from MongoDB (don't calculate or write)
+        if funds_data and self.db is not None:
             logger.info("=" * 70)
-            logger.info("💰 FUND-LEVEL SUMMARY (After Account Polling)")
+            logger.info("💰 FUND-LEVEL SUMMARY (Read from MongoDB)")
             logger.info("=" * 70)
-            
-            for fund_id, data in sorted(funds_data.items()):
+
+            for fund_id in sorted(funds_data.keys()):
+                if fund_id == 'NO_FUND':
+                    continue
+
+                # READ from MongoDB (Execution Service is source of truth)
+                fund_doc = self.db['funds'].find_one({"fund_id": fund_id})
+                total_equity = fund_doc.get('total_equity', 0.0) if fund_doc else 0.0
+
                 logger.info(f"\nFund: {fund_id}")
-                logger.info(f"  Total Equity: ${data['total_equity']:,.2f}")
-                logger.info(f"  Margin Used: ${data['total_margin_used']:,.2f}")
-                pnl_str = f"+${data['total_unrealized_pnl']:,.2f}" if data['total_unrealized_pnl'] >= 0 else f"-${abs(data['total_unrealized_pnl']):,.2f}"
-                logger.info(f"  Unrealized P&L: {pnl_str}")
-                logger.info(f"  Accounts: {len(data['accounts'])}")
-                
-                for acc in data['accounts']:
+                logger.info(f"  Total Equity (from MongoDB): ${total_equity:,.2f}")
+                logger.info(f"  Accounts: {len(funds_data[fund_id]['accounts'])}")
+
+                for acc in funds_data[fund_id]['accounts']:
                     logger.info(f"    • {acc['account_id']} ({acc['broker']}): ${acc['equity']:,.2f}")
-                
-                # Persist fund equity to MongoDB for cerebro to read
-                if fund_id != 'NO_FUND' and self.db is not None:
-                    try:
-                        self.db['funds'].update_one(
-                            {"fund_id": fund_id},
-                            {
-                                "$set": {
-                                    "total_equity": data['total_equity'],
-                                    "updated_at": datetime.utcnow()
-                                }
-                            },
-                            upsert=True
-                        )
-                        logger.debug(f"✓ Updated fund {fund_id} total_equity in MongoDB")
-                    except Exception as e:
-                        logger.error(f"Failed to update fund {fund_id} equity: {e}")
-                    except Exception as e:
-                        logger.error(f"Failed to update fund {fund_id} equity: {e}")
-            
+
             logger.info("=" * 70)
 
     def _log_account_summary(self, account_id: str, balances: Dict, positions: list, position_changed: bool, poll_type: str = "SCHEDULED"):

@@ -20,6 +20,7 @@ services:
       - MONGODB_URI=${MONGODB_URI}
       - PYTHONPATH=/app/services/cerebro_service:/app
       - ACCOUNT_DATA_SERVICE_URL=${ACCOUNT_DATA_SERVICE_URL}
+      - USE_MOCK_BROKER=true  # Enable mock broker for staging/testing
     command: python -m services.cerebro_service.cerebro_main
 
   execution-service:

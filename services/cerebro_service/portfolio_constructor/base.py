@@ -57,7 +57,7 @@ class PortfolioConstructor(ABC):
             
         Returns:
             SignalDecision with:
-            - action: "APPROVE", "REJECT", or "RESIZE"
+            - action: "APPROVED", "REJECTED", or "RESIZE"
             - quantity: Final position size
             - reason: Explanation for the decision
             - allocated_capital: Capital allocated to this trade

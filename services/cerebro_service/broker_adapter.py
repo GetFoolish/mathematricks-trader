@@ -295,11 +295,26 @@ class CerebroBrokerAdapter:
                 return self._get_futures_margin_from_broker(ticker, quantity, signal_data)
 
         elif instrument_type == 'OPTION':
-            # Cannot provide fallback for options - too complex
-            raise ValueError(
-                f"Cannot calculate options margin without broker data. "
-                f"Options margin is strategy-dependent and must be fetched from broker."
-            )
+            # For options, margin depends on strategy (naked, covered, spreads, etc.)
+            # In mock mode, use a conservative estimate based on buying options
+            if self.use_mock:
+                # For buying options: margin = option premium (notional value)
+                # This is conservative - actual margin depends on strategy
+                # For a LONG option (BUY), margin is just the premium paid
+                margin = notional_value
+                logger.info(f"📋 MOCK MODE: Using estimated options margin for {ticker}: ${margin:,.2f} (full premium)")
+                return {
+                    'initial_margin': margin,
+                    'maintenance_margin': margin,
+                    'margin_pct': 100.0,
+                    'method': 'Options Mock Margin (100% premium for long options)'
+                }
+            else:
+                # In live mode, reject - need real broker data
+                raise ValueError(
+                    f"Cannot calculate options margin without broker data. "
+                    f"Options margin is strategy-dependent and must be fetched from broker."
+                )
 
         else:
             # Unknown type - use conservative 25%

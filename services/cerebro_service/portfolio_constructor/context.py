@@ -52,7 +52,7 @@ class Signal:
 @dataclass
 class SignalDecision:
     """Decision made by portfolio constructor for a signal"""
-    action: str  # "APPROVE", "REJECT", "RESIZE"
+    action: str  # "APPROVED", "REJECTED", "RESIZE"
     quantity: float
     reason: str
     allocated_capital: Optional[float] = None

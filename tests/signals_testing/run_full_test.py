@@ -12,18 +12,27 @@ This script:
 Usage:
     # Run with reproducible seed (from .env)
     python run_full_test.py
-    
+
     # Run with custom seed
     python run_full_test.py --seed 42
-    
+
     # Run with randomized order each time
     python run_full_test.py --seed 0
-    
+
     # Run only edge cases
     python run_full_test.py --folder sample_signals_edgecases/
-    
+
     # Run specific folder with seed
     python run_full_test.py --folder sample_signals/ --seed 123
+
+    # Run only first 5 ENTRY signals (+ their EXITs)
+    python run_full_test.py --signal_count 5
+
+    # Pause after each signal (interactive mode)
+    python run_full_test.py --pause-and-play
+
+    # Combine options: 3 signals, interactive, custom delay
+    python run_full_test.py --signal_count 3 --pause-and-play --delay 2
 """
 
 import argparse
@@ -39,15 +48,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import send_test_signal
 
 
-def run_test(folder_path: str = "sample_signals", seed: int = None, delay: int = None, output_dir: str = "test_results"):
+def run_test(folder_path: str = "sample_signals", seed: int = None, delay: int = None,
+             output_dir: str = "../../test_results", signal_count: int = None, pause_and_play: bool = False):
     """
     Run full test suite from a signal folder
-    
+
     Args:
         folder_path: Path to folder containing signal JSON files
         seed: Random seed (None=use SIGNAL_TEST_SEED from .env)
         delay: Delay between signals in seconds (None=use signal's wait value)
         output_dir: Directory to save test results
+        signal_count: Limit number of ENTRY signals to process (None = all)
+        pause_and_play: If True, pause after each signal and wait for Enter key
     """
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -72,20 +84,27 @@ def run_test(folder_path: str = "sample_signals", seed: int = None, delay: int =
             seed = 1
     
     print(f"🔀 Seed:           {seed} ({'reproducible' if seed > 0 else 'randomized' if seed == 0 else 'ordered'})")
-    
+
     if delay is not None:
         print(f"⏱️  Delay:          {delay} seconds between signals")
-    
+
+    if signal_count is not None:
+        print(f"📊 Signal Count:   {signal_count} ENTRY signals (+ their EXITs)")
+
+    if pause_and_play:
+        print(f"⏸️  Pause Mode:     Enabled (press Enter after each signal)")
+
     print("=" * 80 + "\n")
     
     # Run send_test_signal.process_folder directly
     start_time = time.time()
     try:
         # Call the function directly instead of subprocess
-        send_test_signal.process_folder(folder_path, seed, delay_override=delay)
-        
+        signals_sent = send_test_signal.process_folder(folder_path, seed, delay_override=delay,
+                                                       signal_count=signal_count, pause_and_play=pause_and_play)
+
         elapsed = time.time() - start_time
-        
+
         # Build test results
         test_results = {
             "run_id": run_id,
@@ -94,11 +113,12 @@ def run_test(folder_path: str = "sample_signals", seed: int = None, delay: int =
             "seed": seed,
             "delay": delay,
             "status": "success",
+            "signals_sent": signals_sent,
             "duration_seconds": elapsed,
             "start_time": now.isoformat(),
             "end_time": datetime.now(timezone.utc).isoformat()
         }
-        
+
         print(f"\n✅ Test suite completed successfully")
         print(f"\n📊 Results Summary:")
         print(f"   Duration:     {elapsed:.2f} seconds")
@@ -111,6 +131,7 @@ def run_test(folder_path: str = "sample_signals", seed: int = None, delay: int =
             "seed": seed,
             "delay": delay,
             "status": "error",
+            "signals_sent": 0,
             "error": str(e),
             "duration_seconds": time.time() - start_time,
             "start_time": now.isoformat(),
@@ -119,20 +140,20 @@ def run_test(folder_path: str = "sample_signals", seed: int = None, delay: int =
         print(f"\n❌ Error running test suite: {e}")
         import traceback
         traceback.print_exc()
-    
+
     # Save test results JSON
     results_file = os.path.join(output_dir, f"{run_id}_results.json")
     with open(results_file, 'w') as f:
         json.dump(test_results, f, indent=2)
-    
+
     print(f"\n📄 Results saved to: {results_file}")
-    
+
     # Print summary
     print("\n" + "=" * 80)
     print(f"✅ Test Run Complete")
     print("=" * 80)
     print(f"Status:        {test_results['status'].upper()}")
-    print(f"Signals Sent:  {test_results['signals_sent']}")
+    print(f"Signals Sent:  {test_results.get('signals_sent', 'N/A')}")
     print(f"Duration:      {test_results['duration_seconds']:.2f}s")
     print(f"Results File:  {results_file}")
     print("=" * 80 + "\n")
@@ -164,8 +185,8 @@ Examples:
      python run_full_test.py --folder sample_signals_edgecases/
 
 Test Results:
-  - Saved to test_results/ folder
-  - Contains output.txt (raw command output) and results.json (structured results)
+  - Saved to test_results/ folder at project root (not in tests/signals_testing/)
+  - Contains results.json with structured test results
   - Run ID includes timestamp for easy identification
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -196,10 +217,24 @@ Test Results:
     parser.add_argument(
         "--output-dir",
         dest="output_dir",
-        default="test_results",
-        help="Directory to save test results (default: test_results)"
+        default="../../test_results",
+        help="Directory to save test results (default: ../../test_results - project root)"
     )
-    
+
+    parser.add_argument(
+        "--signal_count",
+        type=int,
+        dest="signal_count",
+        help="Limit total number of signals to send (ENTRY + EXIT combined)"
+    )
+
+    parser.add_argument(
+        "--pause-and-play",
+        action="store_true",
+        dest="pause_and_play",
+        help="Pause after each signal and wait for Enter key before continuing"
+    )
+
     args = parser.parse_args()
     
     # Validate folder exists
@@ -215,7 +250,9 @@ Test Results:
         folder_path=args.folder_path,
         seed=args.seed,
         delay=delay,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        signal_count=args.signal_count,
+        pause_and_play=args.pause_and_play
     )
     
     sys.exit(exit_code)

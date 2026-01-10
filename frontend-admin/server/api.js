@@ -47,6 +47,7 @@ function serializeDocument(doc) {
 }
 
 // GET /api/v1/activity/signals
+// CONSOLIDATED SCHEMA v3: Each document has legs[] array, return each leg as a signal row
 app.get('/api/v1/activity/signals', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
@@ -63,81 +64,106 @@ app.get('/api/v1/activity/signals', async (req, res) => {
       .limit(limit)
       .toArray();
 
-    const signals = docs.map(doc => {
-      const signalData = doc.signal_data || {};
-      let signalDetails = signalData.signal || {};
+    // Flatten legs: each leg becomes a separate signal row
+    const signals = [];
+    for (const doc of docs) {
+      const legs = doc.legs || [];
 
-      // Handle multi-leg signals
-      if (Array.isArray(signalDetails) && signalDetails.length > 0) {
-        signalDetails = signalDetails[0];
-      }
+      for (const leg of legs) {
+        const raw = leg.raw || {};
+        const decision = leg.decision || null;
+        const execution = leg.execution || null;
+        const position = doc.position || {};
 
-      // Extract cerebro decision
-      const cerebroDecision = doc.cerebro_decision;
-      let decisionStatus = null;
-      if (cerebroDecision) {
-        decisionStatus = cerebroDecision.decision || 'PENDING';
-      }
+        // Get first leg from raw.legs (the actual BUY/SELL actions)
+        let firstLeg = {};
+        if (raw.legs && raw.legs.length > 0) {
+          firstLeg = raw.legs[0];
+        }
 
-      // Calculate timestamps and lags
-      const signalSentEpoch = signalData.signal_sent_EPOCH;
-      let signalSentTimestamp = null;
-      if (signalSentEpoch) {
-        signalSentTimestamp = new Date(signalSentEpoch * 1000).toISOString();
-      }
+        // Decision status
+        let decisionStatus = decision ? (decision.status || 'PENDING') : null;
 
-      let signalReceivedTimestamp = doc.created_at;
-      if (typeof signalReceivedTimestamp === 'string') {
-        signalReceivedTimestamp = new Date(signalReceivedTimestamp);
-      }
+        // Signal type
+        let signalType = leg.leg_type || raw.signal_type || 'UNKNOWN';
 
-      let receiveLagSeconds = null;
-      if (signalSentEpoch && signalReceivedTimestamp) {
-        receiveLagSeconds = (signalReceivedTimestamp.getTime() / 1000) - signalSentEpoch;
-      }
-
-      // Execution timestamp
-      const execution = doc.execution;
-      let executionCompletedTimestamp = null;
-      let executionLagSeconds = null;
-      if (execution && execution.filled_at) {
-        executionCompletedTimestamp = new Date(execution.filled_at);
+        // Calculate timestamps and lags
+        const signalSentEpoch = raw.sent_epoch;
+        let signalSentTimestamp = null;
         if (signalSentEpoch) {
+          signalSentTimestamp = new Date(signalSentEpoch * 1000).toISOString();
+        }
+
+        let signalReceivedTimestamp = raw.received_at;
+        if (typeof signalReceivedTimestamp === 'string') {
+          signalReceivedTimestamp = new Date(signalReceivedTimestamp);
+        }
+
+        let receiveLagSeconds = null;
+        if (signalSentEpoch && signalReceivedTimestamp) {
+          receiveLagSeconds = (signalReceivedTimestamp.getTime() / 1000) - signalSentEpoch;
+        }
+
+        // Execution timestamp
+        let executionCompletedTimestamp = null;
+        let executionLagSeconds = null;
+
+        if (execution && execution.orders && execution.orders.length > 0) {
+          const lastOrder = execution.orders[execution.orders.length - 1];
+          if (lastOrder.filled_at) {
+            executionCompletedTimestamp = new Date(lastOrder.filled_at);
+          }
+        }
+        // Fallback to decision timestamp
+        if (!executionCompletedTimestamp && decision && decision.timestamp) {
+          executionCompletedTimestamp = new Date(decision.timestamp);
+        }
+
+        if (executionCompletedTimestamp && signalSentEpoch) {
           executionLagSeconds = (executionCompletedTimestamp.getTime() / 1000) - signalSentEpoch;
         }
-      }
 
-      // Determine signal type
-      let signalType = signalData.signal_type || 'UNKNOWN';
-      if (signalType === 'UNKNOWN') {
-        const action = (signalDetails.action || '').toUpperCase();
-        if (['ENTRY', 'BUY'].includes(action)) signalType = 'ENTRY';
-        else if (['EXIT', 'SELL', 'CLOSE'].includes(action)) signalType = 'EXIT';
-      }
+        // Get PnL from position
+        const pnl = position.pnl || null;
 
-      return {
-        signal_id: doc.signal_id || signalData.signalID || signalData.signal_id,
-        strategy_id: signalData.strategy_name || 'Unknown',
-        timestamp: serializeDocument(doc.created_at),
-        created_at: serializeDocument(doc.created_at),
-        instrument: signalDetails.ticker || signalDetails.instrument,
-        action: signalDetails.action,
-        direction: signalDetails.direction,
-        price: signalDetails.price || signalDetails.entry_price,
-        quantity: signalDetails.quantity,
-        environment: doc.environment || 'production',
-        processed_by_cerebro: cerebroDecision !== null && cerebroDecision !== undefined,
-        receive_lag_ms: doc.receive_lag_ms || 0,
-        cerebro_decision: serializeDocument(cerebroDecision),
-        decision_status: decisionStatus,
-        signal_sent_timestamp: signalSentTimestamp,
-        signal_received_timestamp: signalReceivedTimestamp ? signalReceivedTimestamp.toISOString() : null,
-        execution_completed_timestamp: executionCompletedTimestamp ? executionCompletedTimestamp.toISOString() : null,
-        receive_lag_seconds: receiveLagSeconds,
-        execution_lag_seconds: executionLagSeconds,
-        signal_type: signalType
-      };
-    });
+        // Get final quantity from decision.legs or execution
+        let finalQuantity = firstLeg.quantity;
+        if (decision && decision.legs && decision.legs.length > 0) {
+          finalQuantity = decision.legs[0].quantity;
+        } else if (execution && execution.total_quantity_filled) {
+          // For EXIT legs, decision.legs is empty but execution has the actual quantity
+          finalQuantity = execution.total_quantity_filled;
+        }
+
+        signals.push({
+          signal_id: leg.leg_id || doc.signal_id,  // Use leg_id as unique identifier
+          base_signal_id: doc.signal_id,  // Parent signal ID
+          strategy_id: doc.strategy_id || 'Unknown',
+          timestamp: serializeDocument(raw.received_at || doc.created_at),
+          created_at: serializeDocument(raw.received_at || doc.created_at),
+          instrument: firstLeg.instrument || doc.instrument,
+          action: firstLeg.action,
+          direction: firstLeg.direction,
+          price: firstLeg.price,
+          quantity: firstLeg.quantity,
+          final_quantity: finalQuantity,
+          environment: doc.environment || 'production',
+          processed_by_cerebro: decision !== null,
+          receive_lag_ms: receiveLagSeconds ? Math.round(receiveLagSeconds * 1000) : 0,
+          decision: serializeDocument(decision),
+          decision_status: decisionStatus,
+          signal_sent_timestamp: signalSentTimestamp,
+          signal_received_timestamp: signalReceivedTimestamp ? signalReceivedTimestamp.toISOString() : null,
+          execution_completed_timestamp: executionCompletedTimestamp ? executionCompletedTimestamp.toISOString() : null,
+          receive_lag_seconds: receiveLagSeconds,
+          execution_lag_seconds: executionLagSeconds,
+          signal_type: signalType,
+          execution: serializeDocument(execution),
+          position: serializeDocument(position),
+          pnl: serializeDocument(pnl)
+        });
+      }
+    }
 
     res.json({ status: 'success', count: signals.length, signals });
   } catch (error) {
@@ -147,21 +173,80 @@ app.get('/api/v1/activity/signals', async (req, res) => {
 });
 
 // GET /api/v1/activity/orders
+// Fetches execution orders from signal_store.legs[].execution.orders[] (CONSOLIDATED schema v3)
 app.get('/api/v1/activity/orders', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     const environment = req.query.environment;
 
-    const query = {};
+    // Query for signals with any leg having execution.orders
+    const query = {
+      'legs.execution.orders': { $exists: true, $ne: [] }
+    };
     if (environment) {
       query.environment = environment;
     }
 
-    const orders = await tradingOrdersCollection
-      .find(query, { projection: { _id: 0 } })
-      .sort({ timestamp: -1 })
+    const signals = await signalStoreCollection
+      .find(query)
+      .sort({ created_at: -1 })
       .limit(limit)
       .toArray();
+
+    // Flatten execution.orders[] from ALL legs of all signals into a single array
+    const orders = [];
+    signals.forEach(signal => {
+      const instrument = signal.instrument || 'N/A';
+
+      // Iterate through each leg in the legs array
+      (signal.legs || []).forEach(leg => {
+        if (!leg.execution || !leg.execution.orders) return;
+
+        const signalType = leg.leg_type || 'UNKNOWN';
+
+        leg.execution.orders.forEach(order => {
+          // Generate shorter, more readable order ID
+          // Format: {signal_id}_{fund}_{broker_short}
+          const brokerShort = (order.account_id || 'UNK').replace(/[-_]MOCK/g, '').replace(/IBKR-/g, '');
+          const shortOrderId = `${signal.signal_id}_${order.fund_id}_${brokerShort}`;
+
+          // Determine status based on filled quantity
+          let status = 'FILLED';
+          if (order.quantity_filled === 0) {
+            status = 'PENDING';
+          } else if (order.quantity_filled < order.quantity_requested) {
+            status = 'PARTIAL';
+          }
+
+          orders.push({
+            signal_id: signal.signal_id,
+            leg_id: leg.leg_id,
+            leg_type: signalType,
+            order_id: shortOrderId,
+            full_order_id: order.order_id, // Keep full ID for reference
+            broker_order_id: order.broker_order_id,
+            broker: order.account_id || 'N/A', // Broker/account
+            fund_id: order.fund_id,
+            instrument: instrument,
+            signal_type: signalType,
+            quantity_requested: order.quantity_requested,
+            quantity_filled: order.quantity_filled,
+            avg_fill_price: order.avg_fill_price,
+            filled_at: order.filled_at,
+            status: status,
+            environment: signal.environment,
+            fills: order.fills
+          });
+        });
+      });
+    });
+
+    // Sort by filled_at descending
+    orders.sort((a, b) => {
+      const timeA = a.filled_at ? new Date(a.filled_at).getTime() : 0;
+      const timeB = b.filled_at ? new Date(b.filled_at).getTime() : 0;
+      return timeB - timeA;
+    });
 
     res.json({ status: 'success', count: orders.length, orders: serializeDocument(orders) });
   } catch (error) {
@@ -170,14 +255,192 @@ app.get('/api/v1/activity/orders', async (req, res) => {
   }
 });
 
+// GET /api/v1/activity/positions
+// Fetches positions (both open and closed) from signal_store
+app.get('/api/v1/activity/positions', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const environment = req.query.environment;
+    const status = req.query.status; // 'OPEN' or 'CLOSED'
+
+    // Query for ENTRY signals with position data
+    const query = {
+      'position.status': { $exists: true }
+    };
+    if (environment) {
+      query.environment = environment;
+    }
+    if (status) {
+      query['position.status'] = status;
+    }
+
+    const entrySignals = await signalStoreCollection
+      .find(query, {
+        projection: {
+          signal_id: 1,
+          strategy_id: 1,
+          instrument: 1,
+          'position': 1,
+          'legs': 1,
+          created_at: 1,
+          environment: 1
+        }
+      })
+      .sort({ 'position.opened_at': -1 })
+      .limit(limit)
+      .toArray();
+
+    // Build positions with entry and exit signal details
+    const positions = [];
+    for (const entrySignal of entrySignals) {
+      // CONSOLIDATED SCHEMA v3: Get ENTRY leg (first leg)
+      const entryLeg = entrySignal.legs?.find(leg => leg.leg_type === 'ENTRY') || entrySignal.legs?.[0] || {};
+      const entryRaw = entryLeg.raw || {};
+      const entryExecution = entryLeg.execution || {};
+
+      const instrument = entryRaw.legs?.[0]?.instrument || entrySignal.instrument || 'N/A';
+      const strategyId = entrySignal.strategy_id || 'N/A';
+      const entryPrice = entryExecution.weighted_avg_price || 0;
+      const totalQty = entryExecution.total_quantity_filled || 0;
+      const costBasis = entryExecution.total_cost_basis || 0;
+
+      // Collect unique fund_ids from execution.orders
+      const fundIds = [...new Set((entryExecution.orders || []).map(o => o.fund_id))].filter(Boolean);
+      const fundId = fundIds.join(', ') || 'N/A';
+
+      let exitSignals = [];
+      let exitPrice = null;
+      let proceeds = null;
+
+      // Fetch exit signals if position is closed
+      if (entrySignal.position.status === 'CLOSED' && entrySignal.position.exit_signals?.length > 0) {
+        // Get unique exit signal IDs
+        const uniqueExitIds = [...new Set(entrySignal.position.exit_signals.map(id => id.toString()))];
+
+        exitSignals = await signalStoreCollection
+          .find(
+            { _id: { $in: uniqueExitIds.map(id => new ObjectId(id)) } },
+            { projection: { signal_id: 1, 'execution.weighted_avg_price': 1, 'execution.total_proceeds': 1 } }
+          )
+          .toArray();
+
+        // Use first exit signal for price (they should all be the same for multi-fund)
+        if (exitSignals.length > 0) {
+          exitPrice = exitSignals[0].execution?.weighted_avg_price || 0;
+          proceeds = exitSignals[0].execution?.total_proceeds || 0;
+        }
+      }
+
+      positions.push({
+        entry_signal_id: entrySignal.signal_id,
+        exit_signal_ids: exitSignals.map(s => s.signal_id),
+        strategy_id: strategyId,
+        fund_id: fundId,
+        instrument: instrument,
+        status: entrySignal.position.status,
+        quantity: totalQty,
+        entry_price: entryPrice,
+        exit_price: exitPrice,
+        cost_basis: costBasis,
+        proceeds: proceeds,
+        current_value: entrySignal.position.status === 'OPEN' ? costBasis : proceeds, // TODO: calculate unrealized for open
+        pnl: entrySignal.position.pnl || null,
+        opened_at: entrySignal.position.opened_at,
+        closed_at: entrySignal.position.closed_at || null,
+        environment: entrySignal.environment
+      });
+    }
+
+    res.json({
+      status: 'success',
+      count: positions.length,
+      positions: serializeDocument(positions)
+    });
+  } catch (error) {
+    console.error('[API] Error fetching positions:', error);
+    res.status(500).json({ detail: error.message });
+  }
+});
+
+// GET /api/v1/activity/trading-signals
+// Fetches complete trading signals using CONSOLIDATED schema (ONE document per signal)
+app.get('/api/v1/activity/trading-signals', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const environment = req.query.environment;
+
+    // Query for signal documents (each document represents ONE complete signal with ALL legs)
+    const query = {};
+    if (environment) query.environment = environment;
+
+    const signals = await signalStoreCollection
+      .find(query)
+      .sort({ created_at: -1 })
+      .limit(limit)
+      .toArray();
+
+    // Transform to trading signals format
+    const tradingSignals = signals.map(signal => {
+      // Get ENTRY leg (should be first leg in array)
+      const entryLeg = signal.legs?.find(leg => leg.leg_type === 'ENTRY') || signal.legs?.[0];
+      const exitLegs = signal.legs?.filter(leg => leg.leg_type === 'EXIT' || leg.leg_type === 'SCALE_OUT') || [];
+
+      return {
+        signal_id: signal.signal_id,
+        instrument: signal.instrument,
+        strategy_id: signal.strategy_id,
+        environment: signal.environment,
+
+        // Position info
+        status: signal.position?.status || 'PENDING',
+        opened_at: serializeDocument(signal.position?.opened_at),
+        closed_at: serializeDocument(signal.position?.closed_at),
+
+        // P&L info (cumulative for PARTIAL, final for CLOSED)
+        pnl: serializeDocument(signal.position?.pnl),
+
+        // Partial exit info
+        partial_exit_count: signal.position?.partial_exit_count,
+        remaining_quantity: signal.position?.remaining_quantity,
+        entry_quantity: signal.position?.entry_quantity,
+        exit_quantity: signal.position?.exit_quantity,
+
+        // Legs
+        legs: serializeDocument(signal.legs),
+        entry_leg: serializeDocument(entryLeg),
+        exit_legs: exitLegs.map(serializeDocument),
+
+        // Metadata
+        created_at: serializeDocument(signal.created_at),
+        updated_at: serializeDocument(signal.updated_at)
+      };
+    });
+
+    res.json({
+      status: 'success',
+      count: tradingSignals.length,
+      trading_signals: tradingSignals
+    });
+
+  } catch (error) {
+    console.error('[API] Error fetching trading signals:', error);
+    res.status(500).json({ detail: error.message });
+  }
+});
+
 // GET /api/v1/activity/decisions
+// Supports both v1 (cerebro_decision) and v2 (decision) schema
 app.get('/api/v1/activity/decisions', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     const environment = req.query.environment;
 
+    // Query for docs with either v1 or v2 decision field
     const query = {
-      cerebro_decision: { $ne: null }
+      $or: [
+        { decision: { $ne: null } },
+        { cerebro_decision: { $ne: null } }
+      ]
     };
     if (environment) {
       query.environment = environment;
@@ -185,14 +448,14 @@ app.get('/api/v1/activity/decisions', async (req, res) => {
 
     const docs = await signalStoreCollection
       .find(query, { projection: { _id: 0 } })
-      .sort({ received_at: -1 })
+      .sort({ created_at: -1 })
       .limit(limit)
       .toArray();
 
     const decisions = docs.map(doc => {
-      const decision = doc.cerebro_decision || {};
-      const signalData = doc.signal_data || {};
-      decision.signal_id = doc.signal_id || signalData.signalID || signalData.signal_id;
+      // Support both v1 and v2 schema
+      const decision = doc.decision || doc.cerebro_decision || {};
+      decision.signal_id = doc.signal_id;
       return serializeDocument(decision);
     });
 
@@ -200,6 +463,244 @@ app.get('/api/v1/activity/decisions', async (req, res) => {
   } catch (error) {
     console.error('[API] Error fetching decisions:', error);
     res.status(500).json({ detail: error.message });
+  }
+});
+
+// ============================================================================
+// Dashboard Management Endpoints (v5)
+// ============================================================================
+
+// GET /api/v1/dashboards - List all dashboards
+app.get('/api/v1/dashboards', async (req, res) => {
+  try {
+    const fundId = req.query.fund_id;
+    const createdBy = req.query.created_by;
+
+    const query = {};
+    if (fundId) query.fund_id = fundId;
+    if (createdBy) query.created_by = createdBy;
+
+    const dashboards = await db.collection('dashboards')
+      .find(query)
+      .sort({ created_at: -1 })
+      .toArray();
+
+    res.json({ status: 'success', dashboards: dashboards.map(serializeDocument) });
+  } catch (error) {
+    console.error('[API] Error fetching dashboards:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/v1/dashboards/:dashboard_id - Get specific dashboard
+app.get('/api/v1/dashboards/:dashboard_id', async (req, res) => {
+  try {
+    const { dashboard_id } = req.params;
+
+    const dashboard = await db.collection('dashboards').findOne({ dashboard_id });
+
+    if (!dashboard) {
+      return res.status(404).json({ error: 'Dashboard not found' });
+    }
+
+    res.json(serializeDocument(dashboard));
+  } catch (error) {
+    console.error('[API] Error fetching dashboard:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/v1/dashboards - Create new dashboard
+app.post('/api/v1/dashboards', async (req, res) => {
+  try {
+    const { name, description, created_by, fund_id, widgets, grid_config } = req.body;
+
+    const dashboard = {
+      dashboard_id: `dashboard-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name,
+      description: description || '',
+      created_by: created_by || 'anonymous',
+      fund_id: fund_id || null,
+      is_locked: false,
+      widgets: widgets || [],
+      grid_config: grid_config || { cols: 12, row_height: 100 },
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+
+    await db.collection('dashboards').insertOne(dashboard);
+
+    res.json({ status: 'success', dashboard_id: dashboard.dashboard_id });
+  } catch (error) {
+    console.error('[API] Error creating dashboard:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/v1/dashboards/:dashboard_id - Update dashboard
+app.put('/api/v1/dashboards/:dashboard_id', async (req, res) => {
+  try {
+    const { dashboard_id } = req.params;
+    const updates = req.body;
+
+    // Don't allow updating dashboard_id or created_at
+    delete updates.dashboard_id;
+    delete updates.created_at;
+
+    // Set updated_at
+    updates.updated_at = new Date();
+
+    const result = await db.collection('dashboards').updateOne(
+      { dashboard_id },
+      { $set: updates }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: 'Dashboard not found' });
+    }
+
+    res.json({ status: 'success', modified: result.modifiedCount });
+  } catch (error) {
+    console.error('[API] Error updating dashboard:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/v1/dashboards/:dashboard_id - Delete dashboard
+app.delete('/api/v1/dashboards/:dashboard_id', async (req, res) => {
+  try {
+    const { dashboard_id } = req.params;
+
+    const result = await db.collection('dashboards').deleteOne({ dashboard_id });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: 'Dashboard not found' });
+    }
+
+    res.json({ status: 'success', deleted: result.deletedCount });
+  } catch (error) {
+    console.error('[API] Error deleting dashboard:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// Widget Data Endpoints (v5)
+// ============================================================================
+
+// GET /api/v1/widgets/:widget_type/data - Get widget data with staleness info
+app.get('/api/v1/widgets/:widget_type/data', async (req, res) => {
+  try {
+    const { widget_type } = req.params;
+    const { fund_id, account_filter, date_range_days, group_by } = req.query;
+
+    // Build filters object to match Python generator format
+    let filters = {};
+    if (widget_type === 'AccountStatement') {
+      filters = {
+        account_filter: account_filter || null,
+        date_range_days: date_range_days ? parseInt(date_range_days) : 30,
+        group_by: group_by || 'date'
+      };
+    }
+    // FundBalances and other widgets use empty filters
+
+    // Create filters hash (same logic as Python generators)
+    // Note: Python's json.dumps uses spaces after colons and commas by default
+    const crypto = await import('crypto');
+    const filtersStr = JSON.stringify(filters, Object.keys(filters).sort(), 0).replace(/,/g, ', ').replace(/:/g, ': ');
+    const filtersHash = crypto.createHash('md5').update(filtersStr).digest('hex');
+
+    // Query widget_data collection
+    const query = {
+      widget_type,
+      fund_id: fund_id || null,
+      filters_hash: filtersHash
+    };
+
+    const widgetData = await db.collection('widget_data').findOne(query);
+
+    if (!widgetData) {
+      return res.status(404).json({ error: 'Widget data not found' });
+    }
+
+    // Calculate staleness
+    const now = new Date();
+    const computedAt = new Date(widgetData.computed_at);
+    const ageSeconds = (now - computedAt) / 1000;
+    const isStale = ageSeconds > widgetData.ttl;
+
+    res.json({
+      data: widgetData.data,
+      computed_at: widgetData.computed_at,
+      age_seconds: ageSeconds,
+      is_stale: isStale
+    });
+  } catch (error) {
+    console.error('[API] Error fetching widget data:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/v1/widgets/:widget_type/reload - Force reload widget
+app.post('/api/v1/widgets/:widget_type/reload', async (req, res) => {
+  try {
+    const { widget_type } = req.params;
+    const { fund_id, account_filter, date_range_days, group_by } = req.body;
+
+    // Call dashboard_creator service to regenerate widget
+    const axios = await import('axios');
+    const dashboardCreatorUrl = process.env.DASHBOARD_CREATOR_URL || 'http://localhost:8004';
+
+    const response = await axios.default.post(
+      `${dashboardCreatorUrl}/api/v1/widgets/${widget_type}/generate`,
+      { fund_id, account_filter, date_range_days, group_by }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    console.error('[API] Error reloading widget:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/v1/dashboards/:dashboard_id/reload-all - Reload all widgets in dashboard
+app.post('/api/v1/dashboards/:dashboard_id/reload-all', async (req, res) => {
+  try {
+    const { dashboard_id } = req.params;
+
+    // Get dashboard
+    const dashboard = await db.collection('dashboards').findOne({ dashboard_id });
+
+    if (!dashboard) {
+      return res.status(404).json({ error: 'Dashboard not found' });
+    }
+
+    // Reload each widget
+    const axios = await import('axios');
+    const dashboardCreatorUrl = process.env.DASHBOARD_CREATOR_URL || 'http://localhost:8004';
+
+    const reloadPromises = dashboard.widgets.map(widget => {
+      const payload = {
+        fund_id: dashboard.fund_id,
+        ...widget.config
+      };
+
+      return axios.default.post(
+        `${dashboardCreatorUrl}/api/v1/widgets/${widget.widget_type}/generate`,
+        payload
+      ).catch(err => {
+        console.error(`Failed to reload widget ${widget.widget_id}:`, err.message);
+        return { error: err.message };
+      });
+    });
+
+    await Promise.all(reloadPromises);
+
+    res.json({ status: 'success', reloaded: dashboard.widgets.length });
+  } catch (error) {
+    console.error('[API] Error reloading dashboard widgets:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

@@ -4,7 +4,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735982000,
     "signalID": "sig_com3_mkt_001",
-    "entry_name": "$ENTRY_1",
+    "entry_name": "$COM3_MKT_1",
     "account_equity": 10000,
     "signal_legs": [
       {
@@ -28,7 +28,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735982060,
     "signalID": "sig_com3_mkt_002",
-    "entry_name": "$ENTRY_2",
+    "entry_name": "$COM3_MKT_2",
     "account_equity": 10000,
     "signal_legs": [
       {
@@ -52,7 +52,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735982180,
     "signalID": "sig_com3_mkt_003",
-    "entry_signal_id": "$ENTRY_1",
+    "entry_signal_id": "$COM3_MKT_1",
     "account_equity": 10000,
     "signal_legs": [
       {
@@ -74,7 +74,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735982240,
     "signalID": "sig_com3_mkt_004",
-    "entry_signal_id": "$ENTRY_2",
+    "entry_signal_id": "$COM3_MKT_2",
     "account_equity": 10000,
     "signal_legs": [
       {
@@ -96,7 +96,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735982330,
     "signalID": "sig_com3_mkt_005",
-    "entry_name": "$ENTRY_3",
+    "entry_name": "$COM3_MKT_3",
     "account_equity": 17000,
     "signal_legs": [
       {
@@ -120,7 +120,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735982390,
     "signalID": "sig_com3_mkt_006",
-    "entry_name": "$ENTRY_4",
+    "entry_name": "$COM3_MKT_4",
     "account_equity": 29000,
     "signal_legs": [
       {
@@ -144,7 +144,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735982510,
     "signalID": "sig_com3_mkt_007",
-    "entry_signal_id": "$ENTRY_3",
+    "entry_signal_id": "$COM3_MKT_3",
     "account_equity": 45000,
     "signal_legs": [
       {
@@ -166,7 +166,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735982570,
     "signalID": "sig_com3_mkt_008",
-    "entry_signal_id": "$ENTRY_4",
+    "entry_signal_id": "$COM3_MKT_4",
     "account_equity": 21000,
     "signal_legs": [
       {
@@ -188,7 +188,7 @@
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735982660,
     "signalID": "sig_com3_mkt_009",
-    "entry_name": "$ENTRY_5",
+    "entry_name": "$COM3_MKT_5",
     "account_equity": 10000,
     "signal_legs": [
       {
@@ -212,7 +212,7 @@
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735982780,
     "signalID": "sig_com3_mkt_010",
-    "entry_signal_id": "$ENTRY_5",
+    "entry_signal_id": "$COM3_MKT_5",
     "account_equity": 10000,
     "signal_legs": [
       {

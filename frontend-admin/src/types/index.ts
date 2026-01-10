@@ -268,3 +268,125 @@ export interface LoginResponse {
   token: string;
   user: User;
 }
+
+// Dashboard Types (v5)
+export interface Dashboard {
+  dashboard_id: string;
+  name: string;
+  description?: string;
+  created_by: string;
+  fund_id: string | null;
+  is_locked: boolean;
+  widgets: DashboardWidget[];
+  grid_config: GridConfig;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DashboardWidget {
+  widget_id: string;
+  widget_type: WidgetType;
+  position: WidgetPosition;
+  config: WidgetConfig;
+}
+
+export interface WidgetPosition {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface GridConfig {
+  cols: number;
+  row_height: number;
+}
+
+export type WidgetType = 'FundBalances' | 'AccountStatement';
+
+export interface WidgetConfig {
+  account_filter?: string;
+  fund_filter?: string;
+  date_range_days?: number;
+  group_by?: 'date' | 'account';
+}
+
+export interface WidgetData<T = any> {
+  data: T;
+  computed_at: string;
+  age_seconds: number;
+  is_stale: boolean;
+}
+
+// Fund Balances Widget Data
+export interface FundBalancesData {
+  total_equity: number;
+  funds: FundBalance[];
+}
+
+export interface FundBalance {
+  fund_id: string;
+  fund_name: string;
+  total_balance: number;
+  accounts: AccountBalance[];
+}
+
+export interface AccountBalance {
+  account_id: string;
+  broker: string;
+  equity: number;
+  cash: number;
+  margin_used: number;
+  unrealized_pnl: number;
+}
+
+// Account Statement Widget Data
+export interface AccountStatementData {
+  transactions: Transaction[];
+  summary: TransactionSummary;
+}
+
+export interface Transaction {
+  date: string;
+  timestamp: string;
+  account_id: string;
+  fund_id?: string;
+  strategy_id?: string;
+  type: 'TRADE' | 'DEPOSIT' | 'WITHDRAWAL' | 'FEE' | 'OPENING_BALANCE';
+  description: string;
+  signal_id?: string;
+  symbol?: string;
+  debit: number;
+  credit: number;
+  balance: number;
+  realized_pnl: number;
+  commission?: number;
+}
+
+export interface TransactionSummary {
+  total_debits: number;
+  total_credits: number;
+  net_pnl: number;
+  transaction_count: number;
+  date_range_days: number;
+  start_date: string;
+  end_date: string;
+}
+
+// Dashboard API Request Types
+export interface CreateDashboardRequest {
+  name: string;
+  description?: string;
+  created_by: string;
+  fund_id?: string | null;
+  widgets?: DashboardWidget[];
+  grid_config?: GridConfig;
+}
+
+export interface UpdateDashboardRequest {
+  name?: string;
+  description?: string;
+  is_locked?: boolean;
+  widgets?: DashboardWidget[];
+  grid_config?: GridConfig;
+}

@@ -1,497 +1,684 @@
-# Execution Service
+# Execution Service & Brokers
+
+The Execution Service is responsible for placing orders with brokers and updating position tracking. It uses a unified broker abstraction layer to support multiple broker APIs (IBKR, Zerodha, Mock).
+
+## Table of Contents
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Execution Flow](#execution-flow)
+- [Broker Abstraction](#broker-abstraction)
+- [Supported Brokers](#supported-brokers)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Error Handling](#error-handling)
+
+---
 
 ## Overview
 
-The Execution Service receives approved trading orders from the Cerebro Service and executes them with the appropriate broker. It manages the complete order lifecycle from placement to fill/rejection and publishes execution confirmations back to the system.
+### Purpose
+- **Order Execution**: Place orders with broker APIs
+- **Status Tracking**: Update order status (PENDING → SUBMITTED → FILLED/REJECTED)
+- **Position Management**: Update account positions in real-time
+- **P&L Calculation**: Calculate realized P&L on EXIT orders
+- **Execution Recording**: Update signal_store with execution data
 
-## Location
+### Technology Stack
+- **Python 3.11+**
+- **PyMongo** (MongoDB Change Streams)
+- **ib-insync** (Interactive Brokers API)
+- **kiteconnect** (Zerodha API)
+- **Docker** (containerization)
 
-`/services/execution_service/`
-
-## Key Responsibilities
-
-1. Subscribe to trading orders from Cerebro Service
-2. Place orders with appropriate broker via BrokerFactory
-3. Track order status (Pending → Submitted → Filled/Rejected)
-4. Handle partial fills and order modifications
-5. Publish execution confirmations to other services
-6. Store execution data in MongoDB for audit trail
-7. Send Telegram notifications for important execution events
-8. Handle broker-specific order parameters and validation
-
-## Main Files
-
-### execution_main.py
-- Pub/Sub subscriber for trading orders
-- Order placement orchestration
-- Order lifecycle management
-- Execution confirmation publishing
-- Error handling and retry logic
-
-## Key Functions
-
-### process_order(order_data)
-Main order processing function:
-1. Validate order data
-2. Get broker instance from BrokerFactory
-3. Place order with broker
-4. Track order status
-5. Handle fills/rejections
-6. Publish confirmation
-7. Update MongoDB
-
-### handle_order_fill(order_id, fill_data)
-Processes filled orders:
-- Updates position in MongoDB
-- Calculates realized PnL for exits
-- Sends Telegram notification
-- Publishes to execution-confirmations topic
-
-### handle_order_rejection(order_id, rejection_reason)
-Handles rejected orders:
-- Logs rejection details
-- Updates signal_store with failure
-- Sends Telegram alert
-- Does not retry (manual intervention required)
-
-## Order Processing Workflow
-
+### Location
 ```
-1. Receive Order from Pub/Sub
-   - Topic: trading-orders
-   - Message contains: signal_id, order details
-   ↓
-2. Validate Order Data
-   - Check required fields
-   - Validate symbol format
-   - Verify account exists
-   ↓
-3. Get Broker Instance
-   - BrokerFactory.create_broker(config)
-   - Ensure connection established
-   ↓
-4. Place Order with Broker
-   - Call broker.place_order(order_data)
-   - Receive order_id from broker
-   ↓
-5. Track Order Status
-   - Poll broker for status updates
-   - Detect fills/partial fills
-   - Handle rejections
-   ↓
-6. Process Order Result
-   - FILLED → Update positions
-   - REJECTED → Log and notify
-   - PARTIAL → Continue tracking
-   ↓
-7. Publish Execution Confirmation
-   - Pub/Sub: execution-confirmations
-   ↓
-8. Store in MongoDB
-   - Collection: execution_confirmations
-   - Update: signal_store with order_id
-   ↓
-9. Send Telegram Notification
-   - Success: "Order filled: 100 SPY @ $235.00"
-   - Failure: "Order rejected: Insufficient margin"
+services/execution_service/
+├── execution_main.py           # Main service with Change Stream watcher
+└── [uses broker library]
+
+services/brokers/                # Unified broker library
+├── base.py                     # AbstractBroker interface
+├── factory.py                  # BrokerFactory
+├── exceptions.py               # Broker exceptions
+├── ibkr/                       # Interactive Brokers
+│   ├── client.py
+│   └── order_builder.py
+├── zerodha/                    # Zerodha Kite Connect
+│   ├── client.py
+│   └── order_builder.py
+└── mock/                       # Mock broker for testing
+    └── client.py
 ```
 
-## MongoDB Collections
+---
 
-### execution_confirmations (Write)
-Stores all order executions and rejections:
-```json
-{
-  "_id": "exec_abc123",
-  "order_id": "ord_broker_12345",
-  "signal_id": "sig_1732450800_5678",
-  "strategy_name": "SPX 1-Day Options",
-  "account_id": "acc_abc123",
-  "symbol": "SPY",
-  "side": "BUY",
-  "quantity": 100,
-  "filled_quantity": 100,
-  "order_type": "MARKET",
-  "avg_fill_price": 235.15,
-  "status": "FILLED",
-  "submitted_at": "2024-11-24T10:30:10Z",
-  "filled_at": "2024-11-24T10:30:12Z",
-  "broker": "IBKR",
-  "commission": 1.00,
-  "total_value": 23515.00,
-  "notes": "Filled in 2 seconds"
-}
+## Architecture
+
+### Service Model
+
+The Execution Service operates as a **MongoDB Change Stream watcher** that:
+
+1. Watches `trading_orders` collection for PENDING orders
+2. Creates broker instance via BrokerFactory
+3. Places order via broker API
+4. Updates order status based on broker response
+5. Updates account positions in `trading_accounts`
+6. Updates `signal_store.legs[].execution` with execution data
+
+### Design Philosophy
+- **Broker-Agnostic**: Unified interface for all brokers
+- **Event-Driven**: Uses MongoDB Change Streams (no polling)
+- **Fault-Tolerant**: Retries on transient failures
+- **Position-Aware**: Maintains accurate position tracking
+
+---
+
+## Execution Flow
+
+### Flow Diagram
+
+```
+┌──────────────────────────────────────────┐
+│ Cerebro Service                          │
+│ - Creates trading_orders (status=PENDING)│
+└──────────┬───────────────────────────────┘
+           │ INSERT
+           ↓
+┌──────────────────────────────────────────┐
+│ MongoDB: trading_orders                  │
+│ {                                        │
+│   order_id: "ord_001",                  │
+│   status: "PENDING",                    │
+│   account_id: "OANDA_MOCK",            │
+│   instrument: "SPY",                    │
+│   quantity: 100,                        │
+│   order_type: "MARKET"                  │
+│ }                                        │
+└──────────┬───────────────────────────────┘
+           │ Change Stream Event
+           ↓
+┌──────────────────────────────────────────┐
+│ Execution Service                        │
+│ - Detects PENDING order                 │
+│ - Creates broker instance via Factory   │
+│ - Places order via broker API           │
+└──────────┬───────────────────────────────┘
+           │
+           ↓
+┌──────────────────────────────────────────┐
+│ BrokerFactory                            │
+│ - Determines broker type (IBKR/Zerodha) │
+│ - Creates IBKRClient or ZerodhaClient   │
+└──────────┬───────────────────────────────┘
+           │
+           ↓
+┌──────────────────────────────────────────┐
+│ Broker API (IBKR/Zerodha/Mock)          │
+│ - Receives order                         │
+│ - Returns order ID + status             │
+└──────────┬───────────────────────────────┘
+           │
+           ↓
+┌──────────────────────────────────────────┐
+│ Execution Service                        │
+│ - Updates order status → SUBMITTED      │
+│ - Waits for fill confirmation           │
+│ - Updates order status → FILLED         │
+│ - Updates account positions             │
+│ - Updates signal_store execution        │
+└──────────────────────────────────────────┘
 ```
 
-### signal_store (Update)
-Updates signal with order_id:
-```json
-{
-  "signal_id": "sig_1732450800_5678",
-  "order_id": "ord_broker_12345",
-  "execution_status": "FILLED",
-  "filled_at": "2024-11-24T10:30:12Z"
-}
+### Step-by-Step Process
+
+#### 1. Order Detection
+```python
+# Watch trading_orders for PENDING orders
+pipeline = [
+    {
+        "$match": {
+            "operationType": {"$in": ["insert", "update"]},
+            "fullDocument.status": "PENDING"
+        }
+    }
+]
+
+for change in change_stream:
+    order_doc = change['fullDocument']
+    process_order(order_doc)
 ```
 
-### positions (Update)
-Creates or updates positions:
-```json
-{
-  "_id": "pos_abc123",
-  "strategy_name": "SPX 1-Day Options",
-  "account_id": "acc_abc123",
-  "symbol": "SPY",
-  "side": "LONG",
-  "quantity": 100,
-  "avg_entry_price": 235.15,
-  "opened_at": "2024-11-24T10:30:12Z",
-  "status": "OPEN",
-  "order_ids": ["ord_broker_12345"]
-}
+#### 2. Broker Instance Creation
+```python
+from brokers.factory import BrokerFactory
+
+def process_order(order_doc):
+    account_id = order_doc['account_id']
+    broker_type = get_broker_type(account_id)  # "IBKR", "ZERODHA", "MOCK"
+
+    # Create broker instance
+    broker = BrokerFactory.create_broker(
+        broker_type=broker_type,
+        account_id=account_id
+    )
 ```
 
-## Pub/Sub Integration
+#### 3. Order Placement
+```python
+    # Place order via broker API
+    try:
+        broker_order_id = broker.place_order(
+            instrument=order_doc['instrument'],
+            action=order_doc['action'],  # BUY/SELL
+            quantity=order_doc['quantity'],
+            order_type=order_doc['order_type'],  # MARKET/LIMIT
+            price=order_doc.get('price')
+        )
 
-### Subscribed Topics
+        # Update order status to SUBMITTED
+        db.trading_orders.update_one(
+            {'order_id': order_doc['order_id']},
+            {'$set': {
+                'status': 'SUBMITTED',
+                'broker_order_id': broker_order_id,
+                'submitted_at': datetime.now(timezone.utc)
+            }}
+        )
 
-**trading-orders**
-Receives approved orders from Cerebro Service:
-```json
-{
-  "signal_id": "sig_1732450800_5678",
-  "order_type": "MARKET",
-  "symbol": "SPY",
-  "side": "BUY",
-  "quantity": 100,
-  "account_id": "acc_abc123",
-  "strategy_name": "SPX 1-Day Options",
-  "stop_loss": 230.00,
-  "take_profit": 240.00
-}
+    except BrokerError as e:
+        # Mark order as REJECTED
+        db.trading_orders.update_one(
+            {'order_id': order_doc['order_id']},
+            {'$set': {
+                'status': 'REJECTED',
+                'rejection_reason': str(e)
+            }}
+        )
 ```
 
-### Published Topics
+#### 4. Fill Confirmation
+```python
+    # Wait for fill (or poll for status)
+    fill_data = broker.wait_for_fill(broker_order_id, timeout=60)
 
-**execution-confirmations**
-Publishes execution results:
-```json
-{
-  "signal_id": "sig_1732450800_5678",
-  "order_id": "ord_broker_12345",
-  "status": "FILLED",
-  "filled_quantity": 100,
-  "avg_fill_price": 235.15,
-  "filled_at": "2024-11-24T10:30:12Z",
-  "commission": 1.00
-}
+    if fill_data['status'] == 'FILLED':
+        # Update order status to FILLED
+        db.trading_orders.update_one(
+            {'order_id': order_doc['order_id']},
+            {'$set': {
+                'status': 'FILLED',
+                'quantity_filled': fill_data['quantity_filled'],
+                'avg_fill_price': fill_data['avg_fill_price'],
+                'filled_at': datetime.now(timezone.utc)
+            }}
+        )
+
+        # Update account positions
+        update_account_position(
+            account_id=order_doc['account_id'],
+            instrument=order_doc['instrument'],
+            quantity_change=fill_data['quantity_filled'],
+            price=fill_data['avg_fill_price']
+        )
+
+        # Update signal_store execution data
+        update_signal_store_execution(order_doc, fill_data)
 ```
 
-## Order Types Supported
+#### 5. Position Update (ENTRY)
+```python
+def update_account_position(account_id, instrument, quantity_change, price):
+    account = db.trading_accounts.find_one({'account_id': account_id})
 
-### Market Orders
-- Executes at current market price
-- Fast execution
-- No price guarantee
+    # Find existing position or create new
+    position = next(
+        (p for p in account['open_positions'] if p['instrument'] == instrument),
+        None
+    )
 
-### Limit Orders
-- Executes at specified price or better
-- May not fill immediately
-- Price protection
+    if position is None:
+        # New position
+        new_position = {
+            'instrument': instrument,
+            'quantity': quantity_change,
+            'avg_entry_price': price,
+            'unrealized_pnl': 0.0
+        }
+        db.trading_accounts.update_one(
+            {'account_id': account_id},
+            {'$push': {'open_positions': new_position}}
+        )
+    else:
+        # Update existing position (weighted average for entry price)
+        new_quantity = position['quantity'] + quantity_change
+        new_avg_price = (
+            (position['quantity'] * position['avg_entry_price']) +
+            (quantity_change * price)
+        ) / new_quantity
 
-### Stop Orders
-- Triggers when price reaches stop level
-- Becomes market order
-- Used for stop-loss
+        db.trading_accounts.update_one(
+            {
+                'account_id': account_id,
+                'open_positions.instrument': instrument
+            },
+            {'$set': {
+                'open_positions.$.quantity': new_quantity,
+                'open_positions.$.avg_entry_price': new_avg_price
+            }}
+        )
+```
 
-### Stop-Limit Orders
-- Triggers at stop price
-- Becomes limit order
-- Combined protection
+#### 6. Position Update (EXIT) + P&L Calculation
+```python
+def update_account_position_exit(account_id, instrument, quantity_change, exit_price):
+    account = db.trading_accounts.find_one({'account_id': account_id})
+    position = next(
+        (p for p in account['open_positions'] if p['instrument'] == instrument),
+        None
+    )
 
-## Broker-Specific Handling
+    # Calculate realized P&L
+    pnl = (exit_price - position['avg_entry_price']) * quantity_change
 
-### IBKR Orders
-- Uses `ib_insync` library
-- Supports all asset classes
-- Crypto orders use `cashQty` parameter
-- Sets appropriate `tif` (time in force):
-  - DAY - Regular trading hours
-  - GTC - Good til cancelled
-  - IOC - Immediate or cancel
+    # Update position
+    new_quantity = position['quantity'] - quantity_change
 
-### Zerodha Orders
-- Uses `kiteconnect` library
-- NSE/BSE exchanges
-- Intraday vs delivery orders
-- Product types: MIS, NRML, CNC
+    if new_quantity == 0:
+        # Fully closed - remove from open_positions
+        db.trading_accounts.update_one(
+            {'account_id': account_id},
+            {
+                '$pull': {'open_positions': {'instrument': instrument}},
+                '$inc': {'balances.realized_pnl': pnl}
+            }
+        )
+    else:
+        # Partially closed
+        db.trading_accounts.update_one(
+            {
+                'account_id': account_id,
+                'open_positions.instrument': instrument
+            },
+            {
+                '$set': {'open_positions.$.quantity': new_quantity},
+                '$inc': {'balances.realized_pnl': pnl}
+            }
+        )
+```
 
-### Mock Broker
-- Simulates order fills
-- Configurable fill delay
-- Random rejection for testing
-- No real money involved
+---
 
-## Error Handling
+## Broker Abstraction
 
-1. **Broker Connection Failures**
-   - Retries connection up to 3 times
-   - Logs error details
-   - Rejects order if connection fails
-   - Sends Telegram alert
+### AbstractBroker Interface
 
-2. **Order Rejection by Broker**
-   - Stores rejection reason
-   - Updates signal_store with failure
-   - Sends detailed Telegram notification
-   - No automatic retry (requires manual review)
+All brokers implement a common interface defined in `services/brokers/base.py`:
 
-3. **Partial Fills**
-   - Continues tracking until fully filled or cancelled
-   - Updates position with partial quantity
-   - Logs partial fill events
+```python
+from abc import ABC, abstractmethod
 
-4. **Order Timeout**
-   - Configurable timeout (default: 60 seconds)
-   - Cancels order if not filled
-   - Logs timeout event
-   - Notifies via Telegram
+class AbstractBroker(ABC):
+    """Base class for all broker implementations"""
+
+    @abstractmethod
+    def connect(self):
+        """Establish connection to broker API"""
+        pass
+
+    @abstractmethod
+    def disconnect(self):
+        """Close connection to broker API"""
+        pass
+
+    @abstractmethod
+    def place_order(
+        self,
+        instrument: str,
+        action: str,  # "BUY" or "SELL"
+        quantity: int,
+        order_type: str = "MARKET",
+        price: float = None,
+        stop_loss: float = None,
+        take_profit: float = None
+    ) -> str:
+        """
+        Place order with broker
+
+        Returns:
+            str: Broker order ID
+        """
+        pass
+
+    @abstractmethod
+    def get_order_status(self, broker_order_id: str) -> dict:
+        """
+        Get order status from broker
+
+        Returns:
+            {
+                "status": "FILLED|PENDING|REJECTED",
+                "quantity_filled": 100,
+                "avg_fill_price": 450.30
+            }
+        """
+        pass
+
+    @abstractmethod
+    def get_account_balance(self) -> dict:
+        """
+        Get account balance from broker
+
+        Returns:
+            {
+                "equity": 500000.00,
+                "cash": 250000.00,
+                "margin_used": 50000.00,
+                "margin_available": 200000.00
+            }
+        """
+        pass
+
+    @abstractmethod
+    def get_open_positions(self) -> list:
+        """
+        Get open positions from broker
+
+        Returns:
+            [
+                {
+                    "instrument": "SPY",
+                    "quantity": 100,
+                    "avg_entry_price": 450.25,
+                    "current_price": 455.50,
+                    "unrealized_pnl": 525.00
+                }
+            ]
+        """
+        pass
+```
+
+### BrokerFactory
+
+The `BrokerFactory` creates the appropriate broker instance based on account configuration:
+
+```python
+from brokers.factory import BrokerFactory
+from brokers.ibkr.client import IBKRClient
+from brokers.zerodha.client import ZerodhaClient
+from brokers.mock.client import MockBrokerClient
+
+class BrokerFactory:
+    """Factory for creating broker instances"""
+
+    @staticmethod
+    def create_broker(broker_type: str, account_id: str) -> AbstractBroker:
+        """
+        Create broker instance
+
+        Args:
+            broker_type: "IBKR", "ZERODHA", "MOCK"
+            account_id: Account identifier
+
+        Returns:
+            AbstractBroker instance
+        """
+        if broker_type == "IBKR":
+            return IBKRClient(account_id)
+        elif broker_type == "ZERODHA":
+            return ZerodhaClient(account_id)
+        elif broker_type == "MOCK":
+            return MockBrokerClient(account_id)
+        else:
+            raise ValueError(f"Unsupported broker type: {broker_type}")
+```
+
+---
+
+## Supported Brokers
+
+### 1. Interactive Brokers (IBKR)
+
+**Library**: `ib-insync`
+**Connection**: IB Gateway (Docker container)
+
+**Configuration**:
+```python
+# services/brokers/ibkr/client.py
+class IBKRClient(AbstractBroker):
+    def __init__(self, account_id):
+        self.account_id = account_id
+        self.ib = IB()
+
+    def connect(self):
+        self.ib.connect(
+            host=os.getenv('IBKR_HOST', 'ib-gateway'),
+            port=int(os.getenv('IBKR_PORT', '4002')),  # 4001=live, 4002=paper
+            clientId=int(os.getenv('IBKR_CLIENT_ID', '1'))
+        )
+
+    def place_order(self, instrument, action, quantity, order_type="MARKET", price=None):
+        contract = Stock(instrument, 'SMART', 'USD')
+        order = MarketOrder(action, quantity) if order_type == "MARKET" else LimitOrder(action, quantity, price)
+
+        trade = self.ib.placeOrder(contract, order)
+        return trade.order.orderId
+```
+
+### 2. Zerodha Kite Connect
+
+**Library**: `kiteconnect`
+**API**: Zerodha Kite Connect REST API
+
+**Configuration**:
+```python
+# services/brokers/zerodha/client.py
+from kiteconnect import KiteConnect
+
+class ZerodhaClient(AbstractBroker):
+    def __init__(self, account_id):
+        self.account_id = account_id
+        self.kite = KiteConnect(api_key=os.getenv('ZERODHA_API_KEY'))
+
+    def connect(self):
+        access_token = os.getenv('ZERODHA_ACCESS_TOKEN')
+        self.kite.set_access_token(access_token)
+
+    def place_order(self, instrument, action, quantity, order_type="MARKET", price=None):
+        order_params = {
+            'tradingsymbol': instrument,
+            'exchange': 'NSE',
+            'transaction_type': action,
+            'quantity': quantity,
+            'order_type': order_type,
+            'product': 'CNC'
+        }
+
+        if order_type == "LIMIT":
+            order_params['price'] = price
+
+        order_id = self.kite.place_order(**order_params)
+        return order_id
+```
+
+### 3. Mock Broker (Testing)
+
+**Purpose**: Simulated broker for testing without real money
+
+**Features**:
+- Instant fills at specified price
+- Simulated account balances
+- Position tracking in memory
+- No external API calls
+
+**Configuration**:
+```python
+# services/brokers/mock/client.py
+class MockBrokerClient(AbstractBroker):
+    def __init__(self, account_id):
+        self.account_id = account_id
+        self.positions = {}
+        self.balance = 1000000.00  # $1M starting balance
+
+    def place_order(self, instrument, action, quantity, order_type="MARKET", price=None):
+        # Simulate instant fill
+        fill_price = price if price else self.get_market_price(instrument)
+        order_id = f"mock_{uuid.uuid4().hex[:8]}"
+
+        # Update simulated position
+        if action == "BUY":
+            self.positions[instrument] = self.positions.get(instrument, 0) + quantity
+        elif action == "SELL":
+            self.positions[instrument] = self.positions.get(instrument, 0) - quantity
+
+        return order_id
+```
+
+---
 
 ## Configuration
 
 ### Environment Variables
+
 ```bash
-# Broker configuration (inherited from .env)
-IBKR_HOST=127.0.0.1
-IBKR_PORT=4002
+# .env file
+
+# MongoDB Connection
+MONGODB_URI=mongodb://mongodb:27017/mathematricks_trading
+
+# Mock Broker Mode
+USE_MOCK_BROKER=true  # Force all orders to Mock broker
+
+# IBKR Configuration
+IBKR_HOST=ib-gateway
+IBKR_PORT=4002         # 4001=live, 4002=paper
 IBKR_CLIENT_ID=1
 
-# Mock broker flag
-USE_MOCK_BROKER=false
-
-# Telegram notifications
-TELEGRAM_ENABLED=true
-TELEGRAM_BOT_TOKEN=your_token
-TELEGRAM_CHAT_ID=your_chat_id
-
-# Execution settings (hardcoded in execution_main.py)
-ORDER_TIMEOUT_SECONDS=60
-MAX_RETRY_ATTEMPTS=3
+# Zerodha Configuration
+ZERODHA_API_KEY=your_api_key
+ZERODHA_API_SECRET=your_api_secret
+ZERODHA_ACCESS_TOKEN=your_access_token
 ```
 
-### Command-Line Options
-```bash
-# Use mock broker for testing
-python execution_main.py --use-mock-broker
+### Docker Compose
 
-# Standard execution
-python execution_main.py
+```yaml
+services:
+  execution-service:
+    build: ./services/execution_service
+    container_name: mathematricks-trader-execution-service-1
+    command: python execution_main.py --staging
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - USE_MOCK_BROKER=${USE_MOCK_BROKER}
+      - IBKR_HOST=${IBKR_HOST}
+      - IBKR_PORT=${IBKR_PORT}
+    ports:
+      - "5679:5679"  # Python debugger
+    depends_on:
+      - mongodb
+      - ib-gateway
+    networks:
+      - tradenet
+    restart: unless-stopped
 ```
 
-## Logging
+---
 
-Logs to:
-- Console (real-time output)
-- `logs/execution_service.log` (service-specific)
-- `logs/signal_processing.log` (unified signal journey)
+## Usage
 
-Log format:
-```
-Timestamp | [EXECUTION] | Message
-```
-
-Example log entries:
-```
-2024-11-24 10:30:10 | [EXECUTION] | Received order: sig_1732450800_5678
-2024-11-24 10:30:10 | [EXECUTION] | Placing order: BUY 100 SPY MARKET
-2024-11-24 10:30:11 | [EXECUTION] | Order submitted: ord_broker_12345
-2024-11-24 10:30:12 | [EXECUTION] | Order filled: 100 @ $235.15
-2024-11-24 10:30:12 | [EXECUTION] | Published execution confirmation
-```
-
-## Telegram Notifications
-
-### Successful Execution
-```
-✅ Order Filled
-
-Signal: sig_1732450800_5678
-Strategy: SPX 1-Day Options
-Order: BUY 100 SPY @ $235.15
-Total: $23,515.00
-Commission: $1.00
-Time: 2 seconds
-```
-
-### Order Rejection
-```
-❌ Order Rejected
-
-Signal: sig_1732450800_5678
-Strategy: SPX 1-Day Options
-Order: BUY 100 SPY
-Reason: Insufficient margin
-Account: IBKR Main Account
-```
-
-### Partial Fill
-```
-⚠️ Partial Fill
-
-Signal: sig_1732450800_5678
-Order: BUY 100 SPY
-Filled: 50/100 @ $235.20
-Remaining: 50
-```
-
-## Dependencies
-
-- **Google Cloud Pub/Sub** - Order input/confirmation output
-- **MongoDB** - Execution storage
-- **BrokerFactory** - Broker abstraction (IBKR, Zerodha, Mock)
-- **Telegram notifier** - Execution notifications
-- **Python packages**:
-  - `google-cloud-pubsub>=2.18.4`
-  - `pymongo>=4.6.1`
-  - `ib-insync>=0.9.86` (for IBKR)
-  - `kiteconnect>=5.0.1` (for Zerodha)
-  - `requests>=2.31.0`
-
-## Startup Command
+### Starting the Service
 
 ```bash
-# Via mvp_demo_start.py
-python mvp_demo_start.py
+# Via Docker Compose
+make start
 
-# Manual startup (live broker)
-python services/execution_service/execution_main.py
+# View execution service logs
+make logs-execution
 
-# With mock broker (testing)
-python services/execution_service/execution_main.py --use-mock-broker
+# Restart execution service only
+docker restart mathematricks-trader-execution-service-1
 
-# Background process
-nohup python services/execution_service/execution_main.py > logs/execution_service.log 2>&1 &
+# Standalone (Development)
+cd services/execution_service
+python execution_main.py --staging
 ```
 
-## Health Checks
+### Monitoring Execution
 
-Check service status:
+#### Check Order Status
 ```bash
-python mvp_demo_status.py
+# MongoDB shell
+docker exec -it mathematricks-trader-mongodb-1 mongosh mathematricks_trading
+
+> db.trading_orders.find({order_id: "ord_001"}).pretty()
+
+# Expected output:
+{
+    "order_id": "ord_001",
+    "status": "FILLED",
+    "broker_order_id": "mock_abc123",
+    "quantity_filled": 100,
+    "avg_fill_price": 450.30,
+    "filled_at": "2024-01-09T12:00:10Z"
+}
 ```
 
-View logs:
+#### Check Account Positions
 ```bash
-# Service-specific logs
-tail -f logs/execution_service.log
+> db.trading_accounts.find({account_id: "OANDA_MOCK"}).pretty()
 
-# Unified signal journey
-tail -f logs/signal_processing.log | grep EXECUTION
+# Expected output:
+{
+    "account_id": "OANDA_MOCK",
+    "open_positions": [
+        {
+            "instrument": "SPY",
+            "quantity": 100,
+            "avg_entry_price": 450.30
+        }
+    ]
+}
 ```
 
-Monitor Pub/Sub:
-```bash
-gcloud pubsub subscriptions describe trading-orders-sub
+---
+
+## Error Handling
+
+### Common Errors
+
+#### 1. Broker Connection Failed
+```
+ERROR: Failed to connect to broker: Connection refused
 ```
 
-## Testing
+**Solution**:
+- Check IB Gateway status: `docker ps | grep ib-gateway`
+- Verify IBKR credentials in `.env`
+- Ensure IB Gateway is accepting connections (check VNC: `localhost:5900`)
 
-### Send Test Order via Signal
-```bash
-cd tests/signals_testing
-python send_test_signal.py --file equity_simple_signal_1.json
+#### 2. Insufficient Margin
+```
+ERROR: Order rejected: Insufficient margin
 ```
 
-### Monitor Execution
-```bash
-# Watch execution logs
-tail -f logs/execution_service.log
+**Solution**:
+- Verify account has sufficient buying power
+- Check margin requirements: `curl http://localhost:8082/accounts/margin-preview`
+- Reduce position size
 
-# Watch unified logs
-tail -f logs/signal_processing.log
+#### 3. Invalid Instrument Symbol
+```
+ERROR: Invalid instrument: XYZ
 ```
 
-### Check Execution in MongoDB
-```bash
-mongosh
-use mathematricks_trading
-db.execution_confirmations.find().sort({submitted_at: -1}).limit(1)
-```
+**Solution**:
+- Verify instrument symbol format (e.g., "SPY" not "S&P 500")
+- Check broker-specific symbol requirements
+- Use correct exchange prefix if needed
 
-### Verify Position Created
-```bash
-db.positions.find({status: "OPEN"})
-```
-
-## Performance Considerations
-
-- Order placement latency: 50-500ms (depends on broker)
-- IBKR typically fastest (~100ms)
-- Zerodha variable (200-500ms)
-- Mock broker instant (<10ms)
-- Network latency to broker servers adds 10-50ms
+---
 
 ## Related Documentation
-
-- [Cerebro Service](cerebro_service.md) - Sends orders to Execution Service
-- [Brokers](brokers.md) - Broker abstraction layer
-- [Account Data Service](account_data_service.md) - Updates on fills
-- [Testing Signals](signals_testing.md) - End-to-end testing
-
-## Common Issues
-
-### Orders Not Being Placed
-- Check Pub/Sub subscription: `trading-orders`
-- Verify Execution Service is running
-- Check broker connection status
-- Look for errors in `execution_service.log`
-
-### Order Rejections
-- **Insufficient margin** → Check account balance in Account Data Service
-- **Invalid symbol** → Verify symbol format matches broker
-- **Market closed** → Check trading hours for instrument
-- **Connection error** → Verify broker is running (TWS/Gateway)
-
-### Partial Fills Not Completing
-- Check order timeout setting
-- Verify order is still active with broker
-- Look for cancellation messages in logs
-- Check market liquidity for symbol
-
-### Missing Execution Confirmations
-- Verify `execution-confirmations` topic exists
-- Check MongoDB writes are succeeding
-- Look for publish errors in logs
-
-### Telegram Notifications Not Sending
-- Check `TELEGRAM_ENABLED=true` in .env
-- Verify bot token and chat ID are correct
-- Test Telegram API connectivity
-- Check notifier logs
-
-## Security Considerations
-
-- Order parameters are validated before placement
-- No order modification allowed once submitted
-- All executions logged for audit trail
-- Broker credentials not logged
-- Position updates atomic (no race conditions)
-
-## Recovery Procedures
-
-### Service Crash During Order Placement
-1. Check `signal_store` for pending orders
-2. Query broker for order status
-3. Manually reconcile positions if needed
-4. Update MongoDB collections
-
-### Duplicate Order Prevention
-- Signal IDs are unique
-- Check for existing order_id before placing
-- MongoDB unique index on signal_id
-
-### Failed Execution Confirmation Publish
-- Retry publishing up to 3 times
-- Log failure details
-- Order still tracked in MongoDB
-- Manual verification required
+- [Cerebro Service](cerebro_service.md) - Creates trading orders
+- [Account Data Service](account_data_service.md) - Account state
+- [Signal Ingestion](signal_ingestion_service.md) - Signal processing

@@ -37,49 +37,6 @@ def get_active_allocations_for_strategy(
         return []
 
 
-def calculate_fund_equity(
-    fund_id: str,
-    trading_accounts_collection,
-    funds_collection
-) -> float:
-    """
-    Calculate total equity across all accounts in a fund.
-    Updates fund.total_equity in MongoDB.
-    
-    Args:
-        fund_id: Fund ID
-        trading_accounts_collection: MongoDB collection
-        funds_collection: MongoDB collection
-        
-    Returns:
-        Total equity across all fund accounts
-    """
-    try:
-        # Get all accounts for this fund
-        accounts = list(trading_accounts_collection.find({"fund_id": fund_id}))
-        
-        # Sum equity across all accounts (from balances.equity field)
-        total_equity = sum(acc.get('balances', {}).get('equity', 0.0) for acc in accounts)
-        
-        # Update fund document
-        funds_collection.update_one(
-            {"fund_id": fund_id},
-            {
-                "$set": {
-                    "total_equity": total_equity,
-                    "updated_at": datetime.utcnow()
-                }
-            }
-        )
-        
-        logger.info(f"Fund {fund_id} total equity: ${total_equity:,.2f} across {len(accounts)} accounts")
-        return total_equity
-    
-    except Exception as e:
-        logger.error(f"Error calculating fund equity for {fund_id}: {str(e)}")
-        return 0.0
-
-
 def get_strategy_allocation_for_fund(
     fund_id: str,
     strategy_id: str,

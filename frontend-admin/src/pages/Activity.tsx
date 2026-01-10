@@ -1,13 +1,59 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../services/api';
-import { Activity as ActivityIcon, TrendingUp, TrendingDown, Clock, ChevronDown, ChevronRight } from 'lucide-react';
+import { TrendingUp, TrendingDown, Clock, ChevronDown, ChevronRight, Download } from 'lucide-react';
 
 export const Activity: React.FC = () => {
-  const [selectedTab, setSelectedTab] = useState<'signals' | 'orders' | 'decisions'>('signals');
+  const [selectedTab, setSelectedTab] = useState<'signal-legs' | 'orders' | 'trading-signals'>('signal-legs');
   const [showStaging, setShowStaging] = useState(true);
   const [showProduction, setShowProduction] = useState(false);
   const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
+
+  // CSV download utility
+  const downloadCSV = (data: any[], filename: string) => {
+    if (data.length === 0) return;
+
+    // Get all unique keys from all objects
+    const allKeys = new Set<string>();
+    data.forEach(item => {
+      Object.keys(item).forEach(key => {
+        // Skip nested objects/arrays for simplicity
+        if (typeof item[key] !== 'object' || item[key] === null) {
+          allKeys.add(key);
+        }
+      });
+    });
+
+    const headers = Array.from(allKeys);
+
+    // Create CSV content
+    const csvContent = [
+      headers.join(','), // Header row
+      ...data.map(row =>
+        headers.map(header => {
+          const value = row[header];
+          // Handle null/undefined
+          if (value === null || value === undefined) return '';
+          // Handle strings with commas or quotes
+          if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+            return `"${value.replace(/"/g, '""')}"`;
+          }
+          return value;
+        }).join(',')
+      )
+    ].join('\n');
+
+    // Create blob and download
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Determine environment filter for API calls
   // If both or neither selected, fetch all (no filter)
@@ -33,10 +79,10 @@ export const Activity: React.FC = () => {
     refetchInterval: 5000,
   });
 
-  // Fetch decisions
-  const { data: decisionsData, isLoading: isLoadingDecisions } = useQuery({
-    queryKey: ['decisions', environmentFilter],
-    queryFn: () => apiClient.getCerebroDecisions(50, environmentFilter),
+  // Fetch trading signals (aggregated view)
+  const { data: tradingSignalsData, isLoading: isLoadingTradingSignals } = useQuery({
+    queryKey: ['trading-signals', environmentFilter],
+    queryFn: () => apiClient.getTradingSignals(50, environmentFilter),
     refetchInterval: 5000,
   });
 
@@ -52,9 +98,37 @@ export const Activity: React.FC = () => {
     });
   };
 
-  const signals = filterByEnvironment(signalsData?.signals || []);
+  // Sort signals by signal_sent_timestamp (latest first)
+  const signals = filterByEnvironment(signalsData?.signals || []).sort((a: any, b: any) => {
+    const timeA = a.signal_sent_timestamp ? new Date(a.signal_sent_timestamp).getTime() : 0;
+    const timeB = b.signal_sent_timestamp ? new Date(b.signal_sent_timestamp).getTime() : 0;
+    return timeB - timeA; // Descending (latest first)
+  });
   const orders = filterByEnvironment(ordersData?.orders || []);
-  const decisions = filterByEnvironment(decisionsData?.decisions || []);
+
+  // Filter and sort trading signals: PENDING > OPEN > PARTIAL > CLOSED, then by entry time (latest first)
+  const tradingSignals = filterByEnvironment(tradingSignalsData?.trading_signals || []).sort((a: any, b: any) => {
+    // Define status priority: PENDING (highest), OPEN, PARTIAL, CLOSED (lowest)
+    const statusPriority = (status: string) => {
+      if (status === 'PENDING') return 4;
+      if (status === 'OPEN') return 3;
+      if (status === 'PARTIAL') return 2;
+      return 1; // CLOSED, etc.
+    };
+
+    const priorityA = statusPriority(a.status || '');
+    const priorityB = statusPriority(b.status || '');
+
+    // First sort by status priority
+    if (priorityA !== priorityB) {
+      return priorityB - priorityA; // Higher priority first
+    }
+
+    // Then sort by entry time (latest first)
+    const timeA = a.opened_at ? new Date(a.opened_at).getTime() : 0;
+    const timeB = b.opened_at ? new Date(b.opened_at).getTime() : 0;
+    return timeB - timeA; // Descending (latest first)
+  });
 
   // Helper to display current filter state
   const getFilterLabel = () => {
@@ -100,14 +174,14 @@ export const Activity: React.FC = () => {
       {/* Tabs */}
       <div className="flex space-x-2 border-b border-gray-700">
         <button
-          onClick={() => setSelectedTab('signals')}
+          onClick={() => setSelectedTab('signal-legs')}
           className={`px-6 py-3 font-medium transition-colors ${
-            selectedTab === 'signals'
+            selectedTab === 'signal-legs'
               ? 'border-b-2 border-blue-500 text-blue-500'
               : 'text-gray-400 hover:text-white'
           }`}
         >
-          Signals ({signals.length})
+          Signal Legs ({signals.length})
         </button>
         <button
           onClick={() => setSelectedTab('orders')}
@@ -120,23 +194,33 @@ export const Activity: React.FC = () => {
           Orders & Executions ({orders.length})
         </button>
         <button
-          onClick={() => setSelectedTab('decisions')}
+          onClick={() => setSelectedTab('trading-signals')}
           className={`px-6 py-3 font-medium transition-colors ${
-            selectedTab === 'decisions'
+            selectedTab === 'trading-signals'
               ? 'border-b-2 border-blue-500 text-blue-500'
               : 'text-gray-400 hover:text-white'
           }`}
         >
-          Cerebro Decisions ({decisions.length})
+          Trading Signals ({tradingSignals.length})
         </button>
       </div>
 
-      {/* Recent Signals Tab */}
-      {selectedTab === 'signals' && (
+      {/* Signal Legs Tab */}
+      {selectedTab === 'signal-legs' && (
         <div className="card">
-          <h3 className="text-lg font-semibold text-white mb-4">
-            Signals - {getFilterLabel()}
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-white">
+              Signal Legs - {getFilterLabel()}
+            </h3>
+            <button
+              onClick={() => downloadCSV(signals, `signal-legs-${new Date().toISOString()}.csv`)}
+              disabled={signals.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Download CSV
+            </button>
+          </div>
 
           {isLoadingSignals ? (
             <div className="text-center py-12">
@@ -153,24 +237,27 @@ export const Activity: React.FC = () => {
               <table className="w-full">
                 <thead>
                   <tr>
+                    <th className="table-header w-8"></th>
                     <th className="table-header">Signal Sent</th>
-                    <th className="table-header">Signal Received (Lag)</th>
-                    <th className="table-header">Execution Complete (Lag)</th>
                     <th className="table-header">Type</th>
                     <th className="table-header">Signal ID</th>
                     <th className="table-header">Strategy</th>
                     <th className="table-header">Symbol</th>
                     <th className="table-header">Action</th>
                     <th className="table-header">Direction</th>
+                    <th className="table-header">Raw Qty</th>
+                    <th className="table-header">Cerebro Qty</th>
                     <th className="table-header">Price</th>
                     <th className="table-header">Cerebro Decision</th>
                     <th className="table-header">Status</th>
+                    <th className="table-header">PnL</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
                   {signals.map((signal: any) => {
                     const isExpanded = expandedSignalId === signal.signal_id;
-                    const hasDecision = signal.cerebro_decision && signal.decision_status;
+                    // Support both v1 (cerebro_decision) and v2 (decision) schema
+                    const hasDecision = (signal.decision || signal.cerebro_decision) && signal.decision_status;
 
                     // Format timestamps
                     const formatTimestamp = (ts: string | null) => {
@@ -192,35 +279,29 @@ export const Activity: React.FC = () => {
                     return (
                       <React.Fragment key={signal.signal_id}>
                         <tr className="hover:bg-gray-700/50">
+                          {/* Expand button on far left */}
+                          <td className="table-cell w-8">
+                            <button
+                              onClick={() => setExpandedSignalId(isExpanded ? null : signal.signal_id)}
+                              className="p-1 hover:bg-gray-600 rounded transition-colors"
+                              title="View details"
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="h-4 w-4 text-blue-400" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 text-gray-400" />
+                              )}
+                            </button>
+                          </td>
                           <td className="table-cell text-sm">
                             <div className="flex items-center gap-2">
                               <Clock className="h-4 w-4 text-blue-400" />
                               {formatTimestamp(signal.signal_sent_timestamp)}
                             </div>
                           </td>
-                          <td className="table-cell text-sm">
-                            <div>
-                              <div>{formatTimestamp(signal.signal_received_timestamp)}</div>
-                              {signal.receive_lag_seconds !== null && (
-                                <span className="text-xs text-gray-400">
-                                  {formatLag(signal.receive_lag_seconds)}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="table-cell text-sm">
-                            <div>
-                              <div>{formatTimestamp(signal.execution_completed_timestamp)}</div>
-                              {signal.execution_lag_seconds !== null && (
-                                <span className="text-xs text-gray-400">
-                                  {formatLag(signal.execution_lag_seconds)}
-                                </span>
-                              )}
-                            </div>
-                          </td>
                           <td className="table-cell">
                             <span className={`px-2 py-1 rounded text-xs font-medium ${
-                              signal.signal_type === 'ENTRY' ? 'bg-green-900/30 text-green-400' : 
+                              signal.signal_type === 'ENTRY' ? 'bg-green-900/30 text-green-400' :
                               signal.signal_type === 'EXIT' ? 'bg-red-900/30 text-red-400' :
                               'bg-gray-700/30 text-gray-400'
                             }`}>
@@ -256,29 +337,26 @@ export const Activity: React.FC = () => {
                               )}
                             </div>
                           </td>
+                          <td className="table-cell">{signal.quantity || 'N/A'}</td>
+                          <td className="table-cell">
+                            {signal.final_quantity ? (
+                              <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
+                                {signal.final_quantity}
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">-</span>
+                            )}
+                          </td>
                           <td className="table-cell">${signal.price?.toFixed(2) || 'N/A'}</td>
                           <td className="table-cell">
                             {hasDecision ? (
-                              <div className="flex items-center gap-2">
-                                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                  signal.decision_status === 'APPROVED' ? 'bg-green-900/30 text-green-400' :
-                                  signal.decision_status === 'REJECTED' ? 'bg-red-900/30 text-red-400' :
-                                  'bg-yellow-900/30 text-yellow-400'
-                                }`}>
-                                  {signal.decision_status}
-                                </span>
-                                <button
-                                  onClick={() => setExpandedSignalId(isExpanded ? null : signal.signal_id)}
-                                  className="p-1 hover:bg-gray-600 rounded transition-colors"
-                                  title="View decision details"
-                                >
-                                  {isExpanded ? (
-                                    <ChevronDown className="h-4 w-4 text-blue-400" />
-                                  ) : (
-                                    <ChevronRight className="h-4 w-4 text-gray-400" />
-                                  )}
-                                </button>
-                              </div>
+                              <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                signal.decision_status === 'APPROVED' || signal.decision_status === 'APPROVE' ? 'bg-green-900/30 text-green-400' :
+                                signal.decision_status === 'REJECTED' ? 'bg-red-900/30 text-red-400' :
+                                'bg-yellow-900/30 text-yellow-400'
+                              }`}>
+                                {signal.decision_status === 'APPROVE' ? 'APPROVED' : signal.decision_status}
+                              </span>
                             ) : (
                               <span className="px-2 py-1 bg-gray-700/30 text-gray-400 rounded text-xs font-medium">
                                 PENDING
@@ -290,17 +368,84 @@ export const Activity: React.FC = () => {
                               {signal.processed_by_cerebro ? 'PROCESSED' : 'PENDING'}
                             </span>
                           </td>
+                          <td className="table-cell">
+                            {signal.signal_type === 'ENTRY' ? (
+                              <span className="text-gray-500">-</span>
+                            ) : signal.pnl ? (
+                              <span className={`font-semibold ${
+                                (signal.pnl.net ?? signal.pnl.net_pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'
+                              }`}>
+                                ${(signal.pnl.net ?? signal.pnl.net_pnl ?? 0).toFixed(2)}
+                                <span className="text-xs ml-1">
+                                  ({(signal.pnl.percent ?? signal.pnl.pnl_percent ?? 0) >= 0 ? '+' : ''}{(signal.pnl.percent ?? signal.pnl.pnl_percent ?? 0).toFixed(2)}%)
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="text-gray-500">-</span>
+                            )}
+                          </td>
                         </tr>
 
-                        {/* Expanded JSON viewer row */}
-                        {isExpanded && hasDecision && (
+                        {/* Expanded details row */}
+                        {isExpanded && (
                           <tr>
-                            <td colSpan={12} className="bg-gray-800/50 p-4">
-                              <div className="max-w-full overflow-x-auto">
-                                <h4 className="text-sm font-semibold text-white mb-2">Cerebro Decision Details</h4>
-                                <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-x-auto">
-                                  {JSON.stringify(signal.cerebro_decision, null, 2)}
-                                </pre>
+                            <td colSpan={13} className="bg-gray-800/50 p-4">
+                              <div className="max-w-full overflow-x-auto space-y-4">
+                                {/* Timing details */}
+                                <div>
+                                  <h4 className="text-sm font-semibold text-white mb-2">Timing Details</h4>
+                                  <div className="grid grid-cols-3 gap-4 p-3 bg-gray-900 rounded border border-gray-700">
+                                    <div>
+                                      <p className="text-xs text-gray-400">Signal Received</p>
+                                      <p className="text-sm text-white">{formatTimestamp(signal.signal_received_timestamp)}</p>
+                                      {signal.receive_lag_seconds !== null && (
+                                        <p className="text-xs text-yellow-400">{formatLag(signal.receive_lag_seconds)} lag</p>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <p className="text-xs text-gray-400">Execution Complete</p>
+                                      <p className="text-sm text-white">{formatTimestamp(signal.execution_completed_timestamp)}</p>
+                                      {signal.execution_lag_seconds !== null && (
+                                        <p className="text-xs text-yellow-400">{formatLag(signal.execution_lag_seconds)} total</p>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <p className="text-xs text-gray-400">Environment</p>
+                                      <p className={`text-sm font-medium ${signal.environment === 'staging' ? 'text-blue-400' : 'text-green-400'}`}>
+                                        {signal.environment?.toUpperCase() || 'UNKNOWN'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Cerebro decision details - support both v1 and v2 schema */}
+                                {hasDecision && (() => {
+                                  const decision = signal.decision || signal.cerebro_decision;
+                                  const mathText = typeof decision?.math === 'string'
+                                    ? decision.math
+                                    : null;
+                                  const decisionWithoutMath = { ...decision };
+                                  if (mathText) delete decisionWithoutMath.math;
+
+                                  return (
+                                    <div className={`grid gap-4 ${mathText ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                                      <div>
+                                        <h4 className="text-sm font-semibold text-white mb-2">Cerebro Decision Details</h4>
+                                        <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-auto max-h-64">
+                                          {JSON.stringify(decisionWithoutMath, null, 2)}
+                                        </pre>
+                                      </div>
+                                      {mathText && (
+                                        <div>
+                                          <h4 className="text-sm font-semibold text-white mb-2">Calculation Breakdown</h4>
+                                          <pre className="text-xs text-gray-300 bg-gray-900 p-3 rounded border border-gray-700 overflow-auto max-h-64 whitespace-pre-wrap">
+                                            {mathText}
+                                          </pre>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </td>
                           </tr>
@@ -318,9 +463,19 @@ export const Activity: React.FC = () => {
       {/* Orders & Executions Tab */}
       {selectedTab === 'orders' && (
         <div className="card">
-          <h3 className="text-lg font-semibold text-white mb-4">
-            Recent Orders & Executions - {getFilterLabel()}
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-white">
+              Recent Orders & Executions - {getFilterLabel()}
+            </h3>
+            <button
+              onClick={() => downloadCSV(orders, `orders-executions-${new Date().toISOString()}.csv`)}
+              disabled={orders.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Download CSV
+            </button>
+          </div>
 
           {isLoadingOrders ? (
             <div className="text-center py-12">
@@ -336,42 +491,63 @@ export const Activity: React.FC = () => {
               <table className="w-full">
                 <thead>
                   <tr>
-                    <th className="table-header">Timestamp</th>
+                    <th className="table-header">Filled Timestamp</th>
+                    <th className="table-header">Signal ID</th>
                     <th className="table-header">Order ID</th>
-                    <th className="table-header">Strategy</th>
-                    <th className="table-header">Symbol</th>
-                    <th className="table-header">Quantity</th>
-                    <th className="table-header">Price</th>
                     <th className="table-header">Status</th>
+                    <th className="table-header">Symbol</th>
+                    <th className="table-header">Type</th>
+                    <th className="table-header">Broker</th>
+                    <th className="table-header">Fund</th>
+                    <th className="table-header">Filled Qty</th>
+                    <th className="table-header">Filled Price</th>
+                    <th className="table-header">Broker Order ID</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
-                  {orders.map((order: any) => (
-                    <tr key={order.order_id} className="hover:bg-gray-700/50">
+                  {orders.map((order: any, idx: number) => (
+                    <tr key={`${order.order_id}-${idx}`} className="hover:bg-gray-700/50">
                       <td className="table-cell text-sm">
                         <div className="flex items-center gap-2">
                           <Clock className="h-4 w-4 text-gray-400" />
-                          {new Date(order.timestamp).toLocaleString()}
+                          {order.filled_at ? new Date(order.filled_at).toLocaleString() : 'N/A'}
                         </div>
                       </td>
-                      <td className="table-cell font-mono text-xs">{order.order_id}</td>
                       <td className="table-cell">
-                        <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
-                          {order.strategy_id}
+                        <span className="px-2 py-1 bg-purple-900/30 text-purple-400 rounded text-xs font-medium font-mono">
+                          {order.signal_id}
                         </span>
                       </td>
-                      <td className="table-cell font-semibold">{order.instrument}</td>
-                      <td className="table-cell">{order.quantity?.toFixed(2) || 0}</td>
-                      <td className="table-cell">${order.price?.toFixed(2) || 0}</td>
+                      <td className="table-cell font-mono text-xs text-gray-400">{order.order_id}</td>
                       <td className="table-cell">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
                           order.status === 'FILLED' ? 'bg-green-900/30 text-green-400' :
-                          order.status === 'PENDING' ? 'bg-yellow-900/30 text-yellow-400' :
+                          order.status === 'PARTIAL' ? 'bg-yellow-900/30 text-yellow-400' :
+                          order.status === 'PENDING' ? 'bg-blue-900/30 text-blue-400' :
                           'bg-red-900/30 text-red-400'
                         }`}>
                           {order.status}
                         </span>
                       </td>
+                      <td className="table-cell font-semibold">{order.instrument}</td>
+                      <td className="table-cell">
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          order.signal_type === 'ENTRY' ? 'bg-green-900/30 text-green-400' :
+                          order.signal_type === 'EXIT' ? 'bg-red-900/30 text-red-400' :
+                          'bg-gray-900/30 text-gray-400'
+                        }`}>
+                          {order.signal_type}
+                        </span>
+                      </td>
+                      <td className="table-cell">
+                        <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium">
+                          {order.broker}
+                        </span>
+                      </td>
+                      <td className="table-cell text-xs text-gray-400">{order.fund_id}</td>
+                      <td className="table-cell">{order.quantity_filled?.toFixed(2) || 0}</td>
+                      <td className="table-cell">${order.avg_fill_price?.toFixed(2) || 0}</td>
+                      <td className="table-cell font-mono text-xs text-gray-500">{order.broker_order_id}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -381,94 +557,134 @@ export const Activity: React.FC = () => {
         </div>
       )}
 
-      {/* Cerebro Decisions Tab */}
-      {selectedTab === 'decisions' && (
-        <div className="space-y-4">
-          <div className="card">
-            <h3 className="text-lg font-semibold text-white mb-4">
-              Cerebro Decision Log - {getFilterLabel()}
+      {/* Trading Signals Tab */}
+      {selectedTab === 'trading-signals' && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-white">
+              Trading Signals - {getFilterLabel()} ({tradingSignals.length})
             </h3>
-            <p className="text-sm text-gray-400 mb-4">
-              Detailed position sizing calculations and risk assessments
-            </p>
+            <button
+              onClick={() => downloadCSV(tradingSignals, `trading-signals-${new Date().toISOString()}.csv`)}
+              disabled={tradingSignals.length === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+            >
+              <Download className="h-4 w-4" />
+              Download CSV
+            </button>
           </div>
 
-          {isLoadingDecisions ? (
-            <div className="card">
-              <div className="text-center py-12">
-                <div className="inline-block animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-3"></div>
-                <p className="text-gray-400">Loading decisions...</p>
-              </div>
+          {isLoadingTradingSignals ? (
+            <div className="text-center py-12">
+              <div className="inline-block animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mb-3"></div>
+              <p className="text-gray-400">Loading trading signals...</p>
             </div>
-          ) : decisions.length === 0 ? (
-            <div className="card text-center py-12">
-              <ActivityIcon className="h-16 w-16 text-gray-600 mx-auto mb-4" />
-              <p className="text-gray-400 text-lg">No Cerebro decisions yet for {getFilterLabel()}</p>
-              <p className="text-gray-500 text-sm mt-2">Decisions will appear here when signals are processed</p>
+          ) : tradingSignals.length === 0 ? (
+            <div className="text-center py-12">
+              <p className="text-gray-400">No trading signals for {getFilterLabel()}</p>
             </div>
           ) : (
-            decisions.map((decision: any) => (
-              <div key={decision.signal_id} className="card">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <ActivityIcon className="h-5 w-5 text-blue-500" />
-                    <div>
-                      <p className="text-white font-medium">Signal: {decision.signal_id}</p>
-                      <p className="text-sm text-gray-400">{new Date(decision.timestamp).toLocaleString()}</p>
-                    </div>
-                  </div>
-                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                    decision.decision === 'APPROVED' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'
-                  }`}>
-                    {decision.decision}
-                  </span>
-                </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr>
+                    <th className="table-header">Signal ID</th>
+                    <th className="table-header">Instrument</th>
+                    <th className="table-header">Strategy</th>
+                    <th className="table-header">Status</th>
+                    <th className="table-header">Position</th>
+                    <th className="table-header">Entry Time</th>
+                    <th className="table-header">Exit Time</th>
+                    <th className="table-header">P&L</th>
+                    <th className="table-header">Legs</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-700">
+                  {tradingSignals.map((signal: any) => (
+                    <tr key={signal.signal_id} className="hover:bg-gray-700/50">
+                      <td className="table-cell">
+                        <span className="px-2 py-1 bg-blue-900/30 text-blue-400 rounded text-xs font-medium font-mono">
+                          {signal.signal_id}
+                        </span>
+                      </td>
+                      <td className="table-cell font-semibold">{signal.instrument}</td>
+                      <td className="table-cell">
+                        <span className="px-2 py-1 bg-purple-900/30 text-purple-400 rounded text-xs font-medium">
+                          {signal.strategy_id}
+                        </span>
+                      </td>
+                      <td className="table-cell">
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          signal.status === 'OPEN'
+                            ? 'bg-green-900/30 text-green-400'
+                            : signal.status === 'CLOSED'
+                            ? 'bg-gray-700 text-gray-300'
+                            : signal.status === 'PARTIAL'
+                            ? 'bg-yellow-900/30 text-yellow-400'
+                            : 'bg-yellow-900/30 text-yellow-400'
+                        }`}>
+                          {signal.status}
+                          {signal.status === 'PARTIAL' && signal.remaining_quantity !== undefined && (
+                            <span className="ml-1 text-xs">({signal.remaining_quantity} left)</span>
+                          )}
+                        </span>
+                      </td>
+                      <td className="table-cell">
+                        {(() => {
+                          const entryQty = signal.entry_quantity || 0;
+                          const exitQty = signal.exit_quantity || 0;
+                          const remainingQty = signal.remaining_quantity || 0;
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 p-4 bg-gray-700/30 rounded-lg">
-                  <div>
-                    <p className="text-xs text-gray-400 mb-1">Strategy</p>
-                    <p className="text-white font-medium">{decision.strategy_id}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-400 mb-1">Final Quantity</p>
-                    <p className="text-white font-medium">{decision.final_quantity?.toFixed(2) || 0}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-400 mb-1">Allocated Capital</p>
-                    <p className="text-white font-medium">
-                      ${decision.risk_assessment?.allocated_capital?.toLocaleString() || 0}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-400 mb-1">Margin Required</p>
-                    <p className="text-white font-medium">
-                      ${decision.risk_assessment?.margin_required?.toLocaleString() || 0}
-                    </p>
-                  </div>
-                </div>
+                          if (entryQty === 0) {
+                            return <span className="text-gray-500 text-xs">-</span>;
+                          }
 
-                {decision.risk_assessment && (
-                  <div className="grid grid-cols-2 gap-4 p-4 bg-gray-700/30 rounded-lg">
-                    <div>
-                      <p className="text-xs text-gray-400 mb-1">Margin Utilization Before</p>
-                      <p className="text-white font-semibold">
-                        {decision.risk_assessment.margin_utilization_before_pct?.toFixed(1) || 0}%
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-400 mb-1">Margin Utilization After</p>
-                      <p className={`font-semibold ${
-                        (decision.risk_assessment.margin_utilization_after_pct || 0) > 40
-                          ? 'text-red-500'
-                          : 'text-green-500'
-                      }`}>
-                        {decision.risk_assessment.margin_utilization_after_pct?.toFixed(1) || 0}%
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))
+                          const filledPercent = (exitQty / entryQty) * 100;
+                          const isFullyClosed = remainingQty === 0 && exitQty > 0;
+                          const hasOpenPosition = remainingQty > 0;
+
+                          return (
+                            <div className="flex flex-col gap-1 min-w-[120px]">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium whitespace-nowrap">
+                                  {exitQty}/{entryQty}
+                                </span>
+                              </div>
+                              <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+                                <div
+                                  className={`h-full transition-all duration-300 ${
+                                    isFullyClosed ? 'bg-green-500' : hasOpenPosition ? 'bg-orange-500' : 'bg-gray-600'
+                                  }`}
+                                  style={{ width: `${Math.min(filledPercent, 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="table-cell text-sm">
+                        {signal.opened_at ? new Date(signal.opened_at).toLocaleString() : '-'}
+                      </td>
+                      <td className="table-cell text-sm">
+                        {signal.closed_at ? new Date(signal.closed_at).toLocaleString() : '-'}
+                      </td>
+                      <td className="table-cell">
+                        {signal.pnl ? (
+                          <span className={signal.pnl.net >= 0 ? 'text-green-400' : 'text-red-400'}>
+                            ${signal.pnl.net.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-500">-</span>
+                        )}
+                      </td>
+                      <td className="table-cell text-xs text-gray-400">
+                        1 ENTRY + {signal.exit_legs.length} EXIT
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
