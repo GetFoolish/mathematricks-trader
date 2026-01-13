@@ -10,6 +10,7 @@ from .ibkr import IBKRBroker
 from .zerodha import ZerodhaBroker
 from .mock import MockBroker
 from .exceptions import BrokerError
+from .binance import BinanceBroker
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class BrokerFactory:
         "IBKR": IBKRBroker,
         "Zerodha": ZerodhaBroker,
         "Mock": MockBroker,
+        "BINANCE": BinanceBroker,
         # Add more brokers here as they're implemented
     }
 
@@ -200,6 +202,16 @@ def create_broker_from_env(broker_name: str = None) -> AbstractBroker:
             "access_token": os.getenv("ZERODHA_ACCESS_TOKEN"),
             "user_id": os.getenv("ZERODHA_USER_ID")
         }
+
+    elif broker_name == "BINANCE":
+        config = {
+            "broker": "BINANCE",
+            "api_key": os.getenv("BINANCE_API_KEY"),
+            "api_secret": os.getenv("BINANCE_API_SECRET"),
+            "base_url": os.getenv("BINANCE_BASE_URL"),
+            "symbol": os.getenv("BINANCE_SYMBOL", "BTCUSDT"),
+        }
+
     else:
         raise ValueError(f"Unsupported broker: {broker_name}")
 

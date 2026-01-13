@@ -39,6 +39,8 @@ For more information, see README.md
 # Export factory and base classes
 from .factory import BrokerFactory, create_broker_from_env
 from .base import AbstractBroker, OrderSide, OrderType, OrderStatus
+from .binance import BinanceBroker
+
 
 # Export exceptions
 from .exceptions import (
@@ -86,6 +88,9 @@ __all__ = [
     'IBKRBroker',
     'ZerodhaBroker',
     'MockBroker',
+    "BinanceBroker",
+
+
 ]
 
 __version__ = '1.0.0'
