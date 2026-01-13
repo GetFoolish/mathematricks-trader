@@ -135,11 +135,14 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
       - TZ=${TZ}
       - MONGODB_URI=${MONGODB_URI}
       - PYTHONPATH=/app/services/dashboard_creator:/app
     command: python -m services.dashboard_creator.dashboard_creator_main
+
 
   # IB Gateway
   ib-gateway:
