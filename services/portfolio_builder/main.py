@@ -49,7 +49,7 @@ import quantstats as qs
 # Determine project root dynamically
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # services/portfolio_builder
 PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))  # mathematricks-trader/
-PYTHON_PATH = os.path.join(PROJECT_ROOT, 'venv', 'bin', 'python')
+PYTHON_PATH = sys.executable  # Use the currently running Python interpreter
 RESEARCH_OUTPUTS_DIR = os.path.join(SCRIPT_DIR, 'research', 'outputs')
 SUBMISSIONS_TEARSHEETS_DIR = os.path.join(SCRIPT_DIR, 'submissions_tearsheets')
 LOG_FILE = os.path.join(PROJECT_ROOT, 'logs', 'portfolio_builder.log')

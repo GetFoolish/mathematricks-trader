@@ -55,7 +55,7 @@ def load_strategies_from_mongodb(filter_strategy_ids=None):
     if not mongo_uri:
         raise ValueError("MONGODB_URI not found in .env file")
 
-    client = MongoClient(mongo_uri, tls=True, tlsAllowInvalidCertificates=True)
+    client = MongoClient(mongo_uri)
     db = client['mathematricks_trading']
     strategies_collection = db['strategies']
 
