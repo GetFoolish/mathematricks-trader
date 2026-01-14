@@ -102,17 +102,21 @@ clean:
 	@sleep 5
 
 clean-old-logs:
-	@echo "Truncating Docker container logs (no restart needed)..."
-	@for container in $$(docker-compose ps -q 2>/dev/null); do \
-		log_path=$$(docker inspect $$container --format='{{.LogPath}}' 2>/dev/null); \
-		if [ -n "$$log_path" ] && [ -f "$$log_path" ]; then \
-			name=$$(docker inspect $$container --format='{{.Name}}' | sed 's/^\///'); \
-			size_before=$$(du -h "$$log_path" 2>/dev/null | cut -f1); \
-			sudo truncate -s 0 "$$log_path" 2>/dev/null && \
-			echo "  ✓ $$name: $$size_before -> 0"; \
-		fi; \
-	done
-	@echo "✅ Logs truncated. Containers still running."
+	@echo "🗑️  Clearing Docker container logs..."
+	@echo ""
+	@echo "⚠️  This will restart all containers to clear logs."
+	@echo "Stopping services (preserving MongoDB)..."
+	@docker-compose stop cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator frontend 2>/dev/null || true
+	@echo ""
+	@echo "Removing service containers (logs will be cleared)..."
+	@docker-compose rm -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator frontend 2>/dev/null || true
+	@echo ""
+	@echo "Starting services with fresh logs..."
+	@docker-compose up -d
+	@echo ""
+	@echo "✅ Service containers restarted with cleared logs!"
+	@echo "💡 MongoDB was preserved to avoid replica set reinitialization."
+	@echo "Frontend running @ http://localhost:5173/"
 
 clean:
 	@echo "WARNING: This will remove all containers and volumes."

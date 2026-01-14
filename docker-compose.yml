@@ -61,13 +61,14 @@ services:
   # Infrastructure Services
   mongodb:
     image: mongo:6.0
+    hostname: mongodb
     ports:
       - "27018:27017"
     volumes:
       - mongo_data:/data/db
     command: [ "--replSet", "rs0", "--bind_ip_all" ]
     healthcheck:
-      test: echo "try { rs.status() } catch (e) { rs.initiate() }" | mongosh --port 27017 --quiet
+      test: ["CMD-SHELL", "echo \"try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongodb:27017' }] }) }\" | mongosh --port 27017 --quiet"]
       interval: 10s
       timeout: 10s
       retries: 5

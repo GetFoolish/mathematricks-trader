@@ -35,6 +35,18 @@ fi
 echo "📦 Database is empty. Restoring from seed..."
 echo "   Using: $(basename $LATEST_SEED)"
 
+# Wait for MongoDB replica set to be ready (PRIMARY state)
+echo "⏳ Waiting for MongoDB replica set to be PRIMARY..."
+for i in {1..30}; do
+    RS_STATUS=$(mongosh "$MONGODB_URI" --quiet --eval 'try { rs.status().myState } catch (e) { 0 }' 2>/dev/null || echo "0")
+    if [ "$RS_STATUS" == "1" ]; then
+        echo "✓ MongoDB is PRIMARY and ready"
+        break
+    fi
+    echo "   Attempt $i/30: Replica set state=$RS_STATUS (waiting for PRIMARY=1)..."
+    sleep 2
+done
+
 # Create temp directory and extract seed
 mkdir -p "$TEMP_DIR"
 tar -xzf "$LATEST_SEED" -C "$TEMP_DIR"
