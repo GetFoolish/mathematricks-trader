@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../services/api';
-import { CheckCircle, XCircle, Eye, Filter, Clock, CheckCheck, Ban, Upload, Trash2, ArrowLeft, ArrowRight, FileText } from 'lucide-react';
+import { CheckCircle, XCircle, Eye, Filter, Clock, CheckCheck, Ban, Upload, Trash2, ArrowLeft, ArrowRight, FileText, Info } from 'lucide-react';
 import type { StrategySubmission, ApproveSubmissionRequest } from '../types';
 
 const UPLOAD_STEPS = [
@@ -561,12 +561,36 @@ const Step2MapColumns: React.FC<{
   onMappingChange: (mapping: Record<string, string>) => void;
 }> = ({ csvColumns, columnMapping, onMappingChange }) => {
   const COLUMNS = {
-    Date: { required: true, description: 'Date of each data point' },
-    Daily_Return_Pct: { required: true, description: 'Daily return percentage' },
-    Account_Equity: { required: false, description: 'Account equity (will be generated if missing)' },
-    Daily_PnL: { required: false, description: 'Daily profit/loss (will be generated if missing)' },
-    Max_Margin_Used: { required: false, description: 'Maximum margin (will be generated if missing)' },
-    Max_Notional_Value: { required: false, description: 'Maximum notional value (will be generated if missing)' },
+    Date: {
+      required: true,
+      whatItIs: 'Date/Timestamp with TZ for each row.',
+      howWeUseIt: 'Used to align strategy performance across time periods, calculate time-based metrics (drawdown duration, recovery periods), and synchronize multiple strategies for portfolio construction'
+    },
+    Daily_Return_Pct: {
+      required: true,
+      whatItIs: 'The daily percentage return of the strategy, showing the relative performance change from the previous day',
+      howWeUseIt: 'Core metric for calculating correlation between strategies, determining portfolio weights, and evaluating risk-adjusted performance across our strategy universe'
+    },
+    Account_Equity: {
+      required: false,
+      whatItIs: 'The total account value including cash and unrealized positions at the end of each trading day. First value will be the \'opening balance\'',
+      howWeUseIt: 'Used to generate other metrics if missing, validate PnL calculations, and understand the capital growth trajectory for position sizing decisions'
+    },
+    Daily_PnL: {
+      required: false,
+      whatItIs: 'The absolute dollar profit or loss generated on each trading day',
+      howWeUseIt: 'Helps calculate actual capital requirements, validate return percentages, and determine minimum account sizes needed for strategy deployment'
+    },
+    Max_Margin_Used: {
+      required: false,
+      whatItIs: 'The highest margin requirement during the trading day, representing peak leverage utilization',
+      howWeUseIt: 'Critical for capital allocation planning, ensuring we don\'t over-leverage the portfolio, and setting broker account minimums for strategy combinations'
+    },
+    Max_Notional_Value: {
+      required: false,
+      whatItIs: 'The maximum total value of all open positions during the trading day (including leverage)',
+      howWeUseIt: 'Determines the actual market exposure of the strategy, helps size positions relative to total portfolio capital, and assesses concentration risk across strategy allocations'
+    },
   };
 
   return (
@@ -578,15 +602,33 @@ const Step2MapColumns: React.FC<{
       <div className="space-y-3">
         {Object.entries(COLUMNS).map(([ourColumn, config]) => (
           <div key={ourColumn} className="bg-gray-900 rounded-lg p-4">
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center justify-between mb-3">
               <div className="flex items-center space-x-2">
                 <span className="text-white font-medium">{ourColumn}</span>
                 {config.required && (
                   <span className="text-xs bg-red-900 text-red-300 px-2 py-1 rounded">Required</span>
                 )}
+                {/* Info icon with tooltip */}
+                <div className="relative group">
+                  <Info className="h-4 w-4 text-gray-400 hover:text-gray-300 cursor-help transition-colors" />
+                  {/* Tooltip content - shows on hover */}
+                  <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block z-50 w-96">
+                    <div className="bg-gray-800 border border-gray-600 rounded-lg p-3 shadow-xl">
+                      <div className="text-xs space-y-2">
+                        <div>
+                          <span className="text-gray-300 font-semibold">What it is: </span>
+                          <span className="text-gray-400">{config.whatItIs}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-300 font-semibold">How we use it: </span>
+                          <span className="text-gray-400">{config.howWeUseIt}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-            <p className="text-gray-400 text-sm mb-3">{config.description}</p>
             <select
               value={columnMapping[ourColumn] || ''}
               onChange={(e) => onMappingChange({ ...columnMapping, [ourColumn]: e.target.value })}
