@@ -9,6 +9,7 @@ import {
   LogOut,
   TrendingUp,
   Wrench,
+  CheckCircle,
 } from 'lucide-react';
 
 export const Layout: React.FC = () => {
@@ -19,7 +20,8 @@ export const Layout: React.FC = () => {
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Activity', href: '/activity', icon: Activity },
     { name: 'Allocations', href: '/allocations', icon: PieChart },
-    { name: 'Strategies', href: '/strategies', icon: Settings },
+    { name: 'Approved Strategies', href: '/strategies', icon: Settings },
+    { name: 'Fresh Strategies', href: '/strategy-approval', icon: CheckCircle },
     { name: 'Hedged Funds', href: '/hedged-funds', icon: Wrench },
   ];
 

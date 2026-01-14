@@ -21,6 +21,9 @@ import type {
   WidgetData,
   WidgetType,
   WidgetConfig,
+  StrategySubmission,
+  ApproveSubmissionRequest,
+  RejectSubmissionRequest,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
@@ -368,6 +371,46 @@ class ApiClient {
 
   async reloadAllWidgets(dashboardId: string): Promise<void> {
     await this.frontendApiClient.post(`/api/v1/dashboards/${dashboardId}/reload-all`);
+  }
+
+  // ============================================================================
+  // Strategy Submission APIs
+  // ============================================================================
+
+  async getStrategySubmissions(status?: string): Promise<StrategySubmission[]> {
+    const params = status ? `?status=${status}` : '';
+    const response = await this.portfolioBuilderClient.get(`/api/v1/admin/submissions${params}`);
+    return response.data.submissions;
+  }
+
+  async getSubmission(submissionId: string): Promise<StrategySubmission> {
+    const response = await this.portfolioBuilderClient.get(`/api/v1/public/submission/${submissionId}`);
+    return response.data.submission;
+  }
+
+  async approveSubmission(
+    submissionId: string,
+    approvalData: ApproveSubmissionRequest
+  ): Promise<{ strategy_id: string; submission_id: string }> {
+    const response = await this.portfolioBuilderClient.post(
+      `/api/v1/admin/submissions/${submissionId}/approve`,
+      approvalData
+    );
+    return response.data;
+  }
+
+  async rejectSubmission(
+    submissionId: string,
+    rejectionData: RejectSubmissionRequest
+  ): Promise<void> {
+    await this.portfolioBuilderClient.post(
+      `/api/v1/admin/submissions/${submissionId}/reject`,
+      rejectionData
+    );
+  }
+
+  async deleteSubmission(submissionId: string): Promise<void> {
+    await this.portfolioBuilderClient.delete(`/api/v1/admin/submissions/${submissionId}`);
   }
 
   // ============================================================================

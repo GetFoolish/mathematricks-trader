@@ -20,24 +20,43 @@ from typing import Dict, List, Any, Optional
 
 import pandas as pd
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from dotenv import load_dotenv
+import uuid
+import hashlib
 
 # Load environment variables
 load_dotenv()
+
+# Import backtest processing modules
+from backtest_upload_handler import (
+    parse_csv,
+    normalize_returns,
+    generate_synthetic_columns,
+    merge_backtest_data,
+    calculate_backtest_hash,
+    invalidate_allocations_for_strategy,
+    BacktestUploadError
+)
+from metrics_calculator import calculate_all_metrics
+
+# Import tearsheet generator directly to avoid circular imports
+import quantstats as qs
 
 # Determine project root dynamically
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # services/portfolio_builder
 PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))  # mathematricks-trader/
 PYTHON_PATH = os.path.join(PROJECT_ROOT, 'venv', 'bin', 'python')
 RESEARCH_OUTPUTS_DIR = os.path.join(SCRIPT_DIR, 'research', 'outputs')
+SUBMISSIONS_TEARSHEETS_DIR = os.path.join(SCRIPT_DIR, 'submissions_tearsheets')
 LOG_FILE = os.path.join(PROJECT_ROOT, 'logs', 'portfolio_builder.log')
 
 # Ensure directories exist
 os.makedirs(RESEARCH_OUTPUTS_DIR, exist_ok=True)
+os.makedirs(SUBMISSIONS_TEARSHEETS_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
 # Setup logging
@@ -64,9 +83,10 @@ app.add_middleware(
 )
 
 # MongoDB connection
-MONGODB_URI = os.getenv('MONGODB_URI')
+# Try MONGODB_URI_LOCAL first (for local dev), fallback to MONGODB_URI (for Docker)
+MONGODB_URI = os.getenv('MONGODB_URI_LOCAL') or os.getenv('MONGODB_URI')
 if not MONGODB_URI:
-    logger.error("MONGODB_URI not set in environment")
+    logger.error("Neither MONGODB_URI_LOCAL nor MONGODB_URI set in environment")
     sys.exit(1)
 
 mongo_client = MongoClient(MONGODB_URI)
@@ -75,8 +95,10 @@ signals_db = mongo_client['mathematricks_signals']  # Raw signals database
 
 # Collections
 strategies_collection = db['strategies']
+uploaded_strategies_collection = db['uploaded_strategies']  # Public strategy submissions
 current_allocation_collection = db['current_allocation']
 portfolio_tests_collection = db['portfolio_tests']
+portfolio_allocations_collection = db['portfolio_allocations']  # For hash tracking and invalidation
 incoming_signals_collection = signals_db['trading_signals']  # Raw signals from MongoDB Atlas
 signal_store_collection = db['signal_store']  # Unified signal storage with embedded cerebro decisions
 trading_orders_collection = db['trading_orders']
@@ -330,6 +352,622 @@ async def refresh_strategy_cache(strategy_id: str):
 
     except Exception as e:
         logger.error(f"Error refreshing cache for {strategy_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Public Strategy Submission APIs (No Auth Required)
+# ============================================================================
+
+@app.post("/api/v1/public/submit-strategy")
+async def submit_strategy_public(
+    file: UploadFile = File(...),
+    strategy_name: str = Form(...),
+    developer_name: str = Form(...),
+    developer_email: str = Form(...),
+    developer_note: str = Form(""),
+    starting_capital: float = Form(1000000.0)
+):
+    """
+    PUBLIC ENDPOINT: Submit strategy backtest data for review
+
+    No authentication required - this is for external strategy developers
+
+    Form Data:
+    - file: CSV file with backtest data
+    - strategy_name: Name of the strategy
+    - developer_name: Developer's full name
+    - developer_email: Developer's email address
+    - developer_note: Optional description/notes about the strategy
+    - starting_capital: Starting capital for synthetic data (default: 1M)
+
+    Returns:
+    - submission_id: Unique ID for tracking this submission
+    - metrics: Calculated performance metrics (CAGR, Sharpe, Calmar, etc.)
+    - equity_curve: Daily equity values for charting
+    - warnings: Any warnings about synthetic data generation
+    - synthetic_columns: List of columns that were generated synthetically
+    """
+    try:
+        logger.info(f"📥 Public strategy submission: {strategy_name} from {developer_name}")
+
+        # Generate unique submission ID
+        submission_id = f"sub_{uuid.uuid4().hex[:12]}"
+
+        # Read CSV file
+        file_content = await file.read()
+
+        # Parse CSV
+        df = parse_csv(file_content)
+        logger.info(f"   Parsed CSV: {len(df)} rows, columns: {list(df.columns)}")
+
+        # Normalize returns (handle percentage formats)
+        df = normalize_returns(df)
+
+        # Generate synthetic columns if missing
+        df, synthetic_columns = generate_synthetic_columns(df, starting_capital=starting_capital)
+
+        # Convert DataFrame to list of dicts for MongoDB
+        # Use proper capitalization for metrics calculator compatibility
+        raw_data_backtest_full = []
+        for _, row in df.iterrows():
+            raw_data_backtest_full.append({
+                'Date': row['Date'].isoformat() if hasattr(row['Date'], 'isoformat') else str(row['Date']),
+                'Daily_Return_Pct': float(row['Daily_Return_Pct']),
+                'Daily_PnL': float(row.get('Daily_PnL', 0)),
+                'Max_Margin_Used': float(row.get('Max_Margin_Used', 0)),
+                'Max_Notional_Value': float(row.get('Max_Notional_Value', 0)),
+                'Account_Equity': float(row.get('Account_Equity', starting_capital))
+            })
+
+        # Calculate performance metrics
+        metrics = calculate_all_metrics(raw_data_backtest_full)
+        logger.info(f"   Metrics: CAGR={metrics['cagr']:.2f}%, Sharpe={metrics['sharpe_ratio']:.2f}, Calmar={metrics['calmar_ratio']:.2f}")
+
+        # Build equity curve for frontend charting
+        equity_curve = [
+            {"date": data['Date'], "equity": data['Account_Equity']}
+            for data in raw_data_backtest_full
+        ]
+
+        # Build warnings list
+        warnings = []
+        if synthetic_columns:
+            warnings.append(f"Generated synthetic data for columns: {', '.join(synthetic_columns)}")
+            warnings.append("For more accurate optimization, consider providing real data for these columns.")
+
+        # Create submission document
+        submission_doc = {
+            "submission_id": submission_id,
+            "status": "PENDING_APPROVAL",
+
+            # Strategy metadata (will be used when approved)
+            "strategy_name": strategy_name,
+
+            # Developer information
+            "developer_info": {
+                "name": developer_name,
+                "email": developer_email,
+                "note": developer_note
+            },
+
+            # Backtest data
+            "raw_data_backtest_full": raw_data_backtest_full,
+
+            # Calculated metrics
+            "metrics": metrics,
+
+            # Synthetic data tracking
+            "synthetic_data": {
+                "columns_generated": synthetic_columns,
+                "starting_capital": starting_capital
+            },
+
+            # Timestamps
+            "submitted_at": datetime.utcnow(),
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+
+        # Insert into MongoDB
+        uploaded_strategies_collection.insert_one(submission_doc)
+
+        logger.info(f"✅ Strategy submission saved: {submission_id}")
+
+        # Generate tearsheet asynchronously (don't block the response)
+        tearsheet_path = os.path.join(SUBMISSIONS_TEARSHEETS_DIR, f"{submission_id}.html")
+        try:
+            # Convert data to pandas Series for tearsheet
+            returns_df = pd.DataFrame(raw_data_backtest_full)
+            returns_df['Date'] = pd.to_datetime(returns_df['Date'])
+            returns_df = returns_df.set_index('Date')
+            returns_series = returns_df['Daily_Return_Pct'] / 100  # Convert percentage to decimal
+
+            # Generate tearsheet using QuantStats
+            qs.reports.html(
+                returns_series,
+                benchmark=None,
+                output=tearsheet_path,
+                title=f"{strategy_name} - Performance Tearsheet",
+                download_filename=tearsheet_path
+            )
+
+            # Update submission with tearsheet path
+            uploaded_strategies_collection.update_one(
+                {"submission_id": submission_id},
+                {"$set": {"tearsheet_path": tearsheet_path, "tearsheet_generated": True}}
+            )
+            logger.info(f"📊 Tearsheet generated: {tearsheet_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate tearsheet for {submission_id}: {str(e)}", exc_info=True)
+            # Update submission to mark tearsheet generation failed
+            uploaded_strategies_collection.update_one(
+                {"submission_id": submission_id},
+                {"$set": {"tearsheet_generated": False, "tearsheet_error": str(e)}}
+            )
+
+        return {
+            "status": "success",
+            "submission_id": submission_id,
+            "message": "Strategy submitted successfully and is now pending approval",
+            "metrics": metrics,
+            "equity_curve": equity_curve,
+            "warnings": warnings,
+            "synthetic_columns": synthetic_columns
+        }
+
+    except BacktestUploadError as e:
+        logger.error(f"Backtest upload validation error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error processing strategy submission: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
+@app.get("/api/v1/public/submission/{submission_id}")
+async def get_submission_status(submission_id: str):
+    """
+    PUBLIC ENDPOINT: Check status of a strategy submission
+
+    No authentication required - allows developers to check their submission status
+
+    Returns:
+    - Full submission details including status, metrics, and review information
+    """
+    try:
+        submission = uploaded_strategies_collection.find_one(
+            {"submission_id": submission_id},
+            {'_id': 0}  # Exclude MongoDB ObjectId
+        )
+
+        if not submission:
+            raise HTTPException(status_code=404, detail=f"Submission {submission_id} not found")
+
+        return {
+            "status": "success",
+            "submission": submission
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching submission {submission_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/public/submission/{submission_id}/tearsheet")
+async def get_submission_tearsheet(submission_id: str):
+    """
+    PUBLIC ENDPOINT: Get the HTML tearsheet for a strategy submission
+    """
+    try:
+        # Get submission from MongoDB
+        submission = uploaded_strategies_collection.find_one({"submission_id": submission_id}, {'_id': 0})
+
+        if not submission:
+            raise HTTPException(status_code=404, detail=f"Submission {submission_id} not found")
+
+        # Check if tearsheet was generated
+        if not submission.get('tearsheet_generated'):
+            raise HTTPException(status_code=404, detail="Tearsheet not yet generated or generation failed")
+
+        # Get tearsheet file path
+        tearsheet_path = submission.get('tearsheet_path')
+
+        if not tearsheet_path or not os.path.exists(tearsheet_path):
+            raise HTTPException(status_code=404, detail="Tearsheet file not found")
+
+        return FileResponse(tearsheet_path, media_type="text/html")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving tearsheet for {submission_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Admin Strategy Submission Management APIs (Auth Required)
+# ============================================================================
+
+@app.get("/api/v1/admin/submissions")
+async def get_all_submissions(status: Optional[str] = None):
+    """
+    ADMIN ENDPOINT: Get all strategy submissions
+
+    Query params:
+    - status: Filter by status (PENDING_APPROVAL, APPROVED, REJECTED, or ALL)
+
+    Returns list of all submissions sorted by submission date (newest first)
+    """
+    try:
+        # Build query
+        query = {}
+        if status and status.upper() != 'ALL':
+            query['status'] = status.upper()
+
+        # Fetch submissions
+        submissions = list(
+            uploaded_strategies_collection.find(query, {'_id': 0})
+            .sort('submitted_at', -1)
+        )
+
+        return {
+            "status": "success",
+            "count": len(submissions),
+            "submissions": submissions
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching submissions: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/admin/submissions/{submission_id}/approve")
+async def approve_submission(submission_id: str, approval_data: Dict[str, Any]):
+    """
+    ADMIN ENDPOINT: Approve a strategy submission and add to active strategies
+
+    Request body:
+    {
+        "strategy_id": "SPX_NewStrategy",  # Required: unique strategy ID
+        "asset_class": "equity",           # Required
+        "instruments": ["SPX", "SPY"],     # Required
+        "accounts": ["IBKR_Main"],         # Optional: accounts to assign
+        "status": "ACTIVE",                # Optional: ACTIVE or TESTING
+        "trading_mode": "PAPER",           # Optional: PAPER or LIVE
+        "include_in_optimization": true,   # Optional
+        "notes": "Approved by John"        # Optional
+    }
+
+    Logic:
+    1. Fetch submission from uploaded_strategies
+    2. Calculate backtest data hash
+    3. Create strategy document in strategies collection
+    4. Update submission status to APPROVED
+    """
+    try:
+        # Fetch submission
+        submission = uploaded_strategies_collection.find_one({"submission_id": submission_id})
+
+        if not submission:
+            raise HTTPException(status_code=404, detail=f"Submission {submission_id} not found")
+
+        if submission['status'] != 'PENDING_APPROVAL':
+            raise HTTPException(
+                status_code=400,
+                detail=f"Submission is already {submission['status']}"
+            )
+
+        # Extract approval data
+        strategy_id = approval_data.get('strategy_id')
+        if not strategy_id:
+            raise HTTPException(status_code=400, detail="strategy_id is required")
+
+        # Check if strategy_id already exists
+        existing_strategy = strategies_collection.find_one({"strategy_id": strategy_id})
+        if existing_strategy:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Strategy {strategy_id} already exists. Choose a different strategy_id."
+            )
+
+        asset_class = approval_data.get('asset_class')
+        if not asset_class:
+            raise HTTPException(status_code=400, detail="asset_class is required")
+
+        instruments = approval_data.get('instruments', [])
+        if not instruments:
+            raise HTTPException(status_code=400, detail="instruments is required")
+
+        # Calculate backtest data hash
+        backtest_hash = calculate_backtest_hash(submission['raw_data_backtest_full'])
+
+        # Create strategy document
+        strategy_doc = {
+            "strategy_id": strategy_id,
+            "strategy_name": submission['strategy_name'],
+            "name": submission['strategy_name'],
+            "asset_class": asset_class,
+            "instruments": instruments,
+            "accounts": approval_data.get('accounts', []),
+            "status": approval_data.get('status', 'ACTIVE'),
+            "trading_mode": approval_data.get('trading_mode', 'PAPER'),
+            "include_in_optimization": approval_data.get('include_in_optimization', True),
+            "developer_contact": approval_data.get('developer_contact', submission['developer_info'].get('email', '')),
+            "notes": approval_data.get('notes', ''),
+            "risk_limits": approval_data.get('risk_limits', {}),
+
+            # Backtest data
+            "raw_data_backtest_full": submission['raw_data_backtest_full'],
+            "raw_data_developer_live": [],
+            "raw_data_mathematricks_live": [],
+            "metrics": submission['metrics'],
+            "synthetic_data": submission.get('synthetic_data', {}),
+
+            # Hash tracking
+            "backtest_data_hash": backtest_hash,
+            "last_backtest_sync": datetime.utcnow(),
+
+            # Link to original submission
+            "original_submission_id": submission_id,
+
+            # Timestamps
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+
+        # Insert strategy
+        strategies_collection.insert_one(strategy_doc)
+
+        # Update submission status
+        uploaded_strategies_collection.update_one(
+            {"submission_id": submission_id},
+            {
+                "$set": {
+                    "status": "APPROVED",
+                    "approved_strategy_id": strategy_id,
+                    "reviewed_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+
+        logger.info(f"✅ Approved submission {submission_id} → strategy {strategy_id}")
+
+        return {
+            "status": "success",
+            "message": f"Strategy approved and added to portfolio",
+            "strategy_id": strategy_id,
+            "submission_id": submission_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error approving submission {submission_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/admin/submissions/{submission_id}/reject")
+async def reject_submission(submission_id: str, rejection_data: Dict[str, Any]):
+    """
+    ADMIN ENDPOINT: Reject a strategy submission
+
+    Request body:
+    {
+        "rejection_reason": "Insufficient backtest history (need at least 2 years)"
+    }
+    """
+    try:
+        # Fetch submission
+        submission = uploaded_strategies_collection.find_one({"submission_id": submission_id})
+
+        if not submission:
+            raise HTTPException(status_code=404, detail=f"Submission {submission_id} not found")
+
+        if submission['status'] != 'PENDING_APPROVAL':
+            raise HTTPException(
+                status_code=400,
+                detail=f"Submission is already {submission['status']}"
+            )
+
+        rejection_reason = rejection_data.get('rejection_reason', 'No reason provided')
+
+        # Update submission status
+        uploaded_strategies_collection.update_one(
+            {"submission_id": submission_id},
+            {
+                "$set": {
+                    "status": "REJECTED",
+                    "rejection_reason": rejection_reason,
+                    "reviewed_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+
+        logger.info(f"✅ Rejected submission {submission_id}: {rejection_reason}")
+
+        return {
+            "status": "success",
+            "message": f"Submission rejected",
+            "submission_id": submission_id,
+            "rejection_reason": rejection_reason
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rejecting submission {submission_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/v1/admin/submissions/{submission_id}")
+async def delete_submission(submission_id: str):
+    """
+    ADMIN ENDPOINT: Delete a strategy submission
+
+    This permanently removes a submission from the database.
+    Use with caution.
+    """
+    try:
+        # Fetch submission
+        submission = uploaded_strategies_collection.find_one({"submission_id": submission_id})
+
+        if not submission:
+            raise HTTPException(status_code=404, detail=f"Submission {submission_id} not found")
+
+        # Delete the submission
+        result = uploaded_strategies_collection.delete_one({"submission_id": submission_id})
+
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=500, detail="Failed to delete submission")
+
+        logger.info(f"🗑️  Deleted submission {submission_id} (strategy: {submission.get('strategy_name')})")
+
+        return {
+            "status": "success",
+            "message": "Submission deleted successfully",
+            "submission_id": submission_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting submission {submission_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/strategies/{strategy_id}/upload-backtest")
+async def upload_backtest_incremental(
+    strategy_id: str,
+    file: UploadFile = File(...),
+    force_replace: bool = Form(False),
+    starting_capital: float = Form(1000000.0)
+):
+    """
+    ADMIN ENDPOINT: Upload incremental backtest data for existing strategy
+
+    Handles:
+    - Time incremental: Add new dates to existing backtest
+    - Column incremental: Add new columns and backfill old rows
+    - Overlap detection: Requires force_replace=true to overwrite existing dates
+    - Hash tracking: Calculates new hash and invalidates affected allocations
+
+    Form Data:
+    - file: CSV file with backtest data
+    - force_replace: Allow overwriting existing dates (default: false)
+    - starting_capital: For synthetic data generation (default: 1M)
+
+    Returns:
+    - upload_summary: Details about rows added/updated and columns generated
+    - old_hash: Previous backtest data hash
+    - new_hash: New backtest data hash
+    - invalidated_allocations: List of allocations marked OUTDATED
+    """
+    try:
+        logger.info(f"📤 Incremental backtest upload for strategy: {strategy_id}")
+
+        # Check if strategy exists
+        strategy = strategies_collection.find_one({"strategy_id": strategy_id})
+        if not strategy:
+            raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+
+        # Get old hash
+        old_hash = strategy.get('backtest_data_hash', 'NONE')
+
+        # Read and parse new CSV
+        file_content = await file.read()
+        new_df = parse_csv(file_content)
+        new_df = normalize_returns(new_df)
+
+        # Get existing backtest data
+        existing_data = strategy.get('raw_data_backtest_full', [])
+
+        # Merge with existing data
+        merged_data, merge_info = merge_backtest_data(
+            existing_data,
+            new_df,
+            force_replace=force_replace,
+            starting_capital=starting_capital
+        )
+
+        # Calculate new hash
+        new_hash = calculate_backtest_hash(merged_data)
+
+        # Recalculate metrics with new data
+        new_metrics = calculate_all_metrics(merged_data)
+
+        # Update strategy document
+        strategies_collection.update_one(
+            {"strategy_id": strategy_id},
+            {
+                "$set": {
+                    "raw_data_backtest_full": merged_data,
+                    "metrics": new_metrics,
+                    "backtest_data_hash": new_hash,
+                    "last_backtest_sync": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+
+        # Invalidate allocations if hash changed
+        invalidated_allocations = {"count": 0, "allocation_ids": []}
+        if new_hash != old_hash:
+            invalidated_allocations = invalidate_allocations_for_strategy(
+                db,
+                strategy_id,
+                new_hash,
+                reason=f"Strategy {strategy_id} backtest data updated (hash: {old_hash[:12]} → {new_hash[:12]})"
+            )
+
+        logger.info(f"✅ Backtest updated: {merge_info['total_rows']} total rows, {merge_info['new_rows']} new")
+        logger.info(f"   Hash changed: {old_hash[:12]} → {new_hash[:12]}")
+        logger.info(f"   Invalidated {invalidated_allocations['count']} allocations")
+
+        return {
+            "status": "success",
+            "upload_summary": merge_info,
+            "old_hash": old_hash,
+            "new_hash": new_hash,
+            "invalidated_allocations": invalidated_allocations
+        }
+
+    except BacktestUploadError as e:
+        logger.error(f"Backtest upload validation error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading backtest for {strategy_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/allocations/outdated")
+async def get_outdated_allocations():
+    """
+    ADMIN ENDPOINT: Get all OUTDATED allocations
+
+    Returns list of allocations that have been marked OUTDATED due to strategy data changes
+    """
+    try:
+        outdated = list(
+            portfolio_allocations_collection.find(
+                {"status": "OUTDATED"},
+                {'_id': 0}
+            ).sort('outdated_at', -1)
+        )
+
+        return {
+            "status": "success",
+            "count": len(outdated),
+            "allocations": outdated
+        }
+
+    except Exception as e:
+        logger.error(f"Error fetching outdated allocations: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

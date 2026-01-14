@@ -26,9 +26,12 @@ help:
 	@echo "make export-seed-data - Export current MongoDB data as seed data"
 	@echo "make reseed-db     - Restore MongoDB from latest seed data"
 	@echo "make test-signals  - Reseed DB, start services, and run all test signals"
+	@echo "Frontend running @ http://localhost:5173/"
+
 
 start:
 	docker-compose up -d
+	@echo "Frontend running @ http://localhost:5173/"
 
 stop:
 	docker-compose stop
@@ -36,9 +39,11 @@ stop:
 restart:
 	@echo "Restarting services (excluding mongodb-init)..."
 	docker-compose restart cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend
+	@echo "Frontend running @ http://localhost:5173/"
 
 status:
 	docker-compose ps
+	@echo "Frontend running @ http://localhost:5173/"
 
 logs:
 	docker-compose logs -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator

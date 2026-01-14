@@ -8,7 +8,9 @@ import { Dashboards } from './pages/Dashboards';
 import { Allocations } from './pages/Allocations';
 import { Activity } from './pages/Activity';
 import { Strategies } from './pages/Strategies';
+import { StrategyApproval } from './pages/StrategyApproval';
 import FundSetup from './pages/FundSetup';
+import RawDataViewer from './pages/RawDataViewer';
 
 // Create a client
 const queryClient = new QueryClient({
@@ -30,6 +32,9 @@ function App() {
             {/* Public routes */}
             <Route path="/login" element={<Login />} />
 
+            {/* Standalone routes (outside Layout) */}
+            <Route path="/raw-data/:submissionId" element={<RawDataViewer />} />
+
             {/* Protected routes */}
             <Route
               path="/"
@@ -44,6 +49,7 @@ function App() {
               <Route path="allocations" element={<Allocations />} />
               <Route path="activity" element={<Activity />} />
               <Route path="strategies" element={<Strategies />} />
+              <Route path="strategy-approval" element={<StrategyApproval />} />
               <Route path="hedged-funds" element={<FundSetup />} />
             </Route>
 

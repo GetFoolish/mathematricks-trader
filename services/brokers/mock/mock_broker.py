@@ -55,14 +55,21 @@ class MockBroker(AbstractBroker):
     - Instant order fills (no waiting for market data)
     - Supports all instrument types (stocks, forex, options, futures, commodities)
     - Supports MARKET and LIMIT orders
-    - Returns mock account data
-    - No external dependencies
+    - Uses MongoDB as single source of truth for account data
+    - No cached values - all balances read from database
+
+    Architecture:
+    - Account balances are stored in MongoDB trading_accounts collection
+    - get_account_balance() reads from MongoDB, not cached values
+    - get_margin_info() reads from MongoDB, not cached values
+    - get_open_positions() reads from MongoDB, not cached values
+    - This ensures consistency after clear_test_data.py resets
 
     Example config:
     {
         "broker": "Mock",
         "account_id": "Mock_Paper",
-        "initial_equity": 100000  # Optional, defaults to 100k
+        "initial_equity": 100000  # Used only for initial account creation
     }
     """
 
@@ -323,7 +330,7 @@ class MockBroker(AbstractBroker):
 
     def get_account_balance(self, account_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Return mock account balance.
+        Return account balance from MongoDB (single source of truth).
 
         Args:
             account_id: Account ID (optional, uses self.account_id if not provided)
@@ -333,17 +340,70 @@ class MockBroker(AbstractBroker):
         """
         account = account_id or self.account_id
 
-        return {
-            "account_id": account,
-            "equity": self.initial_equity,
-            "cash_balance": self.initial_equity * 0.5,  # 50% cash
-            "margin_used": 0.0,
-            "margin_available": self.initial_equity * 0.5,
-            "buying_power": self.initial_equity * 2.0,  # 2x leverage
-            "unrealized_pnl": 0.0,
-            "realized_pnl": 0.0,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        }
+        try:
+            # Get MongoDB collection (lazy-loaded)
+            trading_accounts_collection = get_trading_accounts_collection()
+            if trading_accounts_collection is None:
+                logger.warning("MongoDB not available, returning fallback balances")
+                # Fallback only if MongoDB is unavailable
+                return {
+                    "account_id": account,
+                    "equity": self.initial_equity,
+                    "cash_balance": self.initial_equity * 0.5,
+                    "margin_used": 0.0,
+                    "margin_available": self.initial_equity * 0.5,
+                    "buying_power": self.initial_equity * 2.0,
+                    "unrealized_pnl": 0.0,
+                    "realized_pnl": 0.0,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            # Fetch account document from MongoDB
+            account_doc = trading_accounts_collection.find_one({"account_id": account})
+
+            if not account_doc or 'balances' not in account_doc:
+                logger.warning(f"Account {account} not found in MongoDB, returning fallback balances")
+                # Fallback only if account doesn't exist yet
+                return {
+                    "account_id": account,
+                    "equity": self.initial_equity,
+                    "cash_balance": self.initial_equity * 0.5,
+                    "margin_used": 0.0,
+                    "margin_available": self.initial_equity * 0.5,
+                    "buying_power": self.initial_equity * 2.0,
+                    "unrealized_pnl": 0.0,
+                    "realized_pnl": 0.0,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            # Return balances from MongoDB (single source of truth)
+            balances = account_doc['balances']
+            return {
+                "account_id": account,
+                "equity": balances.get('equity', 0.0),
+                "cash_balance": balances.get('cash_balance', 0.0),
+                "margin_used": balances.get('margin_used', 0.0),
+                "margin_available": balances.get('margin_available', 0.0),
+                "buying_power": balances.get('buying_power', 0.0),
+                "unrealized_pnl": balances.get('unrealized_pnl', 0.0),
+                "realized_pnl": balances.get('realized_pnl', 0.0),
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching account balance from MongoDB: {e}", exc_info=True)
+            # Fallback on error
+            return {
+                "account_id": account,
+                "equity": self.initial_equity,
+                "cash_balance": self.initial_equity * 0.5,
+                "margin_used": 0.0,
+                "margin_available": self.initial_equity * 0.5,
+                "buying_power": self.initial_equity * 2.0,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
 
     def get_open_positions(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -395,7 +455,7 @@ class MockBroker(AbstractBroker):
 
     def get_margin_info(self, account_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Return mock margin information.
+        Return margin information from MongoDB (single source of truth).
 
         Args:
             account_id: Account ID (optional)
@@ -403,15 +463,73 @@ class MockBroker(AbstractBroker):
         Returns:
             Dict with margin_used, margin_available, etc.
         """
-        return {
-            "margin_used": 0.0,
-            "margin_available": self.initial_equity * 0.5,
-            "margin_requirement": 0.0,
-            "excess_liquidity": self.initial_equity * 0.5,
-            "leverage": 2.0,
-            "margin_utilization_pct": 0.0,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        }
+        account = account_id or self.account_id
+
+        try:
+            # Get MongoDB collection (lazy-loaded)
+            trading_accounts_collection = get_trading_accounts_collection()
+            if trading_accounts_collection is None:
+                logger.warning("MongoDB not available, returning fallback margin info")
+                # Fallback only if MongoDB is unavailable
+                return {
+                    "margin_used": 0.0,
+                    "margin_available": self.initial_equity * 0.5,
+                    "margin_requirement": 0.0,
+                    "excess_liquidity": self.initial_equity * 0.5,
+                    "leverage": 2.0,
+                    "margin_utilization_pct": 0.0,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            # Fetch account document from MongoDB
+            account_doc = trading_accounts_collection.find_one({"account_id": account})
+
+            if not account_doc or 'balances' not in account_doc:
+                logger.warning(f"Account {account} not found in MongoDB, returning fallback margin info")
+                # Fallback only if account doesn't exist yet
+                return {
+                    "margin_used": 0.0,
+                    "margin_available": self.initial_equity * 0.5,
+                    "margin_requirement": 0.0,
+                    "excess_liquidity": self.initial_equity * 0.5,
+                    "leverage": 2.0,
+                    "margin_utilization_pct": 0.0,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            # Calculate from MongoDB balances (single source of truth)
+            balances = account_doc['balances']
+            margin_used = balances.get('margin_used', 0.0)
+            margin_available = balances.get('margin_available', 0.0)
+            equity = balances.get('equity', 0.0)
+
+            # Calculate margin utilization percentage
+            margin_utilization_pct = 0.0
+            if equity > 0:
+                margin_utilization_pct = (margin_used / equity) * 100.0
+
+            return {
+                "margin_used": margin_used,
+                "margin_available": margin_available,
+                "margin_requirement": margin_used,  # For mock, requirement = used
+                "excess_liquidity": margin_available,
+                "leverage": 2.0,  # Mock broker uses 2x leverage
+                "margin_utilization_pct": margin_utilization_pct,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching margin info from MongoDB: {e}", exc_info=True)
+            # Fallback on error
+            return {
+                "margin_used": 0.0,
+                "margin_available": self.initial_equity * 0.5,
+                "margin_requirement": 0.0,
+                "excess_liquidity": self.initial_equity * 0.5,
+                "leverage": 2.0,
+                "margin_utilization_pct": 0.0,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
 
     def get_open_orders(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """

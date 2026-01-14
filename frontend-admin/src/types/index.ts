@@ -390,3 +390,75 @@ export interface UpdateDashboardRequest {
   widgets?: DashboardWidget[];
   grid_config?: GridConfig;
 }
+
+// Strategy Submission Types
+export interface StrategySubmission {
+  submission_id: string;
+  status: 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED';
+  strategy_name: string;
+  developer_info: {
+    name: string;
+    email: string;
+    note: string;
+  };
+  raw_data_backtest_full: BacktestDataPoint[];
+  metrics: StrategyMetrics;
+  synthetic_data: {
+    columns_generated: string[];
+    starting_capital: number;
+  };
+  approved_strategy_id?: string;
+  rejection_reason?: string;
+  reviewed_at?: string;
+  submitted_at: string;
+  created_at: string;
+  updated_at: string;
+  tearsheet_generated?: boolean;
+  tearsheet_path?: string;
+  tearsheet_error?: string;
+}
+
+export interface BacktestDataPoint {
+  date: string;
+  return: number;
+  pnl: number;
+  margin_used: number;
+  notional_value: number;
+  account_equity: number;
+}
+
+export interface StrategyMetrics {
+  cagr: number;
+  sharpe_ratio: number;
+  calmar_ratio: number;
+  max_drawdown: number;
+  total_return: number;
+  volatility_annual: number;
+  sortino_ratio: number;
+  win_rate: number;
+  profit_factor: number;
+  num_days: number;
+  start_date: string;
+  end_date: string;
+  num_trades: number;
+}
+
+export interface ApproveSubmissionRequest {
+  strategy_id: string;
+  asset_class: string;
+  instruments: string[];
+  accounts?: string[];
+  status?: 'ACTIVE' | 'INACTIVE' | 'TESTING';
+  trading_mode?: 'PAPER' | 'LIVE';
+  include_in_optimization?: boolean;
+  developer_contact?: string;
+  notes?: string;
+  risk_limits?: {
+    max_position_size?: number;
+    max_daily_loss?: number;
+  };
+}
+
+export interface RejectSubmissionRequest {
+  rejection_reason: string;
+}

@@ -9,6 +9,7 @@ Clears:
 
 Resets:
 - trading_accounts: balances reset to initial_equity, open_positions cleared
+- funds: total_equity recalculated from sum of account equities
 
 Usage:
     python scripts/junk/clear_test_data.py
@@ -89,6 +90,28 @@ def clear_test_data():
 
     if reset_count > 0:
         print(f"  Total accounts reset: {reset_count}")
+
+    # Reset fund total_equity by summing account equities
+    print("\nResetting fund total_equity...")
+    funds = db['funds'].find({})
+    for fund in funds:
+        fund_id = fund.get('fund_id')
+
+        # Get all accounts for this fund
+        fund_accounts = db['trading_accounts'].find({'fund_id': fund_id})
+
+        # Sum equity across all accounts
+        total_equity = sum(
+            acc.get('balances', {}).get('equity', 0.0)
+            for acc in fund_accounts
+        )
+
+        # Update fund total_equity
+        db['funds'].update_one(
+            {'fund_id': fund_id},
+            {'$set': {'total_equity': total_equity}}
+        )
+        print(f"  {fund_id}: reset to ${total_equity:,.2f} total_equity")
 
     # Restart execution-service to clear in-memory duplicate tracking
     print("\nRestarting execution-service to clear in-memory state...")
