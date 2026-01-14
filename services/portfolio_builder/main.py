@@ -979,19 +979,47 @@ async def get_outdated_allocations():
 async def get_current_allocation():
     """
     Get all current active allocations (one per fund)
-    Returns all approved allocations indexed by fund_id
+    Reads from funds collection -> portfolio_tests collection
     """
     try:
-        # Fetch all allocations (one per fund)
-        allocations = list(current_allocation_collection.find({}, {'_id': 0}))
-        
-        # Index by fund_id for easy lookup
-        allocations_by_fund = {alloc['fund_id']: alloc for alloc in allocations if 'fund_id' in alloc}
-        
+        # Get all active funds with approved allocations
+        active_funds = list(funds_collection.find({
+            "portfolio_test_id": {"$exists": True},
+            "status": "ACTIVE"
+        }))
+
+        allocations_by_fund = {}
+
+        for fund in active_funds:
+            fund_id = fund['fund_id']
+            portfolio_test_id = fund.get('portfolio_test_id')
+
+            # Fetch test from portfolio_tests collection
+            test = portfolio_tests_collection.find_one({"test_id": portfolio_test_id})
+            if not test:
+                logger.warning(f"Fund {fund_id} references missing test {portfolio_test_id}")
+                continue
+
+            allocations_dict = test.get('allocations', {})
+
+            # Build allocation response in expected format
+            allocations_by_fund[fund_id] = {
+                "fund_id": fund_id,
+                "allocations": allocations_dict,
+                "portfolio_test_id": portfolio_test_id,
+                "allocation_name": f"Test {portfolio_test_id}",
+                "approved_at": fund.get('allocation_approved_at'),
+                "updated_at": fund.get('updated_at'),  # For frontend compatibility
+                "total_allocation_pct": sum(allocations_dict.values())
+            }
+
+        # For backward compatibility, return first allocation if exists
+        first_allocation = list(allocations_by_fund.values())[0] if allocations_by_fund else None
+
         return {
             "status": "success",
             "allocations": allocations_by_fund,
-            "allocation": allocations[0] if allocations else None  # For backward compatibility
+            "allocation": first_allocation
         }
     except Exception as e:
         logger.error(f"Error fetching current allocation: {str(e)}", exc_info=True)
@@ -1002,72 +1030,47 @@ async def get_current_allocation():
 @app.post("/api/v1/allocations/approve")
 async def approve_allocation(request: Dict[str, Any]):
     """
-    Approve allocation (makes it current)
-    Replaces the current allocation with the approved one
-    Also saves to local JSON cache for Cerebro to use
+    Approve allocation by linking portfolio_test_id to fund.
+    Single source of truth: MongoDB only (no JSON cache).
     """
     try:
-        allocations = request.get('allocations')
+        portfolio_test_id = request.get('portfolio_test_id')
         fund_id = request.get('fund_id')
-        
-        if not allocations:
-            raise HTTPException(status_code=400, detail="allocations field is required")
+
+        if not portfolio_test_id:
+            raise HTTPException(status_code=400, detail="portfolio_test_id is required")
         if not fund_id:
-            raise HTTPException(status_code=400, detail="fund_id field is required")
+            raise HTTPException(status_code=400, detail="fund_id is required")
 
-        # Calculate total allocation (or use provided value)
-        total_allocation_pct = sum(allocations.values())
+        # Verify portfolio test exists
+        test = portfolio_tests_collection.find_one({"test_id": portfolio_test_id})
+        if not test:
+            raise HTTPException(status_code=404, detail=f"Portfolio test {portfolio_test_id} not found")
 
-        # Create new current allocation document
-        new_allocation = {
-            "allocations": allocations,
-            "fund_id": fund_id,
-            "total_allocation_pct": total_allocation_pct,
-            "approved_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
-            "mode": "approved"
-        }
+        # Verify fund exists
+        fund = funds_collection.find_one({"fund_id": fund_id})
+        if not fund:
+            raise HTTPException(status_code=404, detail=f"Fund {fund_id} not found")
 
-        # Update or insert allocation for this specific fund (don't delete other funds)
-        current_allocation_collection.update_one(
+        # Update fund with portfolio_test_id reference
+        funds_collection.update_one(
             {"fund_id": fund_id},
-            {"$set": new_allocation},
-            upsert=True
+            {
+                "$set": {
+                    "portfolio_test_id": portfolio_test_id,
+                    "allocation_approved_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+            }
         )
 
-        # Save to local JSON cache for Cerebro
-        cerebro_cache_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            'cerebro_service',
-            'current_portfolio_allocation_approved.json'
-        )
-
-        cache_data = {
-            "_comment": "Current approved portfolio allocation (cached from MongoDB)",
-            "_source": "Frontend approval via PortfolioBuilder API",
-            "_metadata": {
-                "approved_at": new_allocation["approved_at"].isoformat(),
-                "updated_at": new_allocation["updated_at"].isoformat(),
-                "num_strategies": len(allocations),
-                "fund_id": fund_id
-            },
-            "allocations": allocations,
-            "fund_id": fund_id,
-            "total_allocation_pct": sum(allocations.values()),
-            "mode": "approved_downloaded_from_mongo",
-            "last_updated": datetime.utcnow().isoformat(),
-            "update_action": "allocation_changed_by_user"
-        }
-
-        with open(cerebro_cache_path, 'w') as f:
-            json.dump(cache_data, f, indent=2)
-
-        logger.info(f"✅ Approved new allocation with {len(allocations)} strategies")
-        logger.info(f"✅ Saved to cache: {cerebro_cache_path}")
+        logger.info(f"✅ Approved allocation: Fund {fund_id} → Test {portfolio_test_id}")
 
         return {
-            "status": "success",
-            "message": "Allocation approved and set as current"
+            "success": True,
+            "fund_id": fund_id,
+            "portfolio_test_id": portfolio_test_id,
+            "message": f"Allocation approved for fund {fund_id}"
         }
 
     except HTTPException:

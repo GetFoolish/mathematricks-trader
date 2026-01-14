@@ -108,11 +108,12 @@ else:
 db = mongo_client['mathematricks_trading']
 trading_orders_collection = db['trading_orders']
 signal_store_collection = db['signal_store']  # Unified signal storage with embedded cerebro decisions
-portfolio_allocations_collection = db['portfolio_allocations']
-current_allocation_collection = db['current_allocation']  # Current approved allocation
+portfolio_allocations_collection = db['portfolio_allocations']  # DEPRECATED: Use funds + portfolio_tests instead
+current_allocation_collection = db['current_allocation']  # DEPRECATED: Use funds + portfolio_tests instead
 strategies_collection = db['strategies']
 funds_collection = db['funds']  # Fund architecture support
 trading_accounts_collection = db['trading_accounts']  # Account data for fund allocation
+portfolio_tests_collection = db['portfolio_tests']  # Portfolio test results with allocations
 
 # Collections from signal_collector database (for Activity tab)
 signals_db = mongo_client['mathematricks_signals']
@@ -427,13 +428,8 @@ def initialize_portfolio_constructor():
         if PORTFOLIO_CONSTRUCTOR is None:
             logger.info("Initializing Portfolio Constructor (MaxHybrid)")
 
-            # Use cached approved allocations for speed (signals are time-critical)
-            # This file is updated by PortfolioBuilder when allocations are approved via frontend
-            allocations_cache_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                'current_portfolio_allocation_approved.json'
-            )
-
+            # Portfolio constructor for optimal allocation algorithms
+            # Note: All allocations now read from MongoDB (funds + portfolio_tests)
             PORTFOLIO_CONSTRUCTOR = MaxHybridConstructor(
                 alpha=0.85,  # 85% Sharpe, 15% CAGR weighting
                 max_drawdown_limit=-0.06,  # -6% max drawdown
@@ -441,8 +437,8 @@ def initialize_portfolio_constructor():
                 max_single_strategy=1.0,  # 100% max per strategy
                 min_allocation=0.01,  # 1% minimum
                 cagr_target=2.0,  # 200% CAGR target for normalization
-                use_cached_allocations=False,  # ❌ DISABLED - Use fund allocations from MongoDB instead
-                allocations_config_path=allocations_cache_path,  # current_portfolio_allocation_approved.json
+                use_cached_allocations=False,
+                allocations_config_path=None,
                 risk_free_rate=0.0
             )
             logger.info("✅ Portfolio Constructor initialized (MaxHybrid)")
@@ -480,55 +476,6 @@ def load_active_allocations() -> Dict[str, float]:
     except Exception as e:
         logger.error(f"Failed to load active allocations: {str(e)}")
         return {}
-
-
-def download_allocations_from_mongo_to_cache(update_action: str = "cerebro_restart"):
-    """
-    Download current allocation from MongoDB and save to local JSON cache.
-    This is called on Cerebro startup and when allocations change.
-
-    Args:
-        update_action: Either 'cerebro_restart' or 'allocation_changed_by_user'
-    """
-    try:
-        # Get current allocation from MongoDB
-        allocation_doc = current_allocation_collection.find_one({}, {'_id': 0})
-
-        if not allocation_doc:
-            logger.warning("⚠️  No current allocation found in MongoDB")
-            return
-
-        allocations = allocation_doc.get('allocations', {})
-
-        # Save to local JSON cache
-        cache_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            'current_portfolio_allocation_approved.json'
-        )
-
-        cache_data = {
-            "_comment": "Current approved portfolio allocation (downloaded from MongoDB)",
-            "_source": "MongoDB current_allocation collection",
-            "_metadata": {
-                "approved_at": allocation_doc.get('approved_at', datetime.utcnow()).isoformat() if isinstance(allocation_doc.get('approved_at'), datetime) else str(allocation_doc.get('approved_at')),
-                "num_strategies": len([v for v in allocations.values() if v > 0])
-            },
-            "allocations": allocations,
-            "total_allocation_pct": sum(allocations.values()),
-            "mode": "approved_downloaded_from_mongo",
-            "last_updated": datetime.utcnow().isoformat(),
-            "update_action": update_action
-        }
-
-        with open(cache_path, 'w') as f:
-            json.dump(cache_data, f, indent=2)
-
-        logger.info(f"✅ Downloaded allocations from MongoDB to cache: {cache_path}")
-        logger.info(f"   Update action: {update_action}")
-        logger.info(f"   Strategies: {len(allocations)}, Total: {sum(allocations.values()):.1f}%")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to download allocations from MongoDB: {e}", exc_info=True)
 
 
 def reload_allocations():
@@ -1455,7 +1402,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     # MULTI-FUND ARCHITECTURE: Get active allocations for this strategy
     # ============================================================================
 
-    active_allocations = get_active_allocations_for_strategy(strategy_id, portfolio_allocations_collection)
+    active_allocations = get_active_allocations_for_strategy(strategy_id, funds_collection, portfolio_tests_collection)
 
     if not active_allocations:
         logger.error(f"Strategy {strategy_id} has no ACTIVE allocations - rejecting signal")
@@ -1506,7 +1453,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         fund_allocation_data = get_strategy_allocation_for_fund(
             fund_id, strategy_id,
             portfolio_allocations_collection, trading_orders_collection,
-            funds_collection, trading_accounts_collection
+            funds_collection, trading_accounts_collection,
+            portfolio_tests_collection
         )
         
         allocated_capital = fund_allocation_data['allocated_capital']
@@ -2523,10 +2471,7 @@ if __name__ == "__main__":
     # Pub/Sub removed - using MongoDB Change Streams for all communication
     # (Cerebro watches signal_store, writes to trading_orders, execution watches trading_orders)
 
-    # Download current allocation from MongoDB to local cache (for fast signal processing)
-    download_allocations_from_mongo_to_cache(update_action="cerebro_restart")
-
-    # Initialize portfolio constructor (uses the cached allocations)
+    # Initialize portfolio constructor
     initialize_portfolio_constructor()
 
     # Load allocations

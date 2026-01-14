@@ -60,8 +60,8 @@ export const Allocations: React.FC = () => {
 
   // Approve allocation (Part 2 -> Part 1)
   const approveMutation = useMutation({
-    mutationFn: ({ allocations, fund_id }: { allocations: Record<string, number>; fund_id: string }) =>
-      apiClient.approveAllocation(allocations, fund_id),
+    mutationFn: ({ portfolio_test_id, fund_id }: { portfolio_test_id: string; fund_id: string }) =>
+      apiClient.approveAllocation(portfolio_test_id, fund_id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['currentAllocation'] });
       setEditorAllocations({});
@@ -165,9 +165,11 @@ export const Allocations: React.FC = () => {
       alert('Please select a fund before approving the allocation');
       return;
     }
-    if (Object.keys(editorAllocations).length > 0) {
-      approveMutation.mutate({ allocations: editorAllocations, fund_id: selectedFundId });
+    if (!selectedTestId) {
+      alert('Please load a test before approving');
+      return;
     }
+    approveMutation.mutate({ portfolio_test_id: selectedTestId, fund_id: selectedFundId });
   };
 
   const handleDeleteTest = (testId: string) => {

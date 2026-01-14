@@ -183,26 +183,31 @@ GET /api/executions            // All executions
 ```
 
 ### 4. Allocations Page ([Allocations.tsx](../frontend-admin/src/pages/Allocations.tsx))
-**Purpose**: Portfolio allocation management
+**Purpose**: Portfolio allocation management and testing
 
 **Features**:
-- View all allocations (ACTIVE, PENDING_APPROVAL, ARCHIVED)
-- Approve pending allocations
-- Correlation matrix visualization
-- Allocation breakdown table
-- Historical allocation tracking
+- **Part 1**: View current fund allocations (approved portfolio tests)
+- **Part 2**: Research Lab - Run and test portfolio allocations
+- **Part 3**: Approve portfolio tests for funds
 
 **Workflow**:
-1. Portfolio Builder creates allocation → status=PENDING_APPROVAL
-2. User reviews allocation on Allocations page
-3. User clicks "Approve" → status=ACTIVE, previous ACTIVE → ARCHIVED
-4. Cerebro uses ACTIVE allocation for position sizing
+1. User runs portfolio test in Research Lab (Part 2) → creates test in `portfolio_tests` collection
+2. User loads test and selects fund in Part 2
+3. User clicks "Approve" → updates `funds.portfolio_test_id` to reference the test
+4. Part 1 displays approved allocation from `funds` → `portfolio_tests`
+5. Cerebro uses approved test allocations for position sizing
+
+**Single Source of Truth**:
+- Allocations stored in `portfolio_tests` collection
+- Funds reference tests via `portfolio_test_id` field
+- No duplicate data in separate allocation collections
 
 **API Endpoints**:
 ```typescript
-GET /api/allocations           // All allocations
-POST /api/allocations/approve  // Approve allocation
-GET /api/correlations          // Correlation matrix
+GET /api/v1/allocations/current        // Get current fund allocations (funds → portfolio_tests)
+POST /api/v1/allocations/approve       // Approve test for fund (portfolio_test_id, fund_id)
+GET /api/v1/portfolio-tests            // Get all portfolio tests
+POST /api/v1/portfolio-tests/run       // Run new portfolio test
 ```
 
 ### 5. Strategies Page ([Strategies.tsx](../frontend-admin/src/pages/Strategies.tsx))
@@ -324,12 +329,13 @@ export const api = {
     }).then(r => r.json()),
 
     // Allocations
-    getAllocations: () => fetch(`${API_BASE_URL}/allocations`).then(r => r.json()),
-    approveAllocation: (id) => fetch(`${API_BASE_URL}/allocations/approve`, {
+    getCurrentAllocations: () => fetch(`${API_BASE_URL}/api/v1/allocations/current`).then(r => r.json()),
+    approveAllocation: (portfolio_test_id, fund_id) => fetch(`${API_BASE_URL}/api/v1/allocations/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ allocation_id: id })
-    }).then(r => r.json())
+        body: JSON.stringify({ portfolio_test_id, fund_id })
+    }).then(r => r.json()),
+    getPortfolioTests: () => fetch(`${API_BASE_URL}/api/v1/portfolio-tests`).then(r => r.json())
 };
 ```
 

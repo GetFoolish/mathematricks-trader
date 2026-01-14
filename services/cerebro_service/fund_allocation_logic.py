@@ -11,27 +11,52 @@ logger = logging.getLogger(__name__)
 
 def get_active_allocations_for_strategy(
     strategy_id: str,
-    portfolio_allocations_collection
+    funds_collection,
+    portfolio_tests_collection
 ) -> List[Dict]:
     """
-    Get all ACTIVE portfolio allocations that include this strategy.
-    
+    Get all ACTIVE fund allocations that include this strategy.
+    Reads from funds collection -> portfolio_tests collection (single source of truth).
+
     Args:
         strategy_id: Strategy ID to search for
-        portfolio_allocations_collection: MongoDB collection
-        
+        funds_collection: MongoDB funds collection
+        portfolio_tests_collection: MongoDB portfolio_tests collection
+
     Returns:
         List of allocation documents with fund_id
     """
     try:
-        allocations = list(portfolio_allocations_collection.find({
-            "status": "ACTIVE",
-            f"allocations.{strategy_id}": {"$exists": True}
+        # Get all active funds with approved allocations
+        active_funds = list(funds_collection.find({
+            "portfolio_test_id": {"$exists": True},
+            "status": "ACTIVE"
         }))
-        
+
+        allocations = []
+        for fund in active_funds:
+            portfolio_test_id = fund.get('portfolio_test_id')
+
+            # Fetch test from portfolio_tests collection
+            test = portfolio_tests_collection.find_one({"test_id": portfolio_test_id})
+            if not test:
+                logger.warning(f"Fund {fund['fund_id']} references missing test {portfolio_test_id}")
+                continue
+
+            allocations_dict = test.get('allocations', {})
+
+            # Only include if strategy is allocated in this test
+            if strategy_id in allocations_dict:
+                allocations.append({
+                    'fund_id': fund['fund_id'],
+                    'allocation_name': f"Test {portfolio_test_id}",
+                    'allocations': allocations_dict,
+                    'portfolio_test_id': portfolio_test_id
+                })
+
         logger.info(f"Found {len(allocations)} ACTIVE allocations for strategy {strategy_id}")
         return allocations
-    
+
     except Exception as e:
         logger.error(f"Error fetching active allocations: {str(e)}")
         return []
@@ -40,10 +65,11 @@ def get_active_allocations_for_strategy(
 def get_strategy_allocation_for_fund(
     fund_id: str,
     strategy_id: str,
-    portfolio_allocations_collection,
+    portfolio_allocations_collection,  # DEPRECATED: Not used anymore
     trading_orders_collection,
     funds_collection,
-    trading_accounts_collection
+    trading_accounts_collection,
+    portfolio_tests_collection=None  # NEW: Required for reading allocations
 ) -> Dict[str, float]:
     """
     Calculate capital allocation for a strategy within a fund.
@@ -84,22 +110,37 @@ def get_strategy_allocation_for_fund(
                 "available_capital": 0.0
             }
         
-        # Get active allocation for this fund
-        allocation = portfolio_allocations_collection.find_one({
-            "fund_id": fund_id,
-            "status": "ACTIVE"
-        })
-        
-        if not allocation:
-            logger.warning(f"No ACTIVE allocation found for fund {fund_id}")
+        # Get active allocation for this fund from portfolio_test
+        portfolio_test_id = fund_doc.get('portfolio_test_id')
+
+        if not portfolio_test_id:
+            logger.warning(f"No approved allocation (portfolio_test_id) found for fund {fund_id}")
             return {
                 "allocated_capital": 0.0,
                 "used_capital": 0.0,
                 "available_capital": 0.0
             }
-        
+
+        # Fetch test allocations from portfolio_tests collection
+        if portfolio_tests_collection is None:
+            logger.error("portfolio_tests_collection is required but not provided")
+            return {
+                "allocated_capital": 0.0,
+                "used_capital": 0.0,
+                "available_capital": 0.0
+            }
+
+        test = portfolio_tests_collection.find_one({"test_id": portfolio_test_id})
+        if not test:
+            logger.warning(f"Fund {fund_id} references missing test {portfolio_test_id}")
+            return {
+                "allocated_capital": 0.0,
+                "used_capital": 0.0,
+                "available_capital": 0.0
+            }
+
         # Get strategy allocation percentage
-        allocations = allocation.get('allocations', {})
+        allocations = test.get('allocations', {})
         strategy_pct = allocations.get(strategy_id, 0.0)
         
         if strategy_pct <= 0:

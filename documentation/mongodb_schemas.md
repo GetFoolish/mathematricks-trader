@@ -19,6 +19,8 @@
   "currency": String,                         // "USD", "EUR", "GBP"
   "accounts": [String],                       // Array of account_ids owned by this fund
   "status": String,                           // "ACTIVE" | "PAUSED" | "CLOSED"
+  "portfolio_test_id": String,                // Reference to portfolio_tests.test_id (approved allocation)
+  "allocation_approved_at": ISODate,          // When the current allocation was approved
   "created_at": ISODate,
   "updated_at": ISODate
 }
@@ -33,6 +35,13 @@
 - `total_equity` must be >= 0
 - `status` must be one of: ACTIVE, PAUSED, CLOSED
 - Cannot delete fund if it has ACTIVE allocations
+- `portfolio_test_id` must reference valid test in `portfolio_tests` collection
+
+**Allocation System (v5.1):**
+- Single source of truth: `portfolio_tests` collection stores all allocations
+- Funds reference approved tests via `portfolio_test_id` field
+- No duplicate allocation data in separate collections
+- Deprecated collections: `current_allocation`, `portfolio_allocations` (removed)
 
 **Example:**
 ```json
@@ -44,8 +53,10 @@
   "currency": "USD",
   "accounts": ["IBKR_Main", "IBKR_Futures", "Binance_Main"],
   "status": "ACTIVE",
+  "portfolio_test_id": "test_20260114_153022",
+  "allocation_approved_at": ISODate("2026-01-14T15:30:22Z"),
   "created_at": ISODate("2026-01-03T00:00:00Z"),
-  "updated_at": ISODate("2026-01-03T18:00:00Z")
+  "updated_at": ISODate("2026-01-14T15:30:22Z")
 }
 ```
 
@@ -156,17 +167,16 @@
 
 ---
 
-### Collection: `portfolio_allocations` (UPDATED)
-**Purpose:** Portfolio allocation recommendations with fund assignment
+### Collection: `portfolio_allocations` (DEPRECATED as of v5.1)
+**Status:** ⚠️ **DEPRECATED** - Removed in v5.1 allocation system refactoring
 
-**ADDED FIELDS in v5:**
-```json
-{
-  // ... existing fields ...
-  "fund_id": String,                          // NEW: Which fund this allocation is for
-  "allocation_name": String                   // NEW: User-friendly name
-}
-```
+**Replacement:** Use `funds.portfolio_test_id` → `portfolio_tests.allocations` instead
+
+**Migration Notes:**
+- All allocations now stored in `portfolio_tests` collection
+- Funds reference approved tests via `portfolio_test_id` field
+- Single source of truth: `portfolio_tests` collection
+- This collection was deleted and is no longer used
 
 **Full Schema:**
 ```json

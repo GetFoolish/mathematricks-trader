@@ -55,7 +55,7 @@ services/cerebro_service/
 The Cerebro Service operates as a **MongoDB Change Stream watcher** that:
 
 1. Watches `signal_store` collection for new legs without cerebro decisions
-2. Retrieves fund allocation percentages from `portfolio_allocations`
+2. Retrieves fund allocation from `funds` → `portfolio_tests` collections
 3. Calculates position sizes based on strategy allocation
 4. Validates margin requirements via Account Data Service
 5. Creates orders in `trading_orders` collection
@@ -179,30 +179,49 @@ account_distribution = distribute_across_accounts(cerebro_quantity, strategy_id,
 
 **Key Functions**:
 
-#### `get_active_allocation()`
+#### `get_active_allocations_for_strategy()`
 ```python
-def get_active_allocation(fund_id: str, strategy_id: str) -> float:
+def get_active_allocations_for_strategy(
+    strategy_id: str,
+    funds_collection,
+    portfolio_tests_collection
+) -> List[Dict]:
     """
-    Get active allocation percentage for strategy within fund
+    Get active allocation percentage for strategy across all funds
+    Single source of truth: funds → portfolio_tests
 
-    Query:
-    - Find portfolio_allocations document with status=ACTIVE for fund_id
-    - Extract allocations[strategy_id] percentage
-    - Return as decimal (0.15 = 15%)
+    Query Flow:
+    1. Find all ACTIVE funds with portfolio_test_id
+    2. For each fund, fetch portfolio test from portfolio_tests collection
+    3. Extract allocations[strategy_id] percentage
+    4. Return list of fund allocations
 
     Example:
+    Fund document:
     {
-        "fund_id": "fund_001",
+        "fund_id": "mock-fund-1",
         "status": "ACTIVE",
+        "portfolio_test_id": "equal_weighted_allocation_for_testing"
+    }
+
+    Portfolio test document:
+    {
+        "test_id": "equal_weighted_allocation_for_testing",
         "allocations": {
-            "SPY": 0.20,           # 20%
-            "TLT": 0.15,           # 15%
-            "Com1-Met": 0.10       # 10%
+            "SPY": 11.11,           # 11.11%
+            "TLT": 11.11,           # 11.11%
+            "Com1-Met": 11.11       # 11.11%
         }
     }
 
     Returns:
-        0.15  # 15% allocation for Com1-Met strategy
+        [
+            {
+                "fund_id": "mock-fund-1",
+                "allocations": {"SPY": 11.11, "TLT": 11.11, ...},
+                "portfolio_test_id": "equal_weighted_allocation_for_testing"
+            }
+        ]
     """
 ```
 
@@ -377,7 +396,7 @@ def update_position_tracking(
 
 3. GET STRATEGY ALLOCATION
    ↓
-   Query portfolio_allocations (status=ACTIVE)
+   Query funds → portfolio_tests via portfolio_test_id
    SPY Strategy Allocation = 15%
 
 4. CALCULATE ALLOCATED CAPITAL
@@ -427,14 +446,15 @@ def update_position_tracking(
 
 ## Fund Architecture
 
-### Fund Structure (v5)
+### Fund Structure (v5.1)
 
 The system supports a **multi-fund architecture** where:
 
 1. **Funds** are top-level entities that own multiple accounts
 2. **Accounts** belong to exactly one fund
-3. **Strategies** are allocated a percentage of fund equity
+3. **Strategies** are allocated a percentage of fund equity via approved portfolio tests
 4. **Capital** is distributed across accounts automatically
+5. **Single Source of Truth**: Allocations stored in `portfolio_tests`, referenced by `funds.portfolio_test_id`
 
 ### Example Fund Setup
 
@@ -478,19 +498,28 @@ The system supports a **multi-fund architecture** where:
     }
 }
 
-// portfolio_allocations collection
+// portfolio_tests collection (single source of truth for allocations)
 {
-    "allocation_id": "alloc_001",
-    "fund_id": "fund_001",
-    "status": "ACTIVE",                  // Only one ACTIVE per fund
+    "test_id": "test_20260114_120000",
     "allocations": {
-        "SPY": 0.20,                     // 20% to SPY strategy
-        "TLT": 0.15,                     // 15% to TLT strategy
-        "Com1-Met": 0.10,                // 10% to Com1-Met strategy
-        "Florida-Forex": 0.05            // 5% to Florida-Forex
+        "SPY": 20.0,                     // 20% to SPY strategy
+        "TLT": 15.0,                     // 15% to TLT strategy
+        "Com1-Met": 10.0,                // 10% to Com1-Met strategy
+        "Florida-Forex": 5.0             // 5% to Florida-Forex
     },
-    "created_at": "2024-01-01T00:00:00Z",
-    "approved_at": "2024-01-01T12:00:00Z"
+    "performance": {
+        "cagr": 1.45,
+        "sharpe": 2.1,
+        "max_drawdown": -0.08
+    },
+    "created_at": "2024-01-01T00:00:00Z"
+}
+
+// Fund references the approved test
+{
+    "fund_id": "fund_001",
+    "portfolio_test_id": "test_20260114_120000",  // Links to portfolio test
+    "allocation_approved_at": "2024-01-01T12:00:00Z"
 }
 ```
 
