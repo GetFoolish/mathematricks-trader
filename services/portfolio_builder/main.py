@@ -1553,6 +1553,39 @@ async def delete_fund(fund_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _recalculate_fund_equity(fund_id: str):
+    """
+    Recalculate and update fund's total_equity from all its accounts.
+    Called after account creation/update/deletion to keep fund.total_equity in sync.
+    """
+    try:
+        # Get all active accounts for this fund
+        accounts = list(trading_accounts_collection.find({
+            "fund_id": fund_id,
+            "status": "ACTIVE"
+        }))
+        
+        # Sum up equity from all accounts (using balances.equity)
+        total_equity = sum(acc.get('balances', {}).get('equity', 0.0) for acc in accounts)
+        
+        # Update fund
+        funds_collection.update_one(
+            {"fund_id": fund_id},
+            {
+                "$set": {
+                    "total_equity": total_equity,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        
+        logger.info(f"Recalculated fund {fund_id} total_equity: ${total_equity:,.2f} from {len(accounts)} accounts")
+        return total_equity
+    except Exception as e:
+        logger.error(f"Error recalculating fund equity for {fund_id}: {e}")
+        return 0.0
+
+
 # ============================================================================
 # Account Management API (v5)
 # ============================================================================
@@ -1592,25 +1625,50 @@ async def create_account(account_data: dict):
             if not fund:
                 raise HTTPException(status_code=400, detail=f"Fund '{fund_id}' not found")
         
-        # Create account document
+        # Get authentication details and calculate initial equity
+        auth_details = account_data.get('authentication_details', {})
+        broker = account_data.get('broker')
+        
+        # For Mock brokers, use initial_equity from auth_details
+        initial_equity = 0.0
+        if auth_details.get('auth_type') == 'MOCK':
+            initial_equity = auth_details.get('initial_equity', 1000000)
+        
+        # Generate account metadata (matches OANDA_MOCK structure)
+        account_type = "Paper" if auth_details.get('auth_type') == 'MOCK' or 'paper' in account_id.lower() else "Live"
+        account_number = f"MOCK_{account_id}" if broker == "Mock" else account_data.get('broker_account_number', '')
+        account_name = f"{account_id} {broker} {account_type} Trading"
+        
+        # Create account document - matches OANDA_MOCK structure exactly
+        # NOTE: NO top-level balance fields (equity, cash_balance, etc) - only balances object
         account_doc = {
             "account_id": account_id,
-            "broker": account_data.get('broker'),
+            "broker": broker,
             "broker_account_number": account_data.get('broker_account_number', ''),
             "fund_id": fund_id,
             "asset_classes": account_data.get('asset_classes', {
                 "equity": [],
                 "futures": [],
+                "options": [],
                 "crypto": [],
-                "forex": []
+                "forex": [],
+                "commodities": []
             }),
-            "authentication_details": account_data.get('authentication_details', {}),  # For broker authentication
-            "equity": 0.0,
-            "cash_balance": 0.0,
-            "margin_used": 0.0,
-            "margin_available": 0.0,
-            "unrealized_pnl": 0.0,
-            "realized_pnl": 0.0,
+            "authentication_details": auth_details,
+            "balances": {
+                "equity": initial_equity,
+                "cash": initial_equity / 2,
+                "cash_balance": initial_equity / 2,
+                "margin_used": 0.0,
+                "margin_available": initial_equity / 2,
+                "buying_power": initial_equity * 2,  # 2x leverage for margin accounts
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "last_updated": datetime.utcnow()
+            },
+            "account_name": account_name,
+            "account_number": account_number,
+            "account_type": account_type,
             "open_positions": [],
             "status": "ACTIVE",
             "created_at": datetime.utcnow(),
@@ -1620,7 +1678,7 @@ async def create_account(account_data: dict):
         result = trading_accounts_collection.insert_one(account_doc)
         account_doc['_id'] = str(result.inserted_id)
         
-        # Add account to fund's accounts array
+        # Add account to fund's accounts array and recalculate total_equity
         if fund_id:
             funds_collection.update_one(
                 {"fund_id": fund_id},
@@ -1629,6 +1687,8 @@ async def create_account(account_data: dict):
                     "$set": {"updated_at": datetime.utcnow()}
                 }
             )
+            # Recalculate fund's total_equity from all accounts
+            _recalculate_fund_equity(fund_id)
         
         logger.info(f"Created account: {account_id} for fund: {fund_id}")
         return {"status": "success", "account": account_doc}

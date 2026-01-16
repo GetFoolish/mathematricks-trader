@@ -10,6 +10,7 @@ import {
   TrendingUp,
   Wrench,
   CheckCircle,
+  CreditCard,
 } from 'lucide-react';
 
 export const Layout: React.FC = () => {
@@ -22,6 +23,7 @@ export const Layout: React.FC = () => {
     { name: 'Allocations', href: '/allocations', icon: PieChart },
     { name: 'Approved Strategies', href: '/strategies', icon: Settings },
     { name: 'Fresh Strategies', href: '/strategy-approval', icon: CheckCircle },
+    { name: 'Accounts', href: '/accounts', icon: CreditCard },
     { name: 'Hedged Funds', href: '/hedged-funds', icon: Wrench },
   ];
 

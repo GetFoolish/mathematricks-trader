@@ -39,7 +39,7 @@ def parse_csv(file_content: bytes) -> pd.DataFrame:
             raise BacktestUploadError("Cannot upload empty strategy. At least 1 data row required.")
 
         # Check for required columns
-        required_columns = ['Date', 'Daily_Return_Pct']
+        required_columns = ['date', 'return']
         missing_columns = [col for col in required_columns if col not in df.columns]
 
         if missing_columns:
@@ -47,12 +47,12 @@ def parse_csv(file_content: bytes) -> pd.DataFrame:
 
         # Parse dates
         try:
-            df['Date'] = pd.to_datetime(df['Date'])
+            df['date'] = pd.to_datetime(df['date'])
         except Exception as e:
             raise BacktestUploadError(f"Invalid date format. Expected YYYY-MM-DD. Error: {str(e)}")
 
         # Sort by date
-        df = df.sort_values('Date').reset_index(drop=True)
+        df = df.sort_values('date').reset_index(drop=True)
 
         return df
 
@@ -72,7 +72,7 @@ def normalize_returns(df: pd.DataFrame) -> pd.DataFrame:
     Handles both decimal (0.025) and percentage (2.5) formats.
 
     Args:
-        df: DataFrame with 'Daily_Return_Pct' column
+        df: DataFrame with 'return' column
 
     Returns:
         DataFrame with normalized returns
@@ -82,12 +82,12 @@ def normalize_returns(df: pd.DataFrame) -> pd.DataFrame:
     """
     try:
         # Validate all returns are numeric
-        if not pd.api.types.is_numeric_dtype(df['Daily_Return_Pct']):
+        if not pd.api.types.is_numeric_dtype(df['return']):
             # Try to convert to numeric, will raise error if fails
-            df['Daily_Return_Pct'] = pd.to_numeric(df['Daily_Return_Pct'], errors='coerce')
+            df['return'] = pd.to_numeric(df['return'], errors='coerce')
 
             # Check for any NaN values (failed conversions)
-            invalid_rows = df[df['Daily_Return_Pct'].isna()]
+            invalid_rows = df[df['return'].isna()]
             if len(invalid_rows) > 0:
                 first_invalid = invalid_rows.iloc[0]
                 raise BacktestUploadError(
@@ -95,9 +95,9 @@ def normalize_returns(df: pd.DataFrame) -> pd.DataFrame:
                 )
 
         # Detect if values are in decimal format (all values between -1 and 1)
-        if df['Daily_Return_Pct'].abs().max() <= 1.0:
+        if df['return'].abs().max() <= 1.0:
             # Convert decimal to percentage (0.025 -> 2.5)
-            df['Daily_Return_Pct'] = df['Daily_Return_Pct'] * 100
+            df['return'] = df['return'] * 100
 
         return df
 
@@ -118,10 +118,10 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, bool]:
         Dictionary mapping column names to presence (True/False)
     """
     optional_columns = [
-        'Account_Equity',
-        'Daily_PnL',
-        'Max_Margin_Used',
-        'Max_Notional_Value'
+        'account_equity',
+        'pnl',
+        'margin_used',
+        'notional_value'
     ]
 
     return {col: col in df.columns for col in optional_columns}
@@ -135,13 +135,13 @@ def generate_synthetic_columns(
     Generate synthetic columns for missing data using formulas.
 
     Formulas:
-    - Account_Equity: equity[i] = equity[i-1] * (1 + return[i] / 100)
-    - Daily_PnL: equity[i] - equity[i-1]
-    - Max_Margin_Used: (|return[i]| / max_return) * equity[i] * 0.8
-    - Max_Notional_Value: margin[i] * 3
+    - account_equity: equity[i] = equity[i-1] * (1 + return[i] / 100)
+    - pnl: equity[i] - equity[i-1]
+    - margin_used: (|return[i]| / max_return) * equity[i] * 0.8
+    - notional_value: margin[i] * 3
 
     Args:
-        df: DataFrame with at least Date and Daily_Return_Pct
+        df: DataFrame with at least date and return
         starting_capital: Starting equity value (default: $100,000)
 
     Returns:
@@ -150,48 +150,48 @@ def generate_synthetic_columns(
     df = df.copy()
     generated_columns = []
 
-    # Generate Account_Equity if missing
-    if 'Account_Equity' not in df.columns:
+    # Generate account_equity if missing
+    if 'account_equity' not in df.columns:
         equity = [starting_capital]
         for i in range(1, len(df)):
             prev_equity = equity[i-1]
-            return_pct = df.iloc[i]['Daily_Return_Pct']
+            return_pct = df.iloc[i]['return']
             new_equity = prev_equity * (1 + return_pct / 100)
             equity.append(new_equity)
 
-        df['Account_Equity'] = equity
-        generated_columns.append('Account_Equity')
+        df['account_equity'] = equity
+        generated_columns.append('account_equity')
 
-    # Generate Daily_PnL if missing
-    if 'Daily_PnL' not in df.columns:
+    # Generate pnl if missing
+    if 'pnl' not in df.columns:
         pnl = [0]  # First day has no previous equity
         for i in range(1, len(df)):
-            pnl.append(df.iloc[i]['Account_Equity'] - df.iloc[i-1]['Account_Equity'])
+            pnl.append(df.iloc[i]['account_equity'] - df.iloc[i-1]['account_equity'])
 
         # For first day, calculate from return
-        pnl[0] = df.iloc[0]['Account_Equity'] * (df.iloc[0]['Daily_Return_Pct'] / 100)
+        pnl[0] = df.iloc[0]['account_equity'] * (df.iloc[0]['return'] / 100)
 
-        df['Daily_PnL'] = pnl
-        generated_columns.append('Daily_PnL')
+        df['pnl'] = pnl
+        generated_columns.append('pnl')
 
-    # Generate Max_Margin_Used if missing
-    if 'Max_Margin_Used' not in df.columns:
-        max_return = df['Daily_Return_Pct'].abs().max()
+    # Generate margin_used if missing
+    if 'margin_used' not in df.columns:
+        max_return = df['return'].abs().max()
 
         # Avoid division by zero
         if max_return == 0:
-            df['Max_Margin_Used'] = 0
+            df['margin_used'] = 0
         else:
-            df['Max_Margin_Used'] = (
-                df['Daily_Return_Pct'].abs() / max_return
-            ) * df['Account_Equity'] * 0.8
+            df['margin_used'] = (
+                df['return'].abs() / max_return
+            ) * df['account_equity'] * 0.8
 
-        generated_columns.append('Max_Margin_Used')
+        generated_columns.append('margin_used')
 
-    # Generate Max_Notional_Value if missing
-    if 'Max_Notional_Value' not in df.columns:
-        df['Max_Notional_Value'] = df['Max_Margin_Used'] * 3
-        generated_columns.append('Max_Notional_Value')
+    # Generate notional_value if missing
+    if 'notional_value' not in df.columns:
+        df['notional_value'] = df['margin_used'] * 3
+        generated_columns.append('notional_value')
 
     return df, generated_columns
 
@@ -229,7 +229,7 @@ def merge_backtest_data(
 
     # Convert existing data to DataFrame
     existing_df = pd.DataFrame(existing_data)
-    existing_df['Date'] = pd.to_datetime(existing_df['Date'])
+    existing_df['date'] = pd.to_datetime(existing_df['date'])
 
     # Detect new columns
     existing_cols = set(existing_df.columns)
@@ -241,51 +241,51 @@ def merge_backtest_data(
 
         # For new columns, backfill existing data with synthetic values
         for col in added_cols:
-            if col not in ['Date', 'Daily_Return_Pct']:
+            if col not in ['date', 'return']:
                 # Generate synthetic data for existing rows for this column
                 temp_df = existing_df.copy()
                 temp_df[col] = None  # Add column as None
 
                 # Generate synthetic value based on column type
-                if col == 'Account_Equity' and 'Account_Equity' not in existing_df.columns:
+                if col == 'account_equity' and 'account_equity' not in existing_df.columns:
                     # Generate equity curve
                     equity = [100000]
                     for i in range(1, len(temp_df)):
                         prev_equity = equity[i-1]
-                        return_pct = temp_df.iloc[i]['Daily_Return_Pct']
+                        return_pct = temp_df.iloc[i]['return']
                         equity.append(prev_equity * (1 + return_pct / 100))
                     existing_df[col] = equity
 
-                elif col == 'Daily_PnL':
-                    if 'Account_Equity' in existing_df.columns:
+                elif col == 'pnl':
+                    if 'account_equity' in existing_df.columns:
                         pnl = [0]
                         for i in range(1, len(existing_df)):
-                            pnl.append(existing_df.iloc[i]['Account_Equity'] - existing_df.iloc[i-1]['Account_Equity'])
+                            pnl.append(existing_df.iloc[i]['account_equity'] - existing_df.iloc[i-1]['account_equity'])
                         existing_df[col] = pnl
                     else:
                         existing_df[col] = 0
 
-                elif col == 'Max_Margin_Used':
-                    if 'Account_Equity' in existing_df.columns:
-                        max_return = existing_df['Daily_Return_Pct'].abs().max()
+                elif col == 'margin_used':
+                    if 'account_equity' in existing_df.columns:
+                        max_return = existing_df['return'].abs().max()
                         if max_return > 0:
                             existing_df[col] = (
-                                existing_df['Daily_Return_Pct'].abs() / max_return
-                            ) * existing_df['Account_Equity'] * 0.8
+                                existing_df['return'].abs() / max_return
+                            ) * existing_df['account_equity'] * 0.8
                         else:
                             existing_df[col] = 0
                     else:
                         existing_df[col] = 0
 
-                elif col == 'Max_Notional_Value':
-                    if 'Max_Margin_Used' in existing_df.columns:
-                        existing_df[col] = existing_df['Max_Margin_Used'] * 3
+                elif col == 'notional_value':
+                    if 'margin_used' in existing_df.columns:
+                        existing_df[col] = existing_df['margin_used'] * 3
                     else:
                         existing_df[col] = 0
 
     # Check for overlapping dates
-    existing_dates = set(existing_df['Date'])
-    new_dates = set(new_df['Date'])
+    existing_dates = set(existing_df['date'])
+    new_dates = set(new_df['date'])
     overlapping = existing_dates.intersection(new_dates)
 
     if overlapping:
@@ -301,11 +301,11 @@ def merge_backtest_data(
 
         # Replace overlapping dates
         merge_info['dates_replaced'] = len(overlapping)
-        existing_df = existing_df[~existing_df['Date'].isin(overlapping)]
+        existing_df = existing_df[~existing_df['date'].isin(overlapping)]
 
     # Merge dataframes
     merged_df = pd.concat([existing_df, new_df], ignore_index=True)
-    merged_df = merged_df.sort_values('Date').reset_index(drop=True)
+    merged_df = merged_df.sort_values('date').reset_index(drop=True)
 
     # Count new dates added
     merge_info['dates_added'] = len(new_dates - overlapping)
@@ -326,7 +326,7 @@ def calculate_backtest_hash(data: List[Dict[str, Any]]) -> str:
     """
     # Convert to DataFrame and sort by date for consistency
     df = pd.DataFrame(data)
-    df = df.sort_values('Date').reset_index(drop=True)
+    df = df.sort_values('date').reset_index(drop=True)
 
     # Convert to JSON string (sorted columns for consistency)
     data_str = df.to_json(orient='records', date_format='iso')

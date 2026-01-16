@@ -9,6 +9,7 @@ import { Allocations } from './pages/Allocations';
 import { Activity } from './pages/Activity';
 import { Strategies } from './pages/Strategies';
 import { StrategyApproval } from './pages/StrategyApproval';
+import { Accounts } from './pages/Accounts';
 import FundSetup from './pages/FundSetup';
 import RawDataViewer from './pages/RawDataViewer';
 
@@ -50,6 +51,7 @@ function App() {
               <Route path="activity" element={<Activity />} />
               <Route path="strategies" element={<Strategies />} />
               <Route path="strategy-approval" element={<StrategyApproval />} />
+              <Route path="accounts" element={<Accounts />} />
               <Route path="hedged-funds" element={<FundSetup />} />
             </Route>
 

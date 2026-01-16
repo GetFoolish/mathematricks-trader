@@ -158,18 +158,6 @@ export const StrategyApproval: React.FC = () => {
                     <div className={`inline-flex items-center space-x-1 px-2 py-1 rounded-full text-xs ${getStatusBadge(submission.status)}`}>
                       {getStatusIcon(submission.status)}
                       <span>{submission.status === 'PENDING_APPROVAL' ? 'PENDING' : submission.status}</span>
-                      {submission.tearsheet_generated && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            window.open(`http://localhost:8003/api/v1/public/submission/${submission.submission_id}/tearsheet`, '_blank');
-                          }}
-                          className="text-blue-400 hover:text-blue-300 transition-colors"
-                          title="View Tearsheet"
-                        >
-                          <FileText className="h-3 w-3" />
-                        </button>
-                      )}
                     </div>
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap text-sm font-medium text-white">{submission.strategy_name}</td>
@@ -182,6 +170,19 @@ export const StrategyApproval: React.FC = () => {
                   <td className="px-2 py-2 whitespace-nowrap text-xs text-white">{formatNumber(submission.metrics.max_drawdown, 1)}%</td>
                   <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-400">{formatDate(submission.submitted_at)}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-right text-xs space-x-1">
+                    {submission.tearsheet_generated && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          window.open(`http://localhost:8003/api/v1/public/submission/${submission.submission_id}/tearsheet`, '_blank');
+                        }}
+                        className="inline-flex items-center px-2 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded transition-colors"
+                        title="View Tearsheet"
+                      >
+                        <FileText className="h-3 w-3 mr-1" />
+                        Tearsheet
+                      </button>
+                    )}
                     <button
                       onClick={() => handleViewDetails(submission)}
                       className="inline-flex items-center px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
@@ -346,12 +347,12 @@ const UploadWizard: React.FC<{
       const autoMapping: Record<string, string> = {};
       headers.forEach(col => {
         const lowerCol = col.toLowerCase();
-        if (lowerCol.includes('date')) autoMapping['Date'] = col;
-        if (lowerCol.includes('return')) autoMapping['Daily_Return_Pct'] = col;
-        if (lowerCol.includes('equity')) autoMapping['Account_Equity'] = col;
-        if (lowerCol.includes('pnl') || lowerCol.includes('profit')) autoMapping['Daily_PnL'] = col;
-        if (lowerCol.includes('margin')) autoMapping['Max_Margin_Used'] = col;
-        if (lowerCol.includes('notional')) autoMapping['Max_Notional_Value'] = col;
+        if (lowerCol.includes('date')) autoMapping['date'] = col;
+        if (lowerCol.includes('return')) autoMapping['return'] = col;
+        if (lowerCol.includes('equity')) autoMapping['account_equity'] = col;
+        if (lowerCol.includes('pnl') || lowerCol.includes('profit')) autoMapping['pnl'] = col;
+        if (lowerCol.includes('margin')) autoMapping['margin_used'] = col;
+        if (lowerCol.includes('notional')) autoMapping['notional_value'] = col;
       });
       setColumnMapping(autoMapping);
     }
@@ -423,7 +424,7 @@ const UploadWizard: React.FC<{
   };
 
   const canProceedToStep2 = file !== null;
-  const canProceedToStep3 = columnMapping['Date'] && columnMapping['Daily_Return_Pct'];
+  const canProceedToStep3 = columnMapping['date'] && columnMapping['return'];
   const canSubmit = strategyName && developerInfo.name && developerInfo.email && developerInfo.phone;
 
   return (
@@ -584,8 +585,8 @@ const Step1UploadFile: React.FC<{ file: File | null; onFileSelect: (file: File) 
       <div className="bg-blue-900 bg-opacity-20 border border-blue-700 rounded-lg p-4">
         <h5 className="text-blue-300 font-medium mb-2">Required Columns:</h5>
         <ul className="text-gray-300 text-sm space-y-1">
-          <li>• <span className="font-mono">Date</span> - Date of each data point</li>
-          <li>• <span className="font-mono">Daily_Return_Pct</span> - Daily return percentage</li>
+          <li>• <span className="font-mono">date</span> - Date of each data point</li>
+          <li>• <span className="font-mono">return</span> - Daily return (as decimal or percentage)</li>
         </ul>
       </div>
     </div>
@@ -598,32 +599,32 @@ const Step2MapColumns: React.FC<{
   onMappingChange: (mapping: Record<string, string>) => void;
 }> = ({ csvColumns, columnMapping, onMappingChange }) => {
   const COLUMNS = {
-    Date: {
+    date: {
       required: true,
       whatItIs: 'Date/Timestamp with TZ for each row.',
       howWeUseIt: 'Used to align strategy performance across time periods, calculate time-based metrics (drawdown duration, recovery periods), and synchronize multiple strategies for portfolio construction'
     },
-    Daily_Return_Pct: {
+    return: {
       required: true,
       whatItIs: 'The daily percentage return of the strategy, showing the relative performance change from the previous day',
       howWeUseIt: 'Core metric for calculating correlation between strategies, determining portfolio weights, and evaluating risk-adjusted performance across our strategy universe'
     },
-    Account_Equity: {
+    account_equity: {
       required: false,
       whatItIs: 'The total account value including cash and unrealized positions at the end of each trading day. First value will be the \'opening balance\'',
       howWeUseIt: 'Used to generate other metrics if missing, validate PnL calculations, and understand the capital growth trajectory for position sizing decisions'
     },
-    Daily_PnL: {
+    pnl: {
       required: false,
       whatItIs: 'The absolute dollar profit or loss generated on each trading day',
       howWeUseIt: 'Helps calculate actual capital requirements, validate return percentages, and determine minimum account sizes needed for strategy deployment'
     },
-    Max_Margin_Used: {
+    margin_used: {
       required: false,
       whatItIs: 'The highest margin requirement during the trading day, representing peak leverage utilization',
       howWeUseIt: 'Critical for capital allocation planning, ensuring we don\'t over-leverage the portfolio, and setting broker account minimums for strategy combinations'
     },
-    Max_Notional_Value: {
+    notional_value: {
       required: false,
       whatItIs: 'The maximum total value of all open positions during the trading day (including leverage)',
       howWeUseIt: 'Determines the actual market exposure of the strategy, helps size positions relative to total portfolio capital, and assesses concentration risk across strategy allocations'
@@ -679,7 +680,7 @@ const Step2MapColumns: React.FC<{
           </div>
         ))}
       </div>
-      {(!columnMapping['Date'] || !columnMapping['Daily_Return_Pct']) && (
+      {(!columnMapping['date'] || !columnMapping['return']) && (
         <div className="bg-red-900 bg-opacity-20 border border-red-700 rounded-lg p-4">
           <p className="text-red-300 text-sm">⚠️ You must map the required columns to proceed.</p>
         </div>

@@ -15,45 +15,45 @@ interface ColumnConfig {
   format: (value: any) => string;
 }
 
-// Define column configurations - using actual field names from backend
+// Define column configurations - using lowercase field names from backend
 const COLUMNS = [
   {
-    key: 'Date',
+    key: 'date',
     label: 'Date',
     width: 'w-32',
     align: 'left' as const,
     format: (v: any) => formatTableDate(v)
   },
   {
-    key: 'Daily_Return_Pct',
+    key: 'return',
     label: 'Daily Return %',
     width: 'w-32',
     align: 'right' as const,
-    format: (v: any) => formatTableNumber(v, 4)
+    format: (v: any) => formatTableNumber(v * 100, 4)  // Convert decimal to percentage for display
   },
   {
-    key: 'Daily_PnL',
+    key: 'pnl',
     label: 'Daily P&L',
     width: 'w-36',
     align: 'right' as const,
     format: (v: any) => formatCurrency(v)
   },
   {
-    key: 'Account_Equity',
+    key: 'account_equity',
     label: 'Account Equity',
     width: 'w-36',
     align: 'right' as const,
     format: (v: any) => formatCurrency(v)
   },
   {
-    key: 'Max_Margin_Used',
+    key: 'margin_used',
     label: 'Max Margin Used',
     width: 'w-36',
     align: 'right' as const,
     format: (v: any) => formatCurrency(v)
   },
   {
-    key: 'Max_Notional_Value',
+    key: 'notional_value',
     label: 'Max Notional Value',
     width: 'w-40',
     align: 'right' as const,
@@ -63,10 +63,10 @@ const COLUMNS = [
 
 // Map column keys to the names stored in synthetic_data.columns_generated
 const COLUMN_KEY_TO_SYNTHETIC_NAME: Record<string, string> = {
-  'Account_Equity': 'Account_Equity',
-  'Daily_PnL': 'Daily_PnL',
-  'Max_Margin_Used': 'Max_Margin_Used',
-  'Max_Notional_Value': 'Max_Notional_Value'
+  'account_equity': 'account_equity',
+  'pnl': 'pnl',
+  'margin_used': 'margin_used',
+  'notional_value': 'notional_value'
 };
 
 const RawDataViewer: React.FC = () => {
