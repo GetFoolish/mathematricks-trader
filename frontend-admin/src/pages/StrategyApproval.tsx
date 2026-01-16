@@ -361,8 +361,11 @@ const UploadWizard: React.FC<{
     if (!file) return;
     setIsUploading(true);
     try {
+      // Apply column mapping to CSV
+      const mappedFile = await applyColumnMapping(file, columnMapping);
+
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('file', mappedFile);
       formData.append('strategy_name', strategyName);
       formData.append('developer_name', developerInfo.name);
       formData.append('developer_email', developerInfo.email);
@@ -383,6 +386,40 @@ const UploadWizard: React.FC<{
     } finally {
       setIsUploading(false);
     }
+  };
+
+  // Helper function to apply column mapping
+  const applyColumnMapping = async (originalFile: File, mapping: Record<string, string>): Promise<File> => {
+    const text = await originalFile.text();
+    const lines = text.split('\n');
+
+    if (lines.length === 0) {
+      throw new Error('CSV file is empty');
+    }
+
+    // Parse header
+    const originalHeaders = lines[0].split(',').map(h => h.trim());
+
+    // Create reverse mapping (our column name -> their column name)
+    const reverseMapping: Record<string, string> = {};
+    for (const [ourColumn, theirColumn] of Object.entries(mapping)) {
+      if (theirColumn) {
+        reverseMapping[theirColumn] = ourColumn;
+      }
+    }
+
+    // Create new header with mapped column names
+    const newHeaders = originalHeaders.map(header => {
+      return reverseMapping[header] || header;
+    });
+
+    // Rebuild CSV with new headers
+    const newLines = [newHeaders.join(','), ...lines.slice(1)];
+    const newCsvContent = newLines.join('\n');
+
+    // Create new File object
+    const blob = new Blob([newCsvContent], { type: 'text/csv' });
+    return new File([blob], originalFile.name, { type: 'text/csv' });
   };
 
   const canProceedToStep2 = file !== null;

@@ -49,7 +49,13 @@ import quantstats as qs
 # Determine project root dynamically
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # services/portfolio_builder
 PROJECT_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))  # mathematricks-trader/
-PYTHON_PATH = sys.executable  # Use the currently running Python interpreter
+
+# Determine Python executable dynamically (works in both Docker and local environments)
+# In Docker: /usr/local/bin/python
+# On host: /path/to/.venv/bin/python
+# Use 'python3' as fallback to find Python in PATH
+PYTHON_PATH = sys.executable if os.path.exists(sys.executable) else 'python3'
+
 RESEARCH_OUTPUTS_DIR = os.path.join(SCRIPT_DIR, 'research', 'outputs')
 SUBMISSIONS_TEARSHEETS_DIR = os.path.join(SCRIPT_DIR, 'submissions_tearsheets')
 LOG_FILE = os.path.join(PROJECT_ROOT, 'logs', 'portfolio_builder.log')
@@ -408,16 +414,16 @@ async def submit_strategy_public(
         df, synthetic_columns = generate_synthetic_columns(df, starting_capital=starting_capital)
 
         # Convert DataFrame to list of dicts for MongoDB
-        # Use proper capitalization for metrics calculator compatibility
+        # Use lowercase field names to match existing approved strategies
         raw_data_backtest_full = []
         for _, row in df.iterrows():
             raw_data_backtest_full.append({
-                'Date': row['Date'].isoformat() if hasattr(row['Date'], 'isoformat') else str(row['Date']),
-                'Daily_Return_Pct': float(row['Daily_Return_Pct']),
-                'Daily_PnL': float(row.get('Daily_PnL', 0)),
-                'Max_Margin_Used': float(row.get('Max_Margin_Used', 0)),
-                'Max_Notional_Value': float(row.get('Max_Notional_Value', 0)),
-                'Account_Equity': float(row.get('Account_Equity', starting_capital))
+                'date': row['Date'].isoformat() if hasattr(row['Date'], 'isoformat') else str(row['Date']),
+                'return': float(row['Daily_Return_Pct']) / 100.0,  # Convert percentage to decimal (2.5% -> 0.025)
+                'pnl': float(row.get('Daily_PnL', 0)),
+                'margin_used': float(row.get('Max_Margin_Used', 0)),
+                'notional_value': float(row.get('Max_Notional_Value', 0)),
+                'account_equity': float(row.get('Account_Equity', starting_capital))
             })
 
         # Calculate performance metrics
@@ -426,7 +432,7 @@ async def submit_strategy_public(
 
         # Build equity curve for frontend charting
         equity_curve = [
-            {"date": data['Date'], "equity": data['Account_Equity']}
+            {"date": data['date'], "equity": data['account_equity']}
             for data in raw_data_backtest_full
         ]
 
@@ -683,6 +689,18 @@ async def approve_submission(submission_id: str, approval_data: Dict[str, Any]):
         # Calculate backtest data hash
         backtest_hash = calculate_backtest_hash(submission['raw_data_backtest_full'])
 
+        # Convert backtest data from capitalized to lowercase for construct_portfolio.py compatibility
+        raw_data_lowercase = []
+        for item in submission['raw_data_backtest_full']:
+            raw_data_lowercase.append({
+                'date': item['Date'],
+                'return': float(item['Daily_Return_Pct']) / 100.0,  # Convert % to decimal
+                'pnl': float(item.get('Daily_PnL', 0)),
+                'margin_used': float(item.get('Max_Margin_Used', 0)),
+                'notional_value': float(item.get('Max_Notional_Value', 0)),
+                'account_equity': float(item.get('Account_Equity', 0))
+            })
+
         # Create strategy document
         strategy_doc = {
             "strategy_id": strategy_id,
@@ -698,8 +716,8 @@ async def approve_submission(submission_id: str, approval_data: Dict[str, Any]):
             "notes": approval_data.get('notes', ''),
             "risk_limits": approval_data.get('risk_limits', {}),
 
-            # Backtest data
-            "raw_data_backtest_full": submission['raw_data_backtest_full'],
+            # Backtest data - use lowercase format for portfolio construction
+            "raw_data_backtest_full": raw_data_lowercase,
             "raw_data_developer_live": [],
             "raw_data_mathematricks_live": [],
             "metrics": submission['metrics'],
@@ -979,12 +997,12 @@ async def get_outdated_allocations():
 async def get_current_allocation():
     """
     Get all current active allocations (one per fund)
-    Reads from funds collection -> portfolio_tests collection
+    Reads from funds.approved_allocation (v5.2 - allocation snapshot)
     """
     try:
         # Get all active funds with approved allocations
         active_funds = list(funds_collection.find({
-            "portfolio_test_id": {"$exists": True},
+            "approved_allocation.allocations": {"$exists": True},
             "status": "ACTIVE"
         }))
 
@@ -992,15 +1010,13 @@ async def get_current_allocation():
 
         for fund in active_funds:
             fund_id = fund['fund_id']
-            portfolio_test_id = fund.get('portfolio_test_id')
+            approved_allocation = fund.get('approved_allocation', {})
 
-            # Fetch test from portfolio_tests collection
-            test = portfolio_tests_collection.find_one({"test_id": portfolio_test_id})
-            if not test:
-                logger.warning(f"Fund {fund_id} references missing test {portfolio_test_id}")
-                continue
-
-            allocations_dict = test.get('allocations', {})
+            allocations_dict = approved_allocation.get('allocations', {})
+            portfolio_test_id = approved_allocation.get('portfolio_test_id', 'unknown')
+            approved_at = approved_allocation.get('approved_at')
+            approved_by = approved_allocation.get('approved_by', 'unknown')
+            notes = approved_allocation.get('notes', '')
 
             # Build allocation response in expected format
             allocations_by_fund[fund_id] = {
@@ -1008,7 +1024,9 @@ async def get_current_allocation():
                 "allocations": allocations_dict,
                 "portfolio_test_id": portfolio_test_id,
                 "allocation_name": f"Test {portfolio_test_id}",
-                "approved_at": fund.get('allocation_approved_at'),
+                "approved_at": approved_at,
+                "approved_by": approved_by,
+                "notes": notes,
                 "updated_at": fund.get('updated_at'),  # For frontend compatibility
                 "total_allocation_pct": sum(allocations_dict.values())
             }
@@ -1030,46 +1048,69 @@ async def get_current_allocation():
 @app.post("/api/v1/allocations/approve")
 async def approve_allocation(request: Dict[str, Any]):
     """
-    Approve allocation by linking portfolio_test_id to fund.
-    Single source of truth: MongoDB only (no JSON cache).
+    Approve allocation by creating snapshot in fund.approved_allocation (v5.2).
+    Captures full allocation dictionary + metadata at approval time.
+    Supports manual edits made in Allocation Editor.
     """
     try:
         portfolio_test_id = request.get('portfolio_test_id')
         fund_id = request.get('fund_id')
+        allocations = request.get('allocations')  # NEW: Optional - if provided, use this (manual edits)
+        approved_by = request.get('approved_by', 'system')  # NEW: Who approved
+        notes = request.get('notes', '')  # NEW: Optional approval notes
 
         if not portfolio_test_id:
             raise HTTPException(status_code=400, detail="portfolio_test_id is required")
         if not fund_id:
             raise HTTPException(status_code=400, detail="fund_id is required")
 
-        # Verify portfolio test exists
-        test = portfolio_tests_collection.find_one({"test_id": portfolio_test_id})
-        if not test:
-            raise HTTPException(status_code=404, detail=f"Portfolio test {portfolio_test_id} not found")
-
         # Verify fund exists
         fund = funds_collection.find_one({"fund_id": fund_id})
         if not fund:
             raise HTTPException(status_code=404, detail=f"Fund {fund_id} not found")
 
-        # Update fund with portfolio_test_id reference
+        # If allocations not provided, fetch from portfolio_test (original allocation)
+        if not allocations:
+            test = portfolio_tests_collection.find_one({"test_id": portfolio_test_id})
+            if not test:
+                raise HTTPException(status_code=404, detail=f"Portfolio test {portfolio_test_id} not found")
+            allocations = test.get('allocations', {})
+
+        # Create allocation snapshot
+        approved_allocation = {
+            "portfolio_test_id": portfolio_test_id,
+            "allocations": allocations,  # Full allocation dictionary snapshot
+            "approved_at": datetime.utcnow(),
+            "approved_by": approved_by,
+            "notes": notes
+        }
+
+        # Update fund with allocation snapshot
         funds_collection.update_one(
             {"fund_id": fund_id},
             {
                 "$set": {
-                    "portfolio_test_id": portfolio_test_id,
-                    "allocation_approved_at": datetime.utcnow(),
+                    "approved_allocation": approved_allocation,
                     "updated_at": datetime.utcnow()
+                },
+                "$unset": {
+                    "portfolio_test_id": "",  # Remove old field if exists
+                    "allocation_approved_at": ""  # Remove old field if exists
                 }
             }
         )
 
         logger.info(f"✅ Approved allocation: Fund {fund_id} → Test {portfolio_test_id}")
+        logger.info(f"   Allocations snapshot: {allocations}")
+        logger.info(f"   Approved by: {approved_by}")
+        if notes:
+            logger.info(f"   Notes: {notes}")
 
         return {
             "success": True,
             "fund_id": fund_id,
             "portfolio_test_id": portfolio_test_id,
+            "approved_allocation": approved_allocation,
             "message": f"Allocation approved for fund {fund_id}"
         }
 

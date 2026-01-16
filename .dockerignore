@@ -1,0 +1,53 @@
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Logs
+logs/
+*.log
+
+# Environment files
+.env.local
+.env.*.local
+
+# Node modules
+node_modules/
+frontend-admin/node_modules/
+frontend-admin/dist/
+
+# Test files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
+
+# Temporary files
+tmp/
+temp/
+*.tmp

@@ -19,8 +19,16 @@
   "currency": String,                         // "USD", "EUR", "GBP"
   "accounts": [String],                       // Array of account_ids owned by this fund
   "status": String,                           // "ACTIVE" | "PAUSED" | "CLOSED"
-  "portfolio_test_id": String,                // Reference to portfolio_tests.test_id (approved allocation)
-  "allocation_approved_at": ISODate,          // When the current allocation was approved
+  "approved_allocation": {                    // Snapshot of approved allocation (v5.2)
+    "portfolio_test_id": String,              // Reference to portfolio_tests.test_id (for history)
+    "allocations": {                          // Snapshot of allocation percentages at approval time
+      "strategy_id_1": Number,                // e.g., "SPX_1-D_Opt": 45.5
+      "strategy_id_2": Number                 // e.g., "FloridaForex": 30.2
+    },
+    "approved_at": ISODate,                   // When this allocation was approved
+    "approved_by": String,                    // Optional: who approved (user email or "system")
+    "notes": String                           // Optional: approval notes (e.g., "Manual adjustment: increased Com1-Met by 5%")
+  },
   "created_at": ISODate,
   "updated_at": ISODate
 }
@@ -29,19 +37,23 @@
 **Indexes:**
 - `{fund_id: 1}` - Unique index
 - `{status: 1}` - For filtering active funds
+- `{approved_allocation.portfolio_test_id: 1}` - For querying by portfolio test
 
 **Validation Rules:**
 - `fund_id` must be unique and lowercase
 - `total_equity` must be >= 0
 - `status` must be one of: ACTIVE, PAUSED, CLOSED
 - Cannot delete fund if it has ACTIVE allocations
-- `portfolio_test_id` must reference valid test in `portfolio_tests` collection
+- `approved_allocation.allocations` keys must reference valid strategies in `strategies` collection
+- Sum of `approved_allocation.allocations` values can exceed 100% (leveraged portfolios)
 
-**Allocation System (v5.1):**
-- Single source of truth: `portfolio_tests` collection stores all allocations
-- Funds reference approved tests via `portfolio_test_id` field
-- No duplicate allocation data in separate collections
-- Deprecated collections: `current_allocation`, `portfolio_allocations` (removed)
+**Allocation System (v5.2 - UPDATED):**
+- **Allocation snapshots stored in fund document** - Full allocation dictionary captured at approval time
+- **Supports manual edits** - Changes made in Allocation Editor are preserved in snapshot
+- **Historical integrity** - Changes to portfolio_test don't retroactively affect approved allocations
+- **Audit trail** - Track who approved, when, and any notes about manual adjustments
+- **Portfolio test reference** - `portfolio_test_id` links to original test for history
+- Deprecated: Storing only `portfolio_test_id` without allocation snapshot (v5.1 approach)
 
 **Example:**
 ```json
@@ -53,8 +65,17 @@
   "currency": "USD",
   "accounts": ["IBKR_Main", "IBKR_Futures", "Binance_Main"],
   "status": "ACTIVE",
-  "portfolio_test_id": "test_20260114_153022",
-  "allocation_approved_at": ISODate("2026-01-14T15:30:22Z"),
+  "approved_allocation": {
+    "portfolio_test_id": "test_20260114_153022",
+    "allocations": {
+      "SPX_1-D_Opt": 45.5,
+      "FloridaForex": 30.2,
+      "Com1-Met": 24.3
+    },
+    "approved_at": ISODate("2026-01-14T15:30:22Z"),
+    "approved_by": "portfolio_manager@example.com",
+    "notes": "Manual adjustment: increased SPX_1-D_Opt from 40% to 45.5%"
+  },
   "created_at": ISODate("2026-01-03T00:00:00Z"),
   "updated_at": ISODate("2026-01-14T15:30:22Z")
 }

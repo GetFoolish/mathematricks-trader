@@ -156,10 +156,19 @@ class ApiClient {
   }
 
   // Part 2: Approve Allocation (makes it current)
-  async approveAllocation(portfolio_test_id: string, fund_id: string) {
+  async approveAllocation(
+    portfolio_test_id: string,
+    fund_id: string,
+    allocations?: Record<string, number>,
+    approved_by?: string,
+    notes?: string
+  ) {
     const response = await this.portfolioBuilderClient.post('/api/v1/allocations/approve', {
       portfolio_test_id,
-      fund_id
+      fund_id,
+      allocations,
+      approved_by,
+      notes
     });
     return response.data;
   }

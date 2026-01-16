@@ -195,6 +195,13 @@ def get_active_accounts_from_service() -> List[Dict[str, Any]]:
 def initialize_broker_pool():
     """
     Initialize broker pool by creating broker instances for all active accounts.
+    Supports 3-mode trading system: paper_mock, paper_real, live.
+
+    Mode handling:
+    - paper_mock: Create only Mock broker
+    - paper_real: Create IBKR + Mock, wrap in BrokerModeAdapter
+    - live: Create only IBKR broker
+
     Requires AccountDataService to provide accounts - no fallback broker created.
     """
     global broker_pool
@@ -215,23 +222,66 @@ def initialize_broker_pool():
         account_id = account.get('account_id')
         broker_name = account.get('broker')
         auth_details = account.get('authentication_details', {})
+        mode = account.get('mode', 'paper_mock')  # Default to paper_mock if not specified
 
         try:
-            # Build broker config
-            broker_config = {
-                "broker": broker_name,
-                "account_id": account_id,
-                **auth_details  # Spread auth details (host, port, client_id, etc.)
-            }
+            if mode == 'paper_mock':
+                # Create only Mock broker
+                logger.info(f"Creating Mock broker for {account_id} (mode: paper_mock)")
+                broker_config = {
+                    "broker": "Mock",
+                    "account_id": account_id,
+                    **auth_details
+                }
+                broker_instance = BrokerFactory.create_broker(broker_config)
 
-            # Create broker instance
-            broker_instance = BrokerFactory.create_broker(broker_config)
+            elif mode == 'paper_real':
+                # Create BOTH IBKR + Mock, wrap in BrokerModeAdapter
+                logger.info(f"Creating IBKR + Mock brokers for {account_id} (mode: paper_real)")
+
+                # Create real broker (IBKR)
+                real_config = {
+                    "broker": broker_name,
+                    "account_id": account_id,
+                    **auth_details
+                }
+                real_broker = BrokerFactory.create_broker(real_config)
+
+                # Create mock broker
+                mock_config = {
+                    "broker": "Mock",
+                    "account_id": account_id,
+                    **auth_details
+                }
+                mock_broker = BrokerFactory.create_broker(mock_config)
+
+                # Wrap in BrokerModeAdapter
+                from services.brokers.adapters import BrokerModeAdapter
+                broker_instance = BrokerModeAdapter(real_broker, mock_broker, mode='paper_real')
+
+            elif mode == 'live':
+                # Create only real broker (IBKR)
+                logger.warning(f"⚠️ Creating LIVE broker for {account_id} - REAL MONEY AT RISK!")
+                broker_config = {
+                    "broker": broker_name,
+                    "account_id": account_id,
+                    **auth_details
+                }
+                broker_instance = BrokerFactory.create_broker(broker_config)
+
+            else:
+                logger.error(f"❌ Invalid mode '{mode}' for account {account_id}. Skipping.")
+                continue
+
+            # Add to broker pool
             broker_pool[account_id] = broker_instance
-
-            logger.info(f"✅ Created {broker_name} broker for account: {account_id}")
+            logger.info(f"✅ Created {broker_name} broker for account: {account_id} (mode: {mode})")
 
         except Exception as e:
-            logger.error(f"❌ Failed to create {broker_name} broker for account {account_id}: {str(e)}")
+            logger.error(f"❌ Failed to create broker for account {account_id}: {str(e)}")
+            logger.error(f"   broker={broker_name}, mode={mode}")
+            import traceback
+            logger.error(traceback.format_exc())
             continue
 
     logger.info(f"Broker pool initialized with {len(broker_pool)} broker(s)")
@@ -319,6 +369,31 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
         if not account_id:
             logger.error(f"❌ Order {order_data.get('order_id')} missing 'account' field - cannot route to broker")
             return None
+
+        # SAFETY CHECK: Get account to check mode (BEFORE any routing overrides)
+        account = trading_accounts_collection.find_one({"account_id": account_id})
+        mode = account.get('mode', 'paper_mock') if account else 'paper_mock'
+
+        # CRITICAL SAFETY: Warning on live mode
+        if mode == 'live':
+            logger.critical(f"⚠️⚠️⚠️ LIVE MODE ORDER ⚠️⚠️⚠️")
+            logger.critical(f"  Order ID: {order_data.get('order_id')}")
+            logger.critical(f"  Instrument: {order_data.get('instrument')}")
+            logger.critical(f"  Action: {order_data.get('action')}")
+            logger.critical(f"  Quantity: {order_data.get('quantity')}")
+            logger.critical(f"  Account: {account_id}")
+            logger.critical(f"  ⚠️ REAL MONEY AT RISK ⚠️")
+
+            # Check environment flag
+            import os
+            allow_live = os.getenv('ALLOW_LIVE_TRADING', 'false').lower() == 'true'
+            if not allow_live:
+                logger.error("❌ LIVE TRADING BLOCKED by ALLOW_LIVE_TRADING environment flag")
+                logger.error("   Set ALLOW_LIVE_TRADING=true in .env to enable live trading")
+                return {
+                    "status": "REJECTED",
+                    "reason": "Live trading not enabled. Set ALLOW_LIVE_TRADING=true in .env"
+                }
 
         # MOCK MODE OVERRIDE: Route all orders to Mock_Paper if flag set
         if args.use_mock_broker:

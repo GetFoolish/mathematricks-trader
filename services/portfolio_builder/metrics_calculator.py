@@ -287,13 +287,24 @@ def calculate_all_metrics(raw_data: List[Dict[str, Any]]) -> Dict[str, float]:
 
     # Convert to DataFrame
     df = pd.DataFrame(raw_data)
-    df['Date'] = pd.to_datetime(df['Date'])
-    df = df.sort_values('Date').reset_index(drop=True)
+
+    # Support both old capitalized format and new lowercase format
+    date_col = 'date' if 'date' in df.columns else 'Date'
+    return_col = 'return' if 'return' in df.columns else 'Daily_Return_Pct'
+    equity_col = 'account_equity' if 'account_equity' in df.columns else 'Account_Equity'
+    margin_col = 'margin_used' if 'margin_used' in df.columns else 'Max_Margin_Used'
+
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df.sort_values(date_col).reset_index(drop=True)
 
     # Extract series
-    returns = df['Daily_Return_Pct']
-    equity = df['Account_Equity']
-    margin = df.get('Max_Margin_Used')
+    # If returns are in decimal format (0.025), convert to percentage (2.5)
+    returns = df[return_col]
+    if returns.abs().max() <= 1.0:
+        returns = returns * 100.0
+
+    equity = df[equity_col]
+    margin = df.get(margin_col)
 
     # Calculate number of days
     num_days = len(df)
@@ -336,6 +347,6 @@ def calculate_all_metrics(raw_data: List[Dict[str, Any]]) -> Dict[str, float]:
         'sortino_ratio': sortino,
         'total_return': round(total_return, 2),
         'num_days': num_days,
-        'start_date': df['Date'].iloc[0].strftime('%Y-%m-%d'),
-        'end_date': df['Date'].iloc[-1].strftime('%Y-%m-%d')
+        'start_date': df[date_col].iloc[0].strftime('%Y-%m-%d'),
+        'end_date': df[date_col].iloc[-1].strftime('%Y-%m-%d')
     }

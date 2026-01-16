@@ -60,8 +60,20 @@ export const Allocations: React.FC = () => {
 
   // Approve allocation (Part 2 -> Part 1)
   const approveMutation = useMutation({
-    mutationFn: ({ portfolio_test_id, fund_id }: { portfolio_test_id: string; fund_id: string }) =>
-      apiClient.approveAllocation(portfolio_test_id, fund_id),
+    mutationFn: ({
+      portfolio_test_id,
+      fund_id,
+      allocations,
+      approved_by,
+      notes
+    }: {
+      portfolio_test_id: string;
+      fund_id: string;
+      allocations?: Record<string, number>;
+      approved_by?: string;
+      notes?: string;
+    }) =>
+      apiClient.approveAllocation(portfolio_test_id, fund_id, allocations, approved_by, notes),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['currentAllocation'] });
       setEditorAllocations({});
@@ -129,7 +141,18 @@ export const Allocations: React.FC = () => {
       return;
     }
     if (Object.keys(editorAllocations).length > 0) {
-      approveMutation.mutate({ allocations: editorAllocations, fund_id: selectedFundId });
+      // Get the current fund's portfolio_test_id (or use a default)
+      const allocationsByFund = currentAllocation?.allocations || {};
+      const fundAllocation = allocationsByFund[selectedFundId];
+      const portfolio_test_id = fundAllocation?.portfolio_test_id || 'manual_edit';
+
+      approveMutation.mutate({
+        portfolio_test_id,
+        fund_id: selectedFundId,
+        allocations: editorAllocations,
+        approved_by: 'user',
+        notes: 'Manual edit from Allocation Editor'
+      });
       setEditingFundId(null);
     }
   };

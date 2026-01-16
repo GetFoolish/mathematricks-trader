@@ -12,16 +12,16 @@ logger = logging.getLogger(__name__)
 def get_active_allocations_for_strategy(
     strategy_id: str,
     funds_collection,
-    portfolio_tests_collection
+    portfolio_tests_collection=None  # DEPRECATED: No longer needed, kept for backwards compatibility
 ) -> List[Dict]:
     """
     Get all ACTIVE fund allocations that include this strategy.
-    Reads from funds collection -> portfolio_tests collection (single source of truth).
+    Reads from funds.approved_allocation (v5.2 - allocation snapshot).
 
     Args:
         strategy_id: Strategy ID to search for
         funds_collection: MongoDB funds collection
-        portfolio_tests_collection: MongoDB portfolio_tests collection
+        portfolio_tests_collection: DEPRECATED - No longer used (allocations stored in fund document)
 
     Returns:
         List of allocation documents with fund_id
@@ -29,23 +29,17 @@ def get_active_allocations_for_strategy(
     try:
         # Get all active funds with approved allocations
         active_funds = list(funds_collection.find({
-            "portfolio_test_id": {"$exists": True},
+            "approved_allocation.allocations": {"$exists": True},
             "status": "ACTIVE"
         }))
 
         allocations = []
         for fund in active_funds:
-            portfolio_test_id = fund.get('portfolio_test_id')
+            approved_allocation = fund.get('approved_allocation', {})
+            allocations_dict = approved_allocation.get('allocations', {})
+            portfolio_test_id = approved_allocation.get('portfolio_test_id', 'unknown')
 
-            # Fetch test from portfolio_tests collection
-            test = portfolio_tests_collection.find_one({"test_id": portfolio_test_id})
-            if not test:
-                logger.warning(f"Fund {fund['fund_id']} references missing test {portfolio_test_id}")
-                continue
-
-            allocations_dict = test.get('allocations', {})
-
-            # Only include if strategy is allocated in this test
+            # Only include if strategy is allocated in this fund
             if strategy_id in allocations_dict:
                 allocations.append({
                     'fund_id': fund['fund_id'],
@@ -101,7 +95,7 @@ def get_strategy_allocation_for_fund(
             }
         
         fund_equity = fund_doc.get('total_equity', 0.0)
-        
+
         if fund_equity <= 0:
             logger.warning(f"Fund {fund_id} has zero or negative equity: ${fund_equity:,.2f}")
             return {
@@ -109,38 +103,20 @@ def get_strategy_allocation_for_fund(
                 "used_capital": 0.0,
                 "available_capital": 0.0
             }
-        
-        # Get active allocation for this fund from portfolio_test
-        portfolio_test_id = fund_doc.get('portfolio_test_id')
 
-        if not portfolio_test_id:
-            logger.warning(f"No approved allocation (portfolio_test_id) found for fund {fund_id}")
+        # Get active allocation for this fund from approved_allocation snapshot (v5.2)
+        approved_allocation = fund_doc.get('approved_allocation')
+
+        if not approved_allocation:
+            logger.warning(f"No approved allocation found for fund {fund_id}")
             return {
                 "allocated_capital": 0.0,
                 "used_capital": 0.0,
                 "available_capital": 0.0
             }
 
-        # Fetch test allocations from portfolio_tests collection
-        if portfolio_tests_collection is None:
-            logger.error("portfolio_tests_collection is required but not provided")
-            return {
-                "allocated_capital": 0.0,
-                "used_capital": 0.0,
-                "available_capital": 0.0
-            }
-
-        test = portfolio_tests_collection.find_one({"test_id": portfolio_test_id})
-        if not test:
-            logger.warning(f"Fund {fund_id} references missing test {portfolio_test_id}")
-            return {
-                "allocated_capital": 0.0,
-                "used_capital": 0.0,
-                "available_capital": 0.0
-            }
-
-        # Get strategy allocation percentage
-        allocations = test.get('allocations', {})
+        # Get strategy allocation percentage from snapshot
+        allocations = approved_allocation.get('allocations', {})
         strategy_pct = allocations.get(strategy_id, 0.0)
         
         if strategy_pct <= 0:

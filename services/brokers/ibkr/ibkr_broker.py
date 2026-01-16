@@ -838,6 +838,119 @@ class IBKRBroker(AbstractBroker):
             raise BrokerAPIError(f"Failed to get open orders: {str(e)}", broker_name="IBKR")
 
     # ========================================================================
+    # MARKET DATA (for paper_real mode pricing)
+    # ========================================================================
+
+    def get_market_price(self, symbol: str, instrument_type: str) -> float:
+        """
+        Get current market price for an instrument.
+
+        Used by BrokerModeAdapter in paper_real mode to fetch live prices
+        while sending orders to mock broker.
+
+        Args:
+            symbol: Asset symbol (e.g., "AAPL", "EURUSD", "BTC")
+            instrument_type: Type of instrument ("STOCK", "FOREX", "CRYPTO", "FUTURE", "OPTION")
+
+        Returns:
+            Current market price (mid-price or last traded price)
+
+        Raises:
+            BrokerConnectionError: If not connected
+            BrokerAPIError: If no market data available
+        """
+        try:
+            if not self.is_connected():
+                raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+
+            # Create contract for the instrument
+            contract = self._create_contract_for_pricing(symbol, instrument_type)
+
+            # Request market data
+            ticker = self.ib.reqMktData(contract, '', False, False)
+
+            # Wait for data to populate (max 2 seconds)
+            for _ in range(20):  # 20 iterations * 0.1s = 2s max
+                self.ib.sleep(0.1)
+                if ticker.bid or ticker.ask or ticker.last:
+                    break
+
+            # Cancel market data subscription
+            self.ib.cancelMktData(contract)
+
+            # Return mid-price if available, otherwise last price
+            if ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
+                price = (ticker.bid + ticker.ask) / 2
+                logger.info(f"Market price for {symbol}: ${price:.2f} (bid={ticker.bid}, ask={ticker.ask})")
+                return price
+            elif ticker.last and ticker.last > 0:
+                logger.info(f"Market price for {symbol}: ${ticker.last:.2f} (last price)")
+                return ticker.last
+            else:
+                raise BrokerAPIError(
+                    f"No market data available for {symbol} ({instrument_type}). "
+                    f"bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}",
+                    broker_name="IBKR"
+                )
+
+        except BrokerConnectionError:
+            raise
+        except BrokerAPIError:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting market price for {symbol}: {e}", exc_info=True)
+            raise BrokerAPIError(f"Failed to get market price: {str(e)}", broker_name="IBKR")
+
+    def _create_contract_for_pricing(self, symbol: str, instrument_type: str):
+        """
+        Create a simple IBKR contract for market data requests.
+
+        This is a simplified version that creates contracts suitable for pricing queries.
+        """
+        from ib_insync import Stock, Forex, Crypto, Future
+
+        instrument_type = instrument_type.upper()
+
+        if instrument_type == "STOCK" or instrument_type == "ETF":
+            return Stock(symbol, 'SMART', 'USD')
+
+        elif instrument_type == "FOREX":
+            # Handle both formats: "EURUSD" or "EUR.USD"
+            if len(symbol) == 6:
+                base = symbol[:3]
+                quote = symbol[3:]
+                pair = f"{base}.{quote}"
+            else:
+                pair = symbol
+            return Forex(pair)
+
+        elif instrument_type == "CRYPTO":
+            # For crypto, IBKR uses PAXOS exchange
+            return Crypto(symbol, 'PAXOS', 'USD')
+
+        elif instrument_type == "FUTURE":
+            # For futures, we need more info, but try a basic contract
+            # In production, this should be enhanced with expiry/exchange from order data
+            logger.warning(f"Creating basic future contract for {symbol} - may need enhancement")
+            return Future(symbol, exchange='SMART')
+
+        elif instrument_type == "OPTION":
+            # Options require strike/expiry - should not be called for options
+            # In paper_real mode, option pricing should come from order data
+            logger.warning(f"get_market_price() called for OPTION {symbol} - returning 0")
+            raise BrokerAPIError(
+                f"Cannot get market price for OPTIONS without strike/expiry. "
+                f"Use order data for option pricing.",
+                broker_name="IBKR"
+            )
+
+        else:
+            raise BrokerAPIError(
+                f"Unsupported instrument type for pricing: {instrument_type}",
+                broker_name="IBKR"
+            )
+
+    # ========================================================================
     # HELPER METHODS
     # ========================================================================
 

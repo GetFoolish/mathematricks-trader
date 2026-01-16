@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Column Mapping</title>
+</head>
+<body>
+    <h1>Test Column Mapping Logic</h1>
+    <div id="results"></div>
+
+    <script>
+        // This is the exact logic from the frontend
+        async function applyColumnMapping(originalFile, mapping) {
+            const text = await originalFile.text();
+            const lines = text.split('\n');
+
+            if (lines.length === 0) {
+                throw new Error('CSV file is empty');
+            }
+
+            // Parse header
+            const originalHeaders = lines[0].split(',').map(h => h.trim());
+
+            // Create reverse mapping (our column name -> their column name)
+            const reverseMapping = {};
+            for (const [ourColumn, theirColumn] of Object.entries(mapping)) {
+                if (theirColumn) {
+                    reverseMapping[theirColumn] = ourColumn;
+                }
+            }
+
+            // Create new header with mapped column names
+            const newHeaders = originalHeaders.map(header => {
+                return reverseMapping[header] || header;
+            });
+
+            // Rebuild CSV with new headers
+            const newLines = [newHeaders.join(','), ...lines.slice(1)];
+            const newCsvContent = newLines.join('\n');
+
+            // Create new File object
+            const blob = new Blob([newCsvContent], { type: 'text/csv' });
+            return new File([blob], originalFile.name, { type: 'text/csv' });
+        }
+
+        // Test with sample CSV
+        async function test() {
+            const csvContent = `date,return,pnl,notional_value,margin_used,account_equity
+2017-10-31,-0.008934855858123147,-8934.855858123148,1377963.6152438703,196348.30891672446,991065.1441418768
+2017-11-01,-0.019891857103367164,-19714.126227398196,1878018.7658030621,211770.12205244813,971351.0179144787`;
+
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const originalFile = new File([blob], 'test.csv', { type: 'text/csv' });
+
+            const columnMapping = {
+                'Date': 'date',
+                'Daily_Return_Pct': 'return',
+                'Account_Equity': 'account_equity',
+                'Daily_PnL': 'pnl',
+                'Max_Margin_Used': 'margin_used',
+                'Max_Notional_Value': 'notional_value'
+            };
+
+            const mappedFile = await applyColumnMapping(originalFile, columnMapping);
+            const mappedContent = await mappedFile.text();
+
+            document.getElementById('results').innerHTML = `
+                <h2>Original CSV:</h2>
+                <pre>${csvContent}</pre>
+                <h2>Column Mapping:</h2>
+                <pre>${JSON.stringify(columnMapping, null, 2)}</pre>
+                <h2>Mapped CSV:</h2>
+                <pre>${mappedContent}</pre>
+            `;
+        }
+
+        test();
+    </script>
+</body>
+</html>

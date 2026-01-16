@@ -1,0 +1,47 @@
+[
+  {
+    "strategy_name": "IBKR_Test_Option",
+    "signal_type": "ENTRY",
+    "entry_name": "$SPY_OPT_1",
+    "signal_legs": [{
+      "instrument": "SPY",
+      "instrument_type": "OPTION",
+      "underlying": "SPY",
+      "action": "BUY",
+      "direction": "LONG",
+      "quantity": 1,
+      "order_type": "MARKET",
+      "legs": [{
+        "strike": 500,
+        "expiry": "20250221",
+        "right": "C",
+        "action": "BUY",
+        "quantity": 1
+      }],
+      "environment": "staging"
+    }],
+    "wait": 5
+  },
+  {
+    "strategy_name": "IBKR_Test_Option",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$SPY_OPT_1",
+    "signal_legs": [{
+      "instrument": "SPY",
+      "instrument_type": "OPTION",
+      "underlying": "SPY",
+      "action": "SELL",
+      "direction": "SHORT",
+      "quantity": 1,
+      "order_type": "MARKET",
+      "legs": [{
+        "strike": 500,
+        "expiry": "20250221",
+        "right": "C",
+        "action": "SELL",
+        "quantity": 1
+      }],
+      "environment": "staging"
+    }]
+  }
+]
