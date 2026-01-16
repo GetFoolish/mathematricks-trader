@@ -418,12 +418,12 @@ async def submit_strategy_public(
         raw_data_backtest_full = []
         for _, row in df.iterrows():
             raw_data_backtest_full.append({
-                'date': row['Date'].isoformat() if hasattr(row['Date'], 'isoformat') else str(row['Date']),
-                'return': float(row['Daily_Return_Pct']) / 100.0,  # Convert percentage to decimal (2.5% -> 0.025)
-                'pnl': float(row.get('Daily_PnL', 0)),
-                'margin_used': float(row.get('Max_Margin_Used', 0)),
-                'notional_value': float(row.get('Max_Notional_Value', 0)),
-                'account_equity': float(row.get('Account_Equity', starting_capital))
+                'date': row['date'].isoformat() if hasattr(row['date'], 'isoformat') else str(row['date']),
+                'return': float(row['return']) / 100.0,  # Convert percentage to decimal (2.5% -> 0.025)
+                'pnl': float(row.get('pnl', 0)),
+                'margin_used': float(row.get('margin_used', 0)),
+                'notional_value': float(row.get('notional_value', 0)),
+                'account_equity': float(row.get('account_equity', starting_capital))
             })
 
         # Calculate performance metrics
@@ -485,9 +485,9 @@ async def submit_strategy_public(
         try:
             # Convert data to pandas Series for tearsheet
             returns_df = pd.DataFrame(raw_data_backtest_full)
-            returns_df['Date'] = pd.to_datetime(returns_df['Date'])
-            returns_df = returns_df.set_index('Date')
-            returns_series = returns_df['Daily_Return_Pct'] / 100  # Convert percentage to decimal
+            returns_df['date'] = pd.to_datetime(returns_df['date'])
+            returns_df = returns_df.set_index('date')
+            returns_series = returns_df['return']  # Already in decimal format from raw_data_backtest_full
 
             # Generate tearsheet using QuantStats
             qs.reports.html(
@@ -689,17 +689,8 @@ async def approve_submission(submission_id: str, approval_data: Dict[str, Any]):
         # Calculate backtest data hash
         backtest_hash = calculate_backtest_hash(submission['raw_data_backtest_full'])
 
-        # Convert backtest data from capitalized to lowercase for construct_portfolio.py compatibility
-        raw_data_lowercase = []
-        for item in submission['raw_data_backtest_full']:
-            raw_data_lowercase.append({
-                'date': item['Date'],
-                'return': float(item['Daily_Return_Pct']) / 100.0,  # Convert % to decimal
-                'pnl': float(item.get('Daily_PnL', 0)),
-                'margin_used': float(item.get('Max_Margin_Used', 0)),
-                'notional_value': float(item.get('Max_Notional_Value', 0)),
-                'account_equity': float(item.get('Account_Equity', 0))
-            })
+        # The backtest data is already in lowercase format from submission
+        raw_data_lowercase = submission['raw_data_backtest_full']
 
         # Create strategy document
         strategy_doc = {
