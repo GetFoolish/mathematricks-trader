@@ -216,7 +216,11 @@ export const Strategies: React.FC = () => {
                       {strategy.trading_mode || 'PAPER'}
                     </button>
                   </td>
-                  <td className="table-cell text-sm">{strategy.account || 'N/A'}</td>
+                  <td className="table-cell text-sm">
+                    {strategy.accounts && strategy.accounts.length > 0 
+                      ? strategy.accounts.join(', ') 
+                      : 'N/A'}
+                  </td>
                   <td className="table-cell">
                     <button
                       onClick={() => handleToggleOptimization(strategy)}

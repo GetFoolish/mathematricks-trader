@@ -185,7 +185,7 @@ Examples:
      python run_full_test.py --folder sample_signals_edgecases/
 
   6. Clear test data and run full test with custom settings:
-     .venv/bin/python scripts/junk/clear_test_data.py && .venv/bin/python tests/signals_testing/run_full_test.py --folder tests/signals_testing/sample_signals --delay 10 --signal_count 30 --pause-and-play
+     .venv/bin/python scripts/junk/clear_test_data.py && .venv/bin/python tests/signals_testing/run_full_test.py --folder tests/signals_testing/sample_signals_big --delay 10 --signal_count 30 --pause-and-play
 
 Test Results:
   - Saved to test_results/ folder at project root (not in tests/signals_testing/)

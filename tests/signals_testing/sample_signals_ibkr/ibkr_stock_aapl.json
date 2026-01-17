@@ -11,6 +11,7 @@
       "action": "BUY",
       "direction": "LONG",
       "quantity": 10,
+      "price": 230.50,
       "order_type": "MARKET",
       "environment": "staging"
     }],
@@ -27,6 +28,7 @@
       "action": "SELL",
       "direction": "SHORT",
       "quantity": 10,
+      "price": 235.75,
       "order_type": "MARKET",
       "environment": "staging"
     }]

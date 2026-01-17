@@ -201,6 +201,26 @@ def get_available_accounts_for_strategy(
         Sorted by available_margin (descending)
     """
     try:
+        # Map strategy asset_class to trading_account asset_classes key
+        # Strategies use: STOCK, CRYPTO, FOREX, FUTURE, OPTION, equity, equities
+        # Accounts use: equity, crypto, forex, futures, options, commodities (SINGULAR!)
+        asset_class_map = {
+            'STOCK': 'equity',
+            'equity': 'equity',
+            'equities': 'equity',
+            'CRYPTO': 'crypto',
+            'crypto': 'crypto',
+            'FOREX': 'forex',
+            'forex': 'forex',
+            'FUTURE': 'futures',
+            'futures': 'futures',
+            'OPTION': 'options',
+            'options': 'options',
+            'commodities': 'commodities'
+        }
+        
+        account_asset_class = asset_class_map.get(asset_class, asset_class.lower())
+        
         # Get strategy
         strategy = strategies_collection.find_one({"strategy_id": strategy_id})
         if not strategy:
@@ -218,10 +238,16 @@ def get_available_accounts_for_strategy(
             "account_id": {"$in": allowed_accounts},
             "fund_id": fund_id,
             "status": "ACTIVE",
-            f"asset_classes.{asset_class}": {"$exists": True, "$ne": []}
+            f"asset_classes.{account_asset_class}": {"$exists": True}
         }
         
+        logger.info(f"[DEBUG] Querying accounts with: {query}")
+        logger.info(f"[DEBUG] Allowed accounts: {allowed_accounts}")
+        logger.info(f"[DEBUG] Mapped asset class: {asset_class} -> {account_asset_class}")
+        
         accounts = list(trading_accounts_collection.find(query))
+        
+        logger.info(f"[DEBUG] Found {len(accounts)} matching accounts")
         
         if not accounts:
             logger.warning(

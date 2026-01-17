@@ -3,12 +3,14 @@
     "strategy_name": "IBKR_Test_Forex",
     "signal_type": "ENTRY",
     "entry_name": "$EUR_1",
+    "account_equity": 100000,
     "signal_legs": [{
       "instrument": "EURUSD",
       "instrument_type": "FOREX",
       "action": "BUY",
       "direction": "LONG",
       "quantity": 20000,
+      "price": 1.0850,
       "order_type": "MARKET",
       "environment": "staging"
     }],
@@ -24,6 +26,7 @@
       "action": "SELL",
       "direction": "SHORT",
       "quantity": 20000,
+      "price": 1.0920,
       "order_type": "MARKET",
       "environment": "staging"
     }]
