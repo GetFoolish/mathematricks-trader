@@ -89,7 +89,8 @@ export interface Strategy {
   instruments: string[];
   status: 'ACTIVE' | 'INACTIVE' | 'TESTING';
   trading_mode?: 'LIVE' | 'PAPER';
-  account?: string;
+  account?: string; // Legacy field
+  accounts?: string[]; // New field - array of allowed account IDs
   include_in_optimization?: boolean;
   risk_limits?: {
     max_position_size?: number;
@@ -302,7 +303,7 @@ export interface GridConfig {
   row_height: number;
 }
 
-export type WidgetType = 'FundBalances' | 'AccountStatement';
+export type WidgetType = 'FundBalances' | 'AccountStatement' | 'SystemHealth';
 
 export interface WidgetConfig {
   account_filter?: string;
@@ -462,3 +463,25 @@ export interface ApproveSubmissionRequest {
 export interface RejectSubmissionRequest {
   rejection_reason: string;
 }
+
+// System Health Types
+export interface SystemHealthData {
+  overall_status: 'healthy' | 'degraded' | 'unhealthy';
+  timestamp: string;
+  services: ServiceHealth[];
+  metrics?: {
+    active_strategies?: number;
+    active_accounts?: number;
+    pending_orders?: number;
+    signals_today?: number;
+  };
+}
+
+export interface ServiceHealth {
+  name: string;
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  message?: string;
+  uptime?: number;
+  response_time?: number;
+}
+

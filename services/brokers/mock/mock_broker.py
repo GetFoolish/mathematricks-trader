@@ -80,12 +80,18 @@ class MockBroker(AbstractBroker):
         self.broker_name = "Mock"
         self.account_id = config.get("account_id", "Mock_Paper")
         self.initial_equity = config.get("initial_equity", 1000000.0)
+        
+        # Read-only mode: prevents MongoDB config overwrites when used as secondary broker in BrokerModeAdapter
+        self.read_only = config.get("read_only", False)
 
         # In-memory storage
         self.mock_orders = {}  # {broker_order_id: order_data}
         self.connected = False
 
-        logger.info(f"Mock Broker initialized for account {self.account_id} (instant fills for testing)")
+        if self.read_only:
+            logger.info(f"Mock Broker initialized for account {self.account_id} (read-only mode - no MongoDB writes)")
+        else:
+            logger.info(f"Mock Broker initialized for account {self.account_id} (instant fills for testing)")
 
     # ========================================================================
     # CONNECTION MANAGEMENT
@@ -114,8 +120,45 @@ class MockBroker(AbstractBroker):
         """
         Ensure Mock account exists in trading_accounts collection with proper schema.
         Replaces existing account to ensure fresh state on each connection.
+        Skips in read_only mode (when used as secondary broker in BrokerModeAdapter).
+        
+        CRITICAL: Only updates balances/positions, NEVER overwrites broker/mode/auth_details
+        to prevent corrupting IBKR accounts that are temporarily using Mock broker.
         """
+        # Skip if read_only - this Mock broker is secondary in a hybrid setup
+        if self.read_only:
+            logger.debug(f"Mock broker in read-only mode - skipping account creation for {self.account_id}")
+            return
+            
         trading_accounts = get_trading_accounts_collection()
+        
+        # Check if account already exists
+        existing_account = trading_accounts.find_one({"account_id": self.account_id})
+        
+        if existing_account:
+            # Account exists - ONLY update balances and positions, never broker/mode/auth
+            logger.debug(f"Mock broker: Account {self.account_id} exists - updating balances only (preserving broker config)")
+            trading_accounts.update_one(
+                {"account_id": self.account_id},
+                {"$set": {
+                    "balances.equity": self.initial_equity,
+                    "balances.cash": self.initial_equity / 2,
+                    "balances.cash_balance": self.initial_equity / 2,
+                    "balances.margin_used": 0.0,
+                    "balances.margin_available": self.initial_equity / 2,
+                    "balances.buying_power": self.initial_equity * 2,
+                    "balances.unrealized_pnl": 0.0,
+                    "balances.realized_pnl": 0.0,
+                    "balances.last_updated": datetime.utcnow(),
+                    "open_positions": [],
+                    "updated_at": datetime.utcnow()
+                }}
+            )
+            logger.debug(f"   Updated balances: Equity=${self.initial_equity:,.2f}, Buying Power=${self.initial_equity * 2:,.2f}")
+            return
+        
+        # Account doesn't exist - create it (only for pure Mock accounts)
+        logger.debug(f"Mock broker: Creating new account {self.account_id}")
         if trading_accounts is None:
             logger.warning("Cannot create account document - MongoDB not available")
             return
@@ -148,39 +191,18 @@ class MockBroker(AbstractBroker):
         }
 
         try:
-            # Only update broker-specific fields,  preserving fund_id and other config
-            result = trading_accounts.update_one(
-                {"account_id": self.account_id},
-                {
-                    "$set": {
-                        "account_name": mock_account["account_name"],
-                        "broker": mock_account["broker"],
-                        "account_number": mock_account["account_number"],
-                        "account_type": mock_account["account_type"],
-                        "authentication_details": mock_account["authentication_details"],
-                        "balances": mock_account["balances"],
-                        "open_positions": mock_account["open_positions"],
-                        "status": mock_account["status"],
-                        "updated_at": mock_account["updated_at"]
-                    },
-                    "$setOnInsert": {
-                        "created_at": mock_account["created_at"]
-                        # fund_id will be preserved if it exists, or omitted on new inserts
-                    }
-                },
-                upsert=True
-            )
-
-            if result.upserted_id:
-                logger.info(f"✅ Created fresh {self.account_id} account in database")
-            else:
-                logger.info(f"✅ Updated existing {self.account_id} account with fresh balances")
-
+            # Insert only if doesn't exist (this path should only run for new Mock-only accounts)
+            trading_accounts.insert_one(mock_account)
+            logger.info(f"✅ Created fresh {self.account_id} Mock account")
             logger.info(f"   Initial Equity: ${mock_account['balances']['equity']:,.2f}")
             logger.info(f"   Buying Power: ${mock_account['balances']['buying_power']:,.2f}")
 
         except Exception as e:
-            logger.error(f"Failed to create/update account document: {e}")
+            if 'duplicate key' in str(e).lower():
+                # Race condition - account was created by another process
+                logger.debug(f"Account {self.account_id} already exists (race condition)")
+            else:
+                logger.error(f"Failed to create Mock account: {e}")
 
     def disconnect(self) -> bool:
         """
@@ -559,6 +581,29 @@ class MockBroker(AbstractBroker):
             Mock price (100.0 for simplicity)
         """
         # Simple mock price - could be enhanced to return realistic prices
+        return 100.0
+
+    def get_ticker_price(self, symbol: str, signal_price: Optional[float] = None) -> float:
+        """
+        Get ticker price for margin calculation and order execution.
+        
+        For Mock broker: Returns signal's intended price for testing purposes.
+        This allows testing the full signal flow with realistic prices.
+        Real brokers (like IBKR) fetch actual market data and ignore signal_price.
+        
+        Args:
+            symbol: Instrument symbol
+            signal_price: Intended price from signal (for testing)
+        
+        Returns:
+            Price to use (signal_price if provided, otherwise 100.0 default)
+        """
+        if signal_price is not None and signal_price > 0:
+            logger.debug(f"Mock Broker: Using signal price ${signal_price:.2f} for {symbol}")
+            return signal_price
+        
+        # Fallback: Return default mock price
+        logger.debug(f"Mock Broker: No signal price provided, using default $100.00 for {symbol}")
         return 100.0
 
     # ========================================================================

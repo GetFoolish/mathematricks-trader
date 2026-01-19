@@ -1722,8 +1722,8 @@ async def update_account(account_id: str, update_data: dict):
     """
     Update account
     
-    Allowed updates: fund_id, asset_classes, status
-    Cannot update: account_id, broker (immutable)
+    Allowed updates: fund_id, asset_classes, status, broker, broker_account_number
+    Cannot update: account_id (immutable)
     """
     try:
         account = trading_accounts_collection.find_one({"account_id": account_id})
@@ -1731,7 +1731,7 @@ async def update_account(account_id: str, update_data: dict):
             raise HTTPException(status_code=404, detail=f"Account '{account_id}' not found")
         
         # Allowed fields to update
-        allowed_fields = ['fund_id', 'asset_classes', 'status', 'broker_account_number']
+        allowed_fields = ['fund_id', 'asset_classes', 'status', 'broker', 'broker_account_number']
         update_doc = {}
         
         for field in allowed_fields:

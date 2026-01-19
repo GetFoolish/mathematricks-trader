@@ -11,9 +11,8 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw, Clock, AlertCircle } from 'lucide-react';
 import { apiClient } from '../../services/api';
-import { FundBalancesWidget } from './widgets/FundBalancesWidget';
-import { AccountStatementWidget } from './widgets/AccountStatementWidget';
-import type { DashboardWidget, FundBalancesData, AccountStatementData } from '../../types';
+import { FundBalancesWidget, AccountStatementWidget, SystemHealthWidget } from './widgets';
+import type { DashboardWidget, FundBalancesData, AccountStatementData, SystemHealthData } from '../../types';
 
 interface WidgetWrapperProps {
   widget: DashboardWidget;
@@ -66,6 +65,8 @@ export const WidgetWrapper: React.FC<WidgetWrapperProps> = ({ widget, fundId }) 
         return 'Fund Balances';
       case 'AccountStatement':
         return 'Account Statement';
+      case 'SystemHealth':
+        return 'System Health';
       default:
         return widget.widget_type;
     }
@@ -133,6 +134,9 @@ export const WidgetWrapper: React.FC<WidgetWrapperProps> = ({ widget, fundId }) 
                 data={data.data as AccountStatementData}
                 config={widget.config}
               />
+            )}
+            {widget.widget_type === 'SystemHealth' && (
+              <SystemHealthWidget data={data.data as SystemHealthData} />
             )}
           </>
         )}

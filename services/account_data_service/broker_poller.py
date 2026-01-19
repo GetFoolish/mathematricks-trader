@@ -428,8 +428,12 @@ class BrokerPoller:
 
         # Add authentication details based on broker type
         if account['broker'] == "IBKR":
-            # IBKR connection settings come from environment variables (IBKR_HOST, IBKR_PORT, IBKR_CLIENT_ID)
-            pass
+            # IBKR connection settings from MongoDB authentication_details
+            config.update({
+                "host": auth.get('host'),
+                "port": auth.get('port'),
+                "client_id": auth.get('client_id')
+            })
         elif account['broker'] == "Zerodha":
             config.update({
                 "api_key": auth.get('api_key'),
@@ -588,9 +592,10 @@ class BrokerPoller:
                     # Create real broker
                     real_broker = BrokerFactory.create_broker(config)
 
-                    # Create mock broker
+                    # Create mock broker in read-only mode (prevents MongoDB config overwrites)
                     mock_config = config.copy()
                     mock_config['broker'] = 'Mock'
+                    mock_config['read_only'] = True
                     mock_broker = BrokerFactory.create_broker(mock_config)
 
                     # Wrap in adapter

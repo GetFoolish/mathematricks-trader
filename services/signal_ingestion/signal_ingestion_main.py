@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SignalIngestionService
-Monitors MongoDB for new trading signals and routes them to microservices via Pub/Sub
+Monitors MongoDB for new trading signals and stores them for processing by Cerebro
 """
 
 import os
@@ -24,13 +24,6 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from services.signal_ingestion.mongodb_watcher import MongoDBWatcher
 from services.signal_ingestion.signal_standardizer import SignalStandardizer
-
-# Try to import Pub/Sub for MVP microservices bridge
-try:
-    from google.cloud import pubsub_v1
-    PUBSUB_AVAILABLE = True
-except ImportError:
-    PUBSUB_AVAILABLE = False
 
 # Setup logging
 LOG_FILE = os.path.join(PROJECT_ROOT, 'logs', 'signal_ingestion.log')
@@ -77,7 +70,7 @@ def get_signal_processing_logger():
 class SignalIngestionService:
     """
     Main service class for signal ingestion
-    Watches MongoDB and publishes to Pub/Sub
+    Watches MongoDB and stores standardized signals for Cerebro processing
     """
 
     def __init__(self, environment: str = 'production'):
@@ -108,19 +101,6 @@ class SignalIngestionService:
         except PyMongoError as e:
             logger.error(f"⚠️ Failed to connect to signal_store: {e}")
             self.signal_store_collection = None
-
-        # Initialize Pub/Sub publisher
-        self.pubsub_publisher = None
-        self.pubsub_topic_path = None
-        if PUBSUB_AVAILABLE:
-            try:
-                project_id = os.getenv('PUBSUB_PROJECT_ID', 'mathematricks-trader')
-                self.pubsub_publisher = pubsub_v1.PublisherClient()
-                self.pubsub_topic_path = self.pubsub_publisher.topic_path(project_id, 'standardized-signals')
-                logger.info("✅ Pub/Sub bridge enabled - signals will route to microservices")
-            except Exception as e:
-                logger.warning(f"⚠️ Pub/Sub initialization failed: {e}")
-                self.pubsub_publisher = None
 
         logger.info("=" * 80)
         logger.info(f"SignalIngestionService Starting ({environment.upper()})")
@@ -288,31 +268,6 @@ class SignalIngestionService:
         except Exception as e:
             logger.warning(f"⚠️ Error sending Telegram notification: {e}")
 
-        # Publish to microservices via Pub/Sub
-        if self.pubsub_publisher:
-            try:
-                self.publish_to_pubsub(signal_data, mathematricks_signal_id)
-            except Exception as e:
-                logger.error(f"⚠️ Error publishing to microservices: {e}")
-
-    def publish_to_pubsub(self, signal_data: dict, mathematricks_signal_id: str = None):
-        """Publish signal to MVP microservices via Pub/Sub"""
-        if not self.pubsub_publisher or not self.pubsub_topic_path:
-            return
-
-        # Standardize signal format
-        standardized_signal = SignalStandardizer.standardize(signal_data)
-
-        # Add mathematricks_signal_id for Cerebro to update
-        if mathematricks_signal_id:
-            standardized_signal['mathematricks_signal_id'] = mathematricks_signal_id
-
-        # Publish to Pub/Sub
-        message_data = SignalStandardizer.to_json(standardized_signal)
-        future = self.pubsub_publisher.publish(self.pubsub_topic_path, message_data)
-        message_id = future.result(timeout=5.0)
-
-        logger.info("\n🚀 Routing to MVP microservices (Cerebro → Execution)")
         logger.info(f"✅ Signal published to Cerebro: {message_id}")
         logger.info(f"   → Signal ID: {standardized_signal['signal_id']}")
         logger.info(f"   → Mathematricks Signal ID: {mathematricks_signal_id}")

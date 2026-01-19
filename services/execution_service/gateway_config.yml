@@ -1,0 +1,20 @@
+# Gateway Configuration
+# List of account IDs to always start on execution-service startup
+# 
+# These gateways will be created regardless of open positions
+# Use this for accounts you want immediately available (no startup delay)
+#
+# Note: Only IBKR accounts need gateways
+# Other brokers (Binance, Bybit, Alpaca, Oanda) use API keys only
+
+always_start_accounts:
+  # Example: Uncomment and add your account IDs
+  # - IBKR-LIVE-ACCOUNT-CANADA
+  # - IBKR-TESTING-ACCOUNT
+  
+  # For testing, start the test account
+  - IBKR-TESTING-ACCOUNT
+
+# Accounts NOT listed here will:
+# - Auto-start if they have open positions
+# - Fallback to Mock broker if signal arrives and gateway not running

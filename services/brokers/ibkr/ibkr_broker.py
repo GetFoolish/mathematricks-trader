@@ -44,10 +44,17 @@ class IBKRBroker(AbstractBroker):
         """Initialize IBKR broker with configuration"""
         super().__init__(config)
 
-        # Connection settings come ONLY from environment variables
-        self.host = os.getenv("IBKR_HOST", "127.0.0.1")
-        self.port = int(os.getenv("IBKR_PORT", "4002"))
-        self.client_id = int(os.getenv("IBKR_CLIENT_ID", "1"))
+        # Connection settings: require config values (single source of truth)
+        if "host" not in config:
+            raise ValueError("IBKR config missing required field: 'host'")
+        if "port" not in config:
+            raise ValueError("IBKR config missing required field: 'port'")
+        if "client_id" not in config:
+            raise ValueError("IBKR config missing required field: 'client_id'")
+        
+        self.host = config["host"]
+        self.port = int(config["port"])
+        self.client_id = int(config["client_id"])
 
         # Initialize ib_insync connection object
         self.ib = IB()

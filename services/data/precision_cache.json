@@ -114,5 +114,11 @@
       "precision": 0,
       "last_checked": "2026-01-16T16:55:07.639427+00:00"
     }
+  },
+  "IBKR-TESTING-ACCOUNT": {
+    "AAPL": {
+      "precision": 0,
+      "last_checked": "2026-01-18T01:22:26.345043+00:00"
+    }
   }
 }

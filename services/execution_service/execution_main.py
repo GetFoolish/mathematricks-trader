@@ -119,10 +119,9 @@ signal_store_collection = db['signal_store']  # For updating execution data
 # Account Data Service Configuration
 ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:8082')
 
-# IBKR Configuration (fallback for backward compatibility)
-IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
-IBKR_PORT = int(os.getenv('IBKR_PORT', '7497'))  # 7497 for TWS, 4002 for IB Gateway
-IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', '1'))
+# Gateway Controller for IBKR accounts
+from services.execution_service.gateway_controller import GatewayController
+gateway_controller = GatewayController()
 
 
 def log_open_positions(account_id: str, label: str):
@@ -192,17 +191,154 @@ def get_active_accounts_from_service() -> List[Dict[str, Any]]:
         return []
 
 
+def _build_broker_config(broker_name: str, account_id: str, auth_details: Dict) -> Dict:
+    """
+    Build broker-specific configuration from authentication_details.
+    
+    Supports: IBKR, Binance, Bybit, Alpaca, Oanda
+    """
+    config = {
+        "broker": broker_name,
+        "account_id": account_id
+    }
+    
+    if broker_name == 'IBKR':
+        # IBKR: host, port, client_id from auth_details
+        config.update({
+            "host": auth_details.get('host', 'host.docker.internal'),
+            "port": auth_details.get('port', 4002),
+            "client_id": auth_details.get('client_id', 1)
+        })
+    
+    elif broker_name == 'Binance':
+        # Binance: api_key, api_secret, testnet
+        config.update({
+            "api_key": auth_details.get('api_key'),
+            "api_secret": auth_details.get('api_secret'),
+            "testnet": auth_details.get('testnet', False)
+        })
+    
+    elif broker_name == 'Bybit':
+        # Bybit: api_key, api_secret, testnet
+        config.update({
+            "api_key": auth_details.get('api_key'),
+            "api_secret": auth_details.get('api_secret'),
+            "testnet": auth_details.get('testnet', False)
+        })
+    
+    elif broker_name == 'Alpaca':
+        # Alpaca: api_key, api_secret, paper
+        config.update({
+            "api_key": auth_details.get('api_key'),
+            "api_secret": auth_details.get('api_secret'),
+            "paper": auth_details.get('paper', True)
+        })
+    
+    elif broker_name == 'Oanda':
+        # Oanda: api_key, account_id, practice
+        config.update({
+            "api_key": auth_details.get('api_key'),
+            "practice": auth_details.get('practice', True)
+        })
+    
+    else:
+        # Unknown broker - pass through auth_details
+        logger.warning(f"Unknown broker type: {broker_name}, passing through auth_details")
+        config.update(auth_details)
+    
+    return config
+
+
+def load_gateway_config() -> List[str]:
+    """Load always-start account IDs from gateway_config.yml"""
+    import yaml
+    from pathlib import Path
+    
+    config_path = Path(__file__).parent / "gateway_config.yml"
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            return config.get('always_start_accounts', [])
+    except Exception as e:
+        logger.warning(f"Could not load gateway_config.yml: {e}")
+        return []
+
+
+def start_required_gateways(accounts: List[Dict]):
+    """
+    Start IB Gateway containers for IBKR accounts that need them.
+    
+    Starts gateways for:
+    1. Accounts listed in gateway_config.yml (always-start)
+    2. Accounts with open positions
+    """
+    # Load always-start accounts
+    always_start = load_gateway_config()
+    logger.info(f"Always-start accounts from config: {always_start}")
+    
+    # Find accounts with open positions
+    accounts_with_positions = []
+    for account in accounts:
+        if account['broker'] == 'IBKR':
+            try:
+                # Query MongoDB for open positions
+                positions = list(trading_accounts_collection.find_one(
+                    {"account_id": account['account_id']},
+                    {"open_positions": 1}
+                ).get('open_positions', []))
+                
+                if len(positions) > 0:
+                    accounts_with_positions.append(account['account_id'])
+            except Exception as e:
+                logger.debug(f"Could not check positions for {account['account_id']}: {e}")
+    
+    if accounts_with_positions:
+        logger.info(f"Accounts with open positions: {accounts_with_positions}")
+    
+    # Combine lists (deduplicate)
+    accounts_to_start = set(always_start + accounts_with_positions)
+    
+    if not accounts_to_start:
+        logger.info("No IBKR gateways needed at startup")
+        return
+    
+    logger.info(f"🚀 Starting IB Gateways for {len(accounts_to_start)} account(s)...")
+    
+    # Start gateway for each account
+    for account_id in accounts_to_start:
+        # Find account in accounts list
+        account = next((a for a in accounts if a['account_id'] == account_id), None)
+        
+        if not account:
+            logger.warning(f"Account {account_id} not found in AccountDataService")
+            continue
+        
+        if account['broker'] != 'IBKR':
+            logger.info(f"Skipping {account_id} - not an IBKR account")
+            continue
+        
+        # Create gateway
+        success = gateway_controller.create_gateway_for_account(account)
+        
+        if success:
+            logger.info(f"✅ Gateway ready for {account_id}")
+        else:
+            logger.error(f"❌ Failed to start gateway for {account_id}")
+
+
 def initialize_broker_pool():
     """
     Initialize broker pool by creating broker instances for all active accounts.
+    Supports multi-broker architecture: IBKR, Binance, Bybit, Alpaca, Oanda, Mock
     Supports 3-mode trading system: paper_mock, paper_real, live.
 
     Mode handling:
     - paper_mock: Create only Mock broker
-    - paper_real: Create IBKR + Mock, wrap in BrokerModeAdapter
-    - live: Create only IBKR broker
+    - paper_real: Create real broker + Mock, wrap in BrokerModeAdapter
+    - live: Create only real broker
 
-    Requires AccountDataService to provide accounts - no fallback broker created.
+    For IBKR accounts: Creates IB Gateway containers as needed
+    For other brokers: Uses API keys from MongoDB authentication_details
     """
     global broker_pool
 
@@ -212,10 +348,17 @@ def initialize_broker_pool():
     accounts = get_active_accounts_from_service()
 
     if not accounts:
-        # No fallback - require AccountDataService to provide accounts
         logger.warning("⚠️ No accounts from AccountDataService - broker pool will be empty")
         logger.warning("⚠️ Execution service will not be able to execute orders until accounts are configured")
         return
+
+    # Start IBKR gateways for accounts that need them
+    start_required_gateways(accounts)
+    
+    # Wait for gateways to be ready
+    import time
+    logger.info("⏳ Waiting 60 seconds for IB Gateways to initialize...")
+    time.sleep(60)
 
     # Create broker instance for each active account
     for account in accounts:
@@ -225,6 +368,9 @@ def initialize_broker_pool():
         mode = account.get('mode', 'paper_mock')  # Default to paper_mock if not specified
 
         try:
+            # Build broker-specific config
+            real_config = _build_broker_config(broker_name, account_id, auth_details)
+            
             if mode == 'paper_mock':
                 # Create only Mock broker
                 logger.info(f"Creating Mock broker for {account_id} (mode: paper_mock)")
@@ -236,21 +382,18 @@ def initialize_broker_pool():
                 broker_instance = BrokerFactory.create_broker(broker_config)
 
             elif mode == 'paper_real':
-                # Create BOTH IBKR + Mock, wrap in BrokerModeAdapter
-                logger.info(f"Creating IBKR + Mock brokers for {account_id} (mode: paper_real)")
+                # Create BOTH real broker + Mock, wrap in BrokerModeAdapter
+                logger.info(f"Creating {broker_name} + Mock brokers for {account_id} (mode: paper_real)")
 
-                # Create real broker (IBKR)
-                real_config = {
-                    "broker": broker_name,
-                    "account_id": account_id,
-                    **auth_details
-                }
+                # Create real broker
+                logger.info(f"{broker_name} broker config: {real_config}")
                 real_broker = BrokerFactory.create_broker(real_config)
 
-                # Create mock broker
+                # Create mock broker in read-only mode (prevents MongoDB config overwrites)
                 mock_config = {
                     "broker": "Mock",
                     "account_id": account_id,
+                    "read_only": True,
                     **auth_details
                 }
                 mock_broker = BrokerFactory.create_broker(mock_config)
@@ -260,14 +403,9 @@ def initialize_broker_pool():
                 broker_instance = BrokerModeAdapter(real_broker, mock_broker, mode='paper_real')
 
             elif mode == 'live':
-                # Create only real broker (IBKR)
-                logger.warning(f"⚠️ Creating LIVE broker for {account_id} - REAL MONEY AT RISK!")
-                broker_config = {
-                    "broker": broker_name,
-                    "account_id": account_id,
-                    **auth_details
-                }
-                broker_instance = BrokerFactory.create_broker(broker_config)
+                # Create only real broker
+                logger.warning(f"⚠️ Creating LIVE {broker_name} broker for {account_id} - REAL MONEY AT RISK!")
+                broker_instance = BrokerFactory.create_broker(real_config)
 
             else:
                 logger.error(f"❌ Invalid mode '{mode}' for account {account_id}. Skipping.")

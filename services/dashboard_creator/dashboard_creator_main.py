@@ -22,6 +22,7 @@ from generators.client_dashboard import generate_client_dashboard
 from generators.signal_sender_dashboard import generate_signal_sender_dashboard
 from generators.fund_balances_widget import generate_fund_balances_widget
 from generators.account_statement_widget import generate_account_statement_widget
+from generators.system_health_widget import generate_system_health_widget
 
 # Import scheduler
 from schedulers.background_jobs import start_scheduler, stop_scheduler, widget_update_events
@@ -302,6 +303,10 @@ async def generate_widget_on_demand(widget_type: str, request: dict = None):
                 date_range_days=date_range_days,
                 group_by=group_by
             )
+            return {"status": "success", "data": data}
+
+        elif widget_type == "SystemHealth":
+            data = generate_system_health_widget(mongo_client, fund_id)
             return {"status": "success", "data": data}
 
         else:

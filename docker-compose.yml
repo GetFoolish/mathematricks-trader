@@ -31,10 +31,13 @@ services:
         SERVICE_NAME: execution_service
     volumes:
       - ./services:/app/services
+      - /var/run/docker.sock:/var/run/docker.sock  # For gateway management
     ports:
       - "5679:5679" # Debug port
     depends_on:
       mongodb:
+        condition: service_healthy
+      account-data-service:
         condition: service_healthy
     environment:
       - TZ=${TZ}
@@ -56,6 +59,12 @@ services:
     environment:
       - TZ=${TZ}
       - MONGODB_URI=${MONGODB_URI}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/api/v1/accounts').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     command: python -m services.account_data_service.account_data_main
 
   # Infrastructure Services
@@ -141,24 +150,6 @@ services:
       - MONGODB_URI=${MONGODB_URI}
       - PYTHONPATH=/app/services/dashboard_creator:/app
     command: python -m services.dashboard_creator.dashboard_creator_main
-
-  # IB Gateway
-  ib-gateway:
-    image: ghcr.io/gnzsnz/ib-gateway:latest
-    ports:
-      - "4001:4003" # Live API port
-      - "4002:4004" # Paper API port
-      - "5900:5900" # VNC
-    environment:
-      - TWS_USERID=${IBKR_PAPER_USERNAME}
-      - TWS_PASSWORD=${IBKR_PAPER_PASSWORD}
-      - TRADING_MODE=paper
-      - TWOFA_TIMEOUT_ACTION=restart
-      - READ_ONLY_API=no
-      - IBC_AcceptIncomingConnectionAction=accept
-      - VNC_SERVER_PASSWORD=ibgateway
-    # Restart policy to handle 2FA timeouts/restarts
-    restart: unless-stopped
 
   # Frontend (includes API server)
   frontend:
