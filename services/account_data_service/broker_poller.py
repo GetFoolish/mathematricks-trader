@@ -559,7 +559,7 @@ class BrokerPoller:
 
         Supports 3-mode trading system:
         - paper_mock: Create only Mock broker
-        - paper_real: Create IBKR + Mock, wrap in BrokerModeAdapter
+        - paper_live: Create IBKR + Mock, wrap in BrokerModeAdapter
         - live: Create only real broker
 
         Args:
@@ -585,9 +585,9 @@ class BrokerPoller:
                     mock_config['broker'] = 'Mock'
                     broker_instance = BrokerFactory.create_broker(mock_config)
 
-                elif mode == 'paper_real':
+                elif mode == 'paper_live':
                     # Create BOTH real + mock, wrap in adapter
-                    logger.debug(f"Creating {broker_name} + Mock brokers for {account_id} (mode: paper_real)")
+                    logger.debug(f"Creating {broker_name} + Mock brokers for {account_id} (mode: paper_live)")
 
                     # Create real broker
                     real_broker = BrokerFactory.create_broker(config)
@@ -600,7 +600,7 @@ class BrokerPoller:
 
                     # Wrap in adapter
                     from services.brokers.adapters import BrokerModeAdapter
-                    broker_instance = BrokerModeAdapter(real_broker, mock_broker, mode='paper_real')
+                    broker_instance = BrokerModeAdapter(real_broker, mock_broker, mode='paper_live')
 
                 elif mode == 'live':
                     # Create only real broker

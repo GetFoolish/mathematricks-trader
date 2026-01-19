@@ -17,20 +17,20 @@ def setup_ibkr_test_account():
         print("✅ IBKR_Paper_Test account already exists")
         print(f"   Current mode: {existing.get('mode', 'unknown')}")
 
-        update_mode = input("\nUpdate mode to paper_real? (y/n): ").lower()
+        update_mode = input("\\nUpdate mode to paper_live? (y/n): ").lower()
         if update_mode == 'y':
             db['trading_accounts'].update_one(
                 {"account_id": "IBKR_Paper_Test"},
-                {"$set": {"mode": "paper_real"}}
+                {"$set": {"mode": "paper_live"}}
             )
-            print("✅ Updated mode to paper_real")
+            print("✅ Updated mode to paper_live")
         return
 
     # Create new account
     account = {
         "account_id": "IBKR_Paper_Test",
         "broker": "IBKR",
-        "mode": "paper_real",  # Start with paper_real mode
+        "mode": "paper_live",  # Start with paper_live mode
         "authentication_details": {
             "host": "127.0.0.1",
             "port": 4002,  # Paper port
@@ -51,7 +51,7 @@ def setup_ibkr_test_account():
 
     result = db['trading_accounts'].insert_one(account)
     print(f"✅ Created IBKR_Paper_Test account (ID: {result.inserted_id})")
-    print("   Mode: paper_real")
+    print("   Mode: paper_live")
     print("   Initial balance: $100,000")
 
 def add_mode_to_mock_account():

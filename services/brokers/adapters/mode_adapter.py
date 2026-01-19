@@ -3,7 +3,7 @@ BrokerModeAdapter - Hybrid adapter for 3-mode trading system
 
 This adapter wraps real broker + mock broker instances to enable:
 - paper_mock: Fake pricing + mock broker orders (fully simulated)
-- paper_real: LIVE pricing from real broker + mock broker orders (safe testing with real market data)
+- paper_live: LIVE pricing from real broker + mock broker orders (safe testing with real market data)
 - live: Live pricing + real broker orders (production trading)
 
 The adapter routes method calls based on the mode field from trading_accounts collection.
@@ -22,7 +22,7 @@ class BrokerModeAdapter(AbstractBroker):
 
     Modes:
     - paper_mock: All calls go to mock broker with fake pricing
-    - paper_real: Pricing from real broker, orders to mock broker
+    - paper_live: Pricing from real broker, orders to mock broker
     - live: All calls go to real broker
     """
 
@@ -33,7 +33,7 @@ class BrokerModeAdapter(AbstractBroker):
         Args:
             real_broker: Real broker instance (e.g., IBKRBroker)
             mock_broker: Mock broker instance
-            mode: Trading mode - "paper_mock" | "paper_real" | "live"
+            mode: Trading mode - "paper_mock" | "paper_live" | "live"
         """
         # Create a combined config for the base class
         config = {
@@ -58,7 +58,7 @@ class BrokerModeAdapter(AbstractBroker):
         Connect to appropriate broker(s) based on mode.
 
         - paper_mock: Connect only to mock
-        - paper_real: Connect to both (need real for pricing)
+        - paper_live: Connect to both (need real for pricing)
         - live: Connect only to real
         """
         try:
@@ -67,7 +67,7 @@ class BrokerModeAdapter(AbstractBroker):
                 logger.info(f"[{self.mode}] Connected to mock broker: {result}")
                 return result
 
-            elif self.mode == "paper_real":
+            elif self.mode == "paper_live":
                 # Connect to both brokers
                 real_result = self.real_broker.connect()
                 mock_result = self.mock_broker.connect()
@@ -93,7 +93,7 @@ class BrokerModeAdapter(AbstractBroker):
             if self.mode == "paper_mock":
                 return self.mock_broker.disconnect()
 
-            elif self.mode == "paper_real":
+            elif self.mode == "paper_live":
                 real_result = self.real_broker.disconnect()
                 mock_result = self.mock_broker.disconnect()
                 return real_result and mock_result
@@ -113,8 +113,8 @@ class BrokerModeAdapter(AbstractBroker):
             if self.mode == "paper_mock":
                 return self.mock_broker.is_connected()
 
-            elif self.mode == "paper_real":
-                # Both must be connected for paper_real
+            elif self.mode == "paper_live":
+                # Both must be connected for paper_live
                 return self.real_broker.is_connected() and self.mock_broker.is_connected()
 
             elif self.mode == "live":
@@ -133,7 +133,7 @@ class BrokerModeAdapter(AbstractBroker):
         Place order with mode-based routing.
 
         - paper_mock: Send to mock broker with fake pricing
-        - paper_real: Enrich with real pricing, then send to mock broker
+        - paper_live: Enrich with real pricing, then send to mock broker
         - live: Send directly to real broker
         """
         try:
@@ -141,10 +141,10 @@ class BrokerModeAdapter(AbstractBroker):
                 logger.critical(f"⚠️ LIVE MODE ORDER: {order.get('instrument')} - Real money at risk!")
                 return self.real_broker.place_order(order)
 
-            elif self.mode == "paper_real":
+            elif self.mode == "paper_live":
                 # Enrich order with live market pricing from real broker
                 enriched_order = self._enrich_with_real_pricing(order)
-                logger.info(f"[paper_real] Order enriched with real price: {enriched_order.get('price', 'N/A')}")
+                logger.info(f"[paper_live] Order enriched with real price: {enriched_order.get('price', 'N/A')}")
                 return self.mock_broker.place_order(enriched_order)
 
             elif self.mode == "paper_mock":
@@ -162,7 +162,7 @@ class BrokerModeAdapter(AbstractBroker):
         """
         Fetch live market price from real broker and add to order.
 
-        This enables paper_real mode: testing with real market data without risking real money.
+        This enables paper_live mode: testing with real market data without risking real money.
         """
         try:
             symbol = order.get('instrument')
@@ -187,7 +187,7 @@ class BrokerModeAdapter(AbstractBroker):
         """
         Get current market price for an instrument.
 
-        For paper_real mode, this fetches live prices from the real broker.
+        For paper_live mode, this fetches live prices from the real broker.
 
         Args:
             symbol: Asset symbol (e.g., "AAPL", "EURUSD")
@@ -205,14 +205,14 @@ class BrokerModeAdapter(AbstractBroker):
         """Cancel order (routes to appropriate broker)."""
         if self.mode == "live":
             return self.real_broker.cancel_order(broker_order_id)
-        else:  # paper_mock or paper_real
+        else:  # paper_mock or paper_live
             return self.mock_broker.cancel_order(broker_order_id)
 
     def get_order_status(self, broker_order_id: str) -> Dict[str, Any]:
         """Get order status (routes to appropriate broker)."""
         if self.mode == "live":
             return self.real_broker.get_order_status(broker_order_id)
-        else:  # paper_mock or paper_real
+        else:  # paper_mock or paper_live
             return self.mock_broker.get_order_status(broker_order_id)
 
     # ACCOUNT DATA
@@ -222,32 +222,32 @@ class BrokerModeAdapter(AbstractBroker):
         Get account balance.
 
         - live: From real broker
-        - paper_mock/paper_real: From mock broker (simulated balances)
+        - paper_mock/paper_live: From mock broker (simulated balances)
         """
         if self.mode == "live":
             return self.real_broker.get_account_balance(account_id)
-        else:  # paper_mock or paper_real
+        else:  # paper_mock or paper_live
             return self.mock_broker.get_account_balance(account_id)
 
     def get_open_positions(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get open positions (from appropriate broker)."""
         if self.mode == "live":
             return self.real_broker.get_open_positions(account_id)
-        else:  # paper_mock or paper_real
+        else:  # paper_mock or paper_live
             return self.mock_broker.get_open_positions(account_id)
 
     def get_margin_info(self, account_id: Optional[str] = None) -> Dict[str, Any]:
         """Get margin info (from appropriate broker)."""
         if self.mode == "live":
             return self.real_broker.get_margin_info(account_id)
-        else:  # paper_mock or paper_real
+        else:  # paper_mock or paper_live
             return self.mock_broker.get_margin_info(account_id)
 
     def get_open_orders(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get open orders (from appropriate broker)."""
         if self.mode == "live":
             return self.real_broker.get_open_orders(account_id)
-        else:  # paper_mock or paper_real
+        else:  # paper_mock or paper_live
             return self.mock_broker.get_open_orders(account_id)
 
     # QUANTITY PRECISION

@@ -88,7 +88,6 @@ class GatewayController:
         username = auth['username']
         password = auth['password']
         trading_mode = auth.get('trading_mode', 'paper')
-        totp_secret = auth.get('totp_secret')  # Optional 2FA secret
         
         # Determine ports
         if trading_mode == 'live':
@@ -103,16 +102,13 @@ class GatewayController:
             'TWS_USERID': username,
             'TWS_PASSWORD': password,
             'TRADING_MODE': trading_mode,
-            'TWOFA_TIMEOUT_ACTION': 'restart',
+            'TWOFA_TIMEOUT_ACTION': 'restart',  # Auto-handle 2FA by restarting
             'READ_ONLY_API': 'no',
             'IBC_AcceptIncomingConnectionAction': 'accept',
+            'IBC_ExistingSessionDetectedAction': 'primary',  # Make gateway primary, web becomes read-only
+            'IBC_AcceptNonBrokerageAccountWarning': 'yes',  # Accept paper account warnings
             'VNC_SERVER_PASSWORD': 'ibgateway'
         }
-        
-        # Add TOTP secret if provided (for 2FA)
-        if totp_secret:
-            env_vars['IBEAM_KEY'] = totp_secret
-            logger.info(f"   2FA enabled with TOTP secret")
         
         try:
             # Create container

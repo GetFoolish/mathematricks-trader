@@ -203,12 +203,15 @@ def _build_broker_config(broker_name: str, account_id: str, auth_details: Dict) 
     }
     
     if broker_name == 'IBKR':
-        # IBKR: host, port, client_id from auth_details
+        # IBKR: host, port, client_id, market_data_type (optional) from auth_details
         config.update({
             "host": auth_details.get('host', 'host.docker.internal'),
             "port": auth_details.get('port', 4002),
             "client_id": auth_details.get('client_id', 1)
         })
+        # Add market_data_type if specified
+        if 'market_data_type' in auth_details:
+            config['market_data_type'] = auth_details['market_data_type']
     
     elif broker_name == 'Binance':
         # Binance: api_key, api_secret, testnet
@@ -330,11 +333,11 @@ def initialize_broker_pool():
     """
     Initialize broker pool by creating broker instances for all active accounts.
     Supports multi-broker architecture: IBKR, Binance, Bybit, Alpaca, Oanda, Mock
-    Supports 3-mode trading system: paper_mock, paper_real, live.
+    Supports 3-mode trading system: paper_mock, paper_live, live.
 
     Mode handling:
     - paper_mock: Create only Mock broker
-    - paper_real: Create real broker + Mock, wrap in BrokerModeAdapter
+    - paper_live: Create real broker + Mock, wrap in BrokerModeAdapter
     - live: Create only real broker
 
     For IBKR accounts: Creates IB Gateway containers as needed
@@ -381,9 +384,9 @@ def initialize_broker_pool():
                 }
                 broker_instance = BrokerFactory.create_broker(broker_config)
 
-            elif mode == 'paper_real':
+            elif mode == 'paper_live':
                 # Create BOTH real broker + Mock, wrap in BrokerModeAdapter
-                logger.info(f"Creating {broker_name} + Mock brokers for {account_id} (mode: paper_real)")
+                logger.info(f"Creating {broker_name} + Mock brokers for {account_id} (mode: paper_live)")
 
                 # Create real broker
                 logger.info(f"{broker_name} broker config: {real_config}")
@@ -400,7 +403,7 @@ def initialize_broker_pool():
 
                 # Wrap in BrokerModeAdapter
                 from services.brokers.adapters import BrokerModeAdapter
-                broker_instance = BrokerModeAdapter(real_broker, mock_broker, mode='paper_real')
+                broker_instance = BrokerModeAdapter(real_broker, mock_broker, mode='paper_live')
 
             elif mode == 'live':
                 # Create only real broker

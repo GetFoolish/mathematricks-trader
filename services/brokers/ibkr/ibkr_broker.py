@@ -55,6 +55,11 @@ class IBKRBroker(AbstractBroker):
         self.host = config["host"]
         self.port = int(config["port"])
         self.client_id = int(config["client_id"])
+        
+        # Market data type preference (optional from config)
+        # 1=Live, 2=Frozen, 3=Delayed, 4=Delayed Frozen
+        # If not specified, will be determined based on port with fallback
+        self.market_data_type_preference = config.get("market_data_type")
 
         # Initialize ib_insync connection object
         self.ib = IB()
@@ -103,6 +108,10 @@ class IBKRBroker(AbstractBroker):
                 if self.ib.isConnected():
                     self.client_id = current_client_id  # Update to successful client_id
                     logger.info(f"✅ Successfully connected to IBKR (client_id={current_client_id})")
+                    
+                    # Set market data type with smart defaults and fallback
+                    self._configure_market_data_type()
+                    
                     return True
                 else:
                     # Connection was rejected (likely Error 326)
@@ -136,6 +145,54 @@ class IBKRBroker(AbstractBroker):
         error_msg = f"Failed to connect to IBKR after {max_retries} client_id attempts (tried {original_client_id}-{original_client_id + max_retries - 1})"
         logger.error(error_msg)
         raise BrokerConnectionError(error_msg, broker_name="IBKR", details={"host": self.host, "port": self.port})
+
+    def _configure_market_data_type(self):
+        """
+        Configure market data type with smart defaults and fallback.
+        
+        Priority:
+        1. Use market_data_type from config if specified
+        2. Auto-detect based on port (paper=4, live=1)
+        3. Try type 1 (live) first, fallback to 3, then 4 if rejected
+        
+        Market Data Types:
+        1 = Live (requires subscription)
+        2 = Frozen (delayed 15-20 min, deprecated)
+        3 = Delayed (10-15 min delay)
+        4 = Delayed Frozen (most compatible for paper accounts)
+        """
+        # Determine preferred type
+        if self.market_data_type_preference is not None:
+            # Explicit preference from config
+            preferred_type = int(self.market_data_type_preference)
+            logger.info(f"📊 Using configured market_data_type: {preferred_type}")
+        elif self.port in [4002, 4004, 7497]:  # Paper trading ports
+            # Paper accounts: prefer delayed frozen (type 4) for compatibility
+            preferred_type = 1  # Try live first (may work with subscription sharing)
+            logger.info("📊 Paper account detected - trying live market data (type 1) with fallback")
+        else:  # Live ports (4001, 4003, 7496)
+            # Live accounts: prefer live data
+            preferred_type = 1
+            logger.info("📊 Live account detected - requesting live market data (type 1)")
+        
+        # Try preferred type with fallback
+        fallback_types = [3, 4]  # Delayed → Delayed Frozen
+        types_to_try = [preferred_type] + [t for t in fallback_types if t != preferred_type]
+        
+        for market_data_type in types_to_try:
+            try:
+                self.ib.reqMarketDataType(market_data_type)
+                logger.info(f"✅ Market data type set to: {market_data_type}")
+                return  # Success!
+            except Exception as e:
+                if market_data_type == types_to_try[-1]:
+                    # Last attempt failed
+                    logger.warning(f"⚠️ All market data types failed. Last error: {e}")
+                    logger.warning("⚠️ Market data may not be available. Will use default.")
+                else:
+                    # Try next type
+                    logger.debug(f"Market data type {market_data_type} rejected: {e}. Trying fallback...")
+                    continue
 
     def disconnect(self) -> bool:
         """
@@ -845,14 +902,14 @@ class IBKRBroker(AbstractBroker):
             raise BrokerAPIError(f"Failed to get open orders: {str(e)}", broker_name="IBKR")
 
     # ========================================================================
-    # MARKET DATA (for paper_real mode pricing)
+    # MARKET DATA (for paper_live mode pricing)
     # ========================================================================
 
     def get_market_price(self, symbol: str, instrument_type: str) -> float:
         """
         Get current market price for an instrument.
 
-        Used by BrokerModeAdapter in paper_real mode to fetch live prices
+        Used by BrokerModeAdapter in paper_live mode to fetch live prices
         while sending orders to mock broker.
 
         Args:
@@ -943,7 +1000,7 @@ class IBKRBroker(AbstractBroker):
 
         elif instrument_type == "OPTION":
             # Options require strike/expiry - should not be called for options
-            # In paper_real mode, option pricing should come from order data
+            # In paper_live mode, option pricing should come from order data
             logger.warning(f"get_market_price() called for OPTION {symbol} - returning 0")
             raise BrokerAPIError(
                 f"Cannot get market price for OPTIONS without strike/expiry. "
