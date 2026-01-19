@@ -43,11 +43,11 @@ Signal → Cerebro → Execution Service → IBKR Broker → Real Market Data �
    - Skips account creation when `read_only=True`
 
 3. **services/execution_service/execution_main.py**
-   - Uses `read_only=True` for Mock broker in paper_real mode
+   - Uses `read_only=True` for Mock broker in paper_live mode
    - Added debug logging for IBKR broker config
 
 4. **services/account_data_service/broker_poller.py**
-   - Uses `read_only=True` for Mock broker in paper_real mode
+   - Uses `read_only=True` for Mock broker in paper_live mode
 
 5. **services/cerebro_service/fund_allocation_logic.py**
    - Fixed asset_class_map: STOCK→'equity' (not 'equities')
@@ -69,7 +69,7 @@ Signal → Cerebro → Execution Service → IBKR Broker → Real Market Data �
 {
   account_id: "IBKR-TESTING-ACCOUNT",
   broker: "IBKR",  // Now persists!
-  mode: "paper_real",  // Real data, mock fills
+  mode: "paper_live",  // Real data, mock fills
   authentication_details: {
     auth_type: "IBKR",
     host: "host.docker.internal",
@@ -88,7 +88,7 @@ Signal → Cerebro → Execution Service → IBKR Broker → Real Market Data �
 | Mode | Market Data | Execution | Status |
 |------|-------------|-----------|--------|
 | `mock` | Mock | Mock | ✅ Working |
-| `paper_real` (mock_live) | **Real IBKR** | Mock | ✅ Working |
+| `paper_live` (mock_live) | **Real IBKR** | Mock | ✅ Working |
 | `live` | Real IBKR | Real IBKR | ⚠️ Not tested (real money risk) |
 
 ### Test Results

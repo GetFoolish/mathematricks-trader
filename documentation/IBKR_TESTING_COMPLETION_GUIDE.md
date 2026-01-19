@@ -16,13 +16,13 @@ Mock broker's `_ensure_account_exists()` method overwrote the account config eve
 ### Solution
 Added `read_only` mode to Mock broker:
 - When `read_only=True`, Mock broker skips MongoDB writes
-- Applied to all hybrid mode setups (`mock_live`/`paper_real`)
+- Applied to all hybrid mode setups (`mock_live`/`paper_live`)
 - IBKR config now persists across restarts
 
 ### Files Changed
 1. `services/brokers/mock/mock_broker.py` - Added read_only flag
-2. `services/execution_service/execution_main.py` - Use read-only mock in paper_real mode
-3. `services/account_data_service/broker_poller.py` - Use read-only mock in paper_real mode
+2. `services/execution_service/execution_main.py` - Use read-only mock in paper_live mode
+3. `services/account_data_service/broker_poller.py` - Use read-only mock in paper_live mode
 
 ---
 
@@ -37,7 +37,7 @@ db.trading_accounts.updateOne(
   {account_id: "IBKR-TESTING-ACCOUNT"},
   {$set: {
     broker: "IBKR",
-    mode: "paper_real",
+    mode: "paper_live",
     authentication_details: {
       auth_type: "IBKR",
       host: "host.docker.internal",
@@ -65,7 +65,7 @@ db.trading_accounts.findOne(
 
 **Expected Output:**
 ```json
-{ broker: 'IBKR', mode: 'paper_real' }
+{ broker: 'IBKR', mode: 'paper_live' }
 ```
 
 ✅ **Pass Criteria:** Broker field stays as "IBKR" after restart
@@ -107,17 +107,17 @@ Mock Broker initialized for account IBKR-TESTING-ACCOUNT (read-only mode - no Mo
 **Check execution logs for real IBKR price:**
 ```bash
 docker logs mathematricks-trader-execution-service-1 2>&1 | tail -30 | \
-  grep -E "\[paper_real\] Order enriched with real price"
+  grep -E "\[paper_live\] Order enriched with real price"
 ```
 
 **Expected Output:**
 ```
-[paper_real] Order enriched with real price: 230.5
+[paper_live] Order enriched with real price: 230.5
 ```
 
 ✅ **Pass Criteria:**
 - Price is realistic (AAPL ~$230, not 100.0)
-- Log shows `[paper_real]` or `[mock_live]` mode
+- Log shows `[paper_live]` or `[mock_live]` mode
 - Order filled instantly (mock execution)
 - Check IB Gateway VNC: NO orders should appear (fills are mock)
 
@@ -193,7 +193,7 @@ sleep 5
 | Mode | Market Data | Execution | MongoDB Writes | Use Case |
 |------|-------------|-----------|----------------|----------|
 | `mock` | Mock/simulated | Mock (instant) | ✅ Yes | Pure testing, no external dependencies |
-| `paper_real` (mock_live) | Real IBKR | Mock (instant) | ❌ No (read-only) | Strategy testing with real market data, zero risk |
+| `paper_live` (mock_live) | Real IBKR | Mock (instant) | ❌ No (read-only) | Strategy testing with real market data, zero risk |
 | `live` | Real IBKR | Real IBKR | N/A | Production trading - REAL MONEY |
 
 ### Account Configuration
@@ -203,7 +203,7 @@ sleep 5
 {
   "account_id": "IBKR-TESTING-ACCOUNT",
   "broker": "IBKR",
-  "mode": "paper_real",
+  "mode": "paper_live",
   "authentication_details": {
     "auth_type": "IBKR",
     "host": "host.docker.internal",
@@ -327,7 +327,7 @@ docker exec mathematricks-trader-mongodb-1 mongosh mathematricks_trading --quiet
 
 # Set mock_live mode
 docker exec mathematricks-trader-mongodb-1 mongosh mathematricks_trading --quiet --eval \
-  'db.trading_accounts.updateOne({account_id: "IBKR-TESTING-ACCOUNT"}, {$set: {mode: "paper_real", broker: "IBKR"}})'
+  'db.trading_accounts.updateOne({account_id: "IBKR-TESTING-ACCOUNT"}, {$set: {mode: "paper_live", broker: "IBKR"}})'
 
 # Set paper_live mode
 docker exec mathematricks-trader-mongodb-1 mongosh mathematricks_trading --quiet --eval \

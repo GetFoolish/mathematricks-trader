@@ -7,7 +7,7 @@ import sys
 import logging
 import json
 import argparse
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from typing import Dict, Any, Optional, List
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -15,6 +15,7 @@ import threading
 import time
 import queue
 import requests
+import pytz
 
 # Add services directory to path so we can import brokers package
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -29,6 +30,9 @@ from brokers.exceptions import (
     BrokerAPIError,
     InvalidSymbolError
 )
+
+# Import Telegram notifier
+from telegram.notifier import TelegramNotifier
 
 # Load environment variables from project root
 env_path = os.path.join(PROJECT_ROOT, '.env')
@@ -122,6 +126,81 @@ ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localho
 # Gateway Controller for IBKR accounts
 from services.execution_service.gateway_controller import GatewayController
 gateway_controller = GatewayController()
+
+# Telegram Notifier
+telegram = TelegramNotifier()
+logger.info(f"Telegram notifications: {'enabled' if telegram.enabled else 'disabled'}")
+
+
+# ========================================================================
+# HELPER FUNCTIONS
+# ========================================================================
+
+def is_market_hours(instrument_type: str = "STOCK") -> Dict[str, Any]:
+    """
+    Check if current time is during market hours.
+
+    Args:
+        instrument_type: Type of instrument (STOCK, FOREX, CRYPTO, etc.)
+
+    Returns:
+        Dict with:
+          - is_open: bool (True if market is open)
+          - message: str (human-readable status)
+          - current_time_et: str (current time in ET)
+    """
+    # Get current time in Eastern Time (US stock market timezone)
+    et_tz = pytz.timezone('America/New_York')
+    now_et = datetime.now(et_tz)
+    current_time = now_et.time()
+
+    # Stock market hours: 9:30 AM - 4:00 PM ET, Monday-Friday
+    if instrument_type == "STOCK":
+        market_open = dt_time(9, 30)  # 9:30 AM
+        market_close = dt_time(16, 0)  # 4:00 PM
+
+        # Check if weekend
+        if now_et.weekday() >= 5:  # Saturday=5, Sunday=6
+            return {
+                "is_open": False,
+                "message": f"⚠️  Weekend (market closed). Current time: {now_et.strftime('%A %I:%M %p ET')}",
+                "current_time_et": now_et.strftime('%Y-%m-%d %I:%M:%S %p ET')
+            }
+
+        # Check if within market hours
+        if market_open <= current_time <= market_close:
+            return {
+                "is_open": True,
+                "message": f"✅ Market is OPEN. Current time: {now_et.strftime('%I:%M %p ET')}",
+                "current_time_et": now_et.strftime('%Y-%m-%d %I:%M:%S %p ET')
+            }
+        elif current_time < market_open:
+            return {
+                "is_open": False,
+                "message": f"⚠️  Pre-market (opens at 9:30 AM ET). Current time: {now_et.strftime('%I:%M %p ET')}",
+                "current_time_et": now_et.strftime('%Y-%m-%d %I:%M:%S %p ET')
+            }
+        else:
+            return {
+                "is_open": False,
+                "message": f"⚠️  After-hours (closed at 4:00 PM ET). Current time: {now_et.strftime('%I:%M %p ET')}",
+                "current_time_et": now_et.strftime('%Y-%m-%d %I:%M:%S %p ET')
+            }
+
+    # FOREX and CRYPTO trade 24/7 (mostly)
+    elif instrument_type in ["FOREX", "CRYPTO"]:
+        return {
+            "is_open": True,
+            "message": f"✅ {instrument_type} market is open (24/7)",
+            "current_time_et": now_et.strftime('%Y-%m-%d %I:%M:%S %p ET')
+        }
+
+    # Default: assume market is open (for unknown instrument types)
+    return {
+        "is_open": True,
+        "message": f"Market hours unknown for {instrument_type} (assuming open)",
+        "current_time_et": now_et.strftime('%Y-%m-%d %I:%M:%S %p ET')
+    }
 
 
 def log_open_positions(account_id: str, label: str):
@@ -511,6 +590,13 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
             logger.error(f"❌ Order {order_data.get('order_id')} missing 'account' field - cannot route to broker")
             return None
 
+        # MARKET HOURS CHECK: Warn if placing orders outside market hours
+        instrument_type = order_data.get('instrument_type', 'STOCK')
+        market_status = is_market_hours(instrument_type)
+        if not market_status['is_open']:
+            logger.warning(f"⏰ {market_status['message']}")
+            logger.warning(f"   Order will be placed but may not execute until market opens")
+
         # SAFETY CHECK: Get account to check mode (BEFORE any routing overrides)
         account = trading_accounts_collection.find_one({"account_id": account_id})
         mode = account.get('mode', 'paper_mock') if account else 'paper_mock'
@@ -576,6 +662,16 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
         logger.info(f"   Broker Order ID: {broker_order_id}")
         logger.info(f"   IBKR Confirmation ID: {broker_confirmation_id}")
         logger.info(f"   Status: {result.get('status')}")
+        
+        # Send Telegram notification for order placement
+        telegram.notify_order_placed(
+            order_id=order_id,
+            symbol=order_data.get('instrument'),
+            side=order_data.get('action', 'UNKNOWN'),
+            quantity=order_data.get('quantity', 0),
+            account=account_id,
+            instrument_type=order_data.get('instrument_type', 'STOCK')
+        )
 
         # Return result with fill data from broker (Mock broker fills instantly, real broker updates later)
         return {
@@ -592,6 +688,15 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
 
     except OrderRejectedError as e:
         logger.error(f"❌ Order {order_data.get('order_id')} rejected: {e.rejection_reason}")
+        # Send Telegram notification for rejection
+        telegram.notify_order_rejected(
+            order_id=order_data.get('order_id'),
+            symbol=order_data.get('instrument'),
+            side=order_data.get('action', 'UNKNOWN'),
+            quantity=order_data.get('quantity', 0),
+            reason=e.rejection_reason,
+            account=account_id
+        )
         return None
     except InvalidSymbolError as e:
         logger.error(f"❌ Invalid symbol in order {order_data.get('order_id')}: {str(e)}")
@@ -1184,15 +1289,56 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
         logger.error(f"❌ Error creating/updating position: {e}", exc_info=True)
 
 
-def get_account_state() -> Dict[str, Any]:
+def get_account_state(account_id: str = None) -> Dict[str, Any]:
     """
-    Get current account state using broker library
+    Get current account state using broker pool architecture.
 
-    TODO: Update this function to work with broker pool architecture
-    For now, this function is disabled (calls are commented out)
+    Args:
+        account_id: Optional account ID. If not provided, gets state for all accounts.
+
+    Returns:
+        Dictionary with account balance, positions, and other state data.
     """
-    logger.warning("get_account_state() called but is disabled - needs broker pool update")
-    return {}
+    try:
+        if account_id:
+            # Get state for specific account
+            broker = get_broker_for_account(account_id)
+            if not broker:
+                logger.warning(f"No broker found for account {account_id}")
+                return {}
+
+            if not broker.is_connected():
+                logger.warning(f"Broker for account {account_id} not connected")
+                return {}
+
+            balance = broker.get_account_balance(account_id)
+            positions = broker.get_positions(account_id)
+
+            return {
+                "account_id": account_id,
+                "balance": balance,
+                "positions": positions,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            # Get state for all accounts in broker pool
+            all_states = {}
+            for acc_id, broker in broker_pool.items():
+                if broker.is_connected():
+                    balance = broker.get_account_balance(acc_id)
+                    positions = broker.get_positions(acc_id)
+                    all_states[acc_id] = {
+                        "balance": balance,
+                        "positions": positions
+                    }
+            return {
+                "accounts": all_states,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+    except Exception as e:
+        logger.error(f"Error getting account state: {e}", exc_info=True)
+        return {}
 
 
 def cancel_order(order_id: str) -> bool:
@@ -1369,13 +1515,17 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                 log_open_positions(account_id, "AFTER ORDER")
 
                 # Update signal_store with execution data and calculate PnL
+                # Calculate total commission from fills
+                total_commission = sum(fill.get('commission', 0) for fill in result.get('fills', []))
+                
                 execution_data = {
                     "broker_order_id": result.get('ib_order_id'),
                     "quantity_filled": filled_qty,
                     "avg_fill_price": avg_fill_price,
                     "fills": result.get('fills', []),
-                    "commission": 0  # TODO: Get actual commission from IBKR
+                    "commission": total_commission
                 }
+                logger.info(f"💰 Commission for {order_id}: ${total_commission:.2f}")
                 logger.debug(f"Updating signal_store for {order_id}")
                 update_signal_store_with_execution(order_data, execution_data)
 
@@ -1387,6 +1537,17 @@ def process_order_from_queue(order_item: Dict[str, Any]):
 
                 signal_logger.info(f"ORDER: {signal_id} | EXECUTION_CONFIRMED | Fill confirmed and saved to database")
                 logger.info(f"✅ ORDER COMPLETED: {order_data.get('instrument')} | Filled: {filled_qty} @ ${avg_fill_price:.2f} | Status: {execution['status']}")
+                
+                # Send Telegram notification for filled order
+                telegram.notify_order_filled(
+                    order_id=order_id,
+                    symbol=order_data.get('instrument'),
+                    side=order_data.get('action', 'UNKNOWN'),
+                    quantity=filled_qty,
+                    avg_fill_price=avg_fill_price,
+                    commission=total_commission,
+                    account=order_data.get('account')
+                )
             else:
                 # Order submitted but not filled yet - just update status
                 signal_logger.info(f"ORDER: {signal_id} | WAITING_FOR_FILL | Order accepted by IBKR, waiting for execution...")
@@ -1409,14 +1570,12 @@ def process_order_from_queue(order_item: Dict[str, Any]):
             # For exit orders, this is critical - implement retry logic
             if order_data.get('action') == 'EXIT':
                 signal_logger.critical(f"ORDER: {signal_id} | EXIT_ORDER_FAILED | CRITICAL: Exit order failed - manual intervention required!")
-                logger.critical(f"EXIT order {order_id} FAILED - manual intervention required!")
-                # TODO: Trigger "raise hell" alerts
-
-        # Get and publish updated account state
-        # TODO: Update get_account_state() to work with broker pool
-        # account_state = get_account_state()
-        # if account_state:
-        #     publish_account_update(account_state)
+                logger.critical(f"🚨 EXIT order {order_id} FAILED - manual intervention required!")
+                logger.critical(f"   Symbol: {order_data.get('instrument')}")
+                logger.critical(f"   Quantity: {order_data.get('quantity')}")
+                logger.critical(f"   Account: {order_data.get('account')}")
+                logger.critical(f"   ⚠️  POSITION MAY STILL BE OPEN - CHECK MANUALLY ⚠️")
+                # TODO Phase 1.5: Send Telegram alert (will be implemented next)
 
         logger.debug(f"Completed processing order {order_id}")
 

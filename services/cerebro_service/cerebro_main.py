@@ -131,7 +131,8 @@ USE_MOCK_BROKER = os.getenv('USE_MOCK_BROKER', 'false').lower() == 'true'
 broker_adapter = CerebroBrokerAdapter(broker_name="IBKR", use_mock=USE_MOCK_BROKER)
 
 # Initialize Precision Service for quantity normalization
-precision_service = get_precision_service(PROJECT_ROOT)
+# Initialize precision service (MongoDB-based cache)
+precision_service = get_precision_service()  # Uses default MongoDB URI from env
 
 
 def round_quantity_for_instrument(quantity: float, instrument_type: str) -> float:

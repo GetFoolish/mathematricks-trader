@@ -400,3 +400,167 @@ class TelegramNotifier:
             return "<b>📋 Signal Details:</b>\n" + "\n".join(signal_details)
         else:
             return "<b>📋 Signal Details:</b>\n  • No signal data"
+    # ========================================================================
+    # ORDER LIFECYCLE NOTIFICATIONS (for execution service)
+    # ========================================================================
+
+    def notify_order_placed(
+        self,
+        order_id: str,
+        symbol: str,
+        side: str,
+        quantity: int,
+        account: str,
+        instrument_type: str = "STOCK"
+    ) -> bool:
+        """
+        Notify when an order is placed with broker.
+
+        Args:
+            order_id: Order ID
+            symbol: Instrument symbol
+            side: BUY or SELL
+            quantity: Order quantity
+            account: Account ID
+            instrument_type: Type of instrument
+
+        Returns:
+            True if sent successfully
+        """
+        try:
+            side_icon = "🟢" if side.upper() == "BUY" else "🔴"
+            message = f"""
+{side_icon} <b>ORDER PLACED</b>
+
+📊 <b>Symbol:</b> {symbol}
+📈 <b>Side:</b> {side}
+📦 <b>Quantity:</b> {quantity}
+💼 <b>Account:</b> {account}
+🔖 <b>Order ID:</b> {order_id}
+🕐 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            return self.send_message(message)
+
+        except Exception as e:
+            logger.error(f"Error formatting order placed notification: {e}")
+            return False
+
+    def notify_order_filled(
+        self,
+        order_id: str,
+        symbol: str,
+        side: str,
+        quantity: int,
+        avg_fill_price: float,
+        commission: float,
+        account: str
+    ) -> bool:
+        """
+        Notify when an order is filled.
+
+        Args:
+            order_id: Order ID
+            symbol: Instrument symbol
+            side: BUY or SELL
+            quantity: Filled quantity
+            avg_fill_price: Average fill price
+            commission: Commission paid
+            account: Account ID
+
+        Returns:
+            True if sent successfully
+        """
+        try:
+            side_icon = "🟢" if side.upper() == "BUY" else "🔴"
+            total_value = quantity * avg_fill_price
+            message = f"""
+✅ <b>ORDER FILLED</b>
+
+📊 <b>Symbol:</b> {symbol}
+📈 <b>Side:</b> {side_icon} {side}
+📦 <b>Quantity:</b> {quantity}
+💵 <b>Avg Price:</b> ${avg_fill_price:.2f}
+💰 <b>Total:</b> ${total_value:,.2f}
+💸 <b>Commission:</b> ${commission:.2f}
+💼 <b>Account:</b> {account}
+🔖 <b>Order ID:</b> {order_id}
+🕐 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            return self.send_message(message)
+
+        except Exception as e:
+            logger.error(f"Error formatting order filled notification: {e}")
+            return False
+
+    def notify_order_rejected(
+        self,
+        order_id: str,
+        symbol: str,
+        side: str,
+        quantity: int,
+        reason: str,
+        account: str
+    ) -> bool:
+        """
+        Notify when an order is rejected.
+
+        Args:
+            order_id: Order ID
+            symbol: Instrument symbol
+            side: BUY or SELL
+            quantity: Order quantity
+            reason: Rejection reason
+            account: Account ID
+
+        Returns:
+            True if sent successfully
+        """
+        try:
+            message = f"""
+❌ <b>ORDER REJECTED</b>
+
+📊 <b>Symbol:</b> {symbol}
+📈 <b>Side:</b> {side}
+📦 <b>Quantity:</b> {quantity}
+⚠️ <b>Reason:</b> {reason}
+💼 <b>Account:</b> {account}
+🔖 <b>Order ID:</b> {order_id}
+🕐 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            return self.send_message(message)
+
+        except Exception as e:
+            logger.error(f"Error formatting order rejected notification: {e}")
+            return False
+
+    def notify_market_data_alert(
+        self,
+        symbol: str,
+        issue: str,
+        details: str
+    ) -> bool:
+        """
+        Notify about market data issues.
+
+        Args:
+            symbol: Instrument symbol
+            issue: Issue description
+            details: Additional details
+
+        Returns:
+            True if sent successfully
+        """
+        try:
+            message = f"""
+⚠️ <b>MARKET DATA ALERT</b>
+
+📊 <b>Symbol:</b> {symbol}
+🔴 <b>Issue:</b> {issue}
+📝 <b>Details:</b> {details}
+🕐 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            return self.send_message(message)
+
+        except Exception as e:
+            logger.error(f"Error formatting market data alert: {e}")
+            return False

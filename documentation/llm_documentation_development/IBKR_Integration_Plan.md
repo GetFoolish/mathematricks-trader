@@ -1,4 +1,4 @@
-# IBKR Integration Plan: 3-Mode Trading System (paper_mock | paper_real | live)
+# IBKR Integration Plan: 3-Mode Trading System (paper_mock | paper_live | live)
 
 ## Progress Tracker
 
@@ -14,7 +14,7 @@
 - [x] Created test runner script (tests/signals_testing/run_ibkr_test.py)
 - [x] Created account setup script (scripts/setup_ibkr_test_account.py)
 - [x] Created IBKR_Paper_Test account in MongoDB (ID: 696815ae81685caa0273b0f1)
-  - Mode: paper_real
+  - Mode: paper_live
   - Initial balance: $100,000
 - [x] Run initial test (expected to fail) - COMPLETED
   - **Test Results** (2026-01-14 23:17):
@@ -68,10 +68,10 @@
 ## Overview
 Integrate IBKR (InteractiveBrokers) with a flexible 3-mode system that supports:
 - **paper_mock**: Fake pricing + mock broker orders (current test mode)
-- **paper_real**: LIVE pricing from IBKR + mock broker orders (NEW - for realistic testing)
+- **paper_live**: LIVE pricing from IBKR + mock broker orders (NEW - for realistic testing)
 - **live**: Live pricing + real IBKR orders (production trading)
 
-**Goal**: Enable testing with IBKR paper account first, then transition to live account, while maintaining a paper_real mode for ongoing safe testing with real market data.
+**Goal**: Enable testing with IBKR paper account first, then transition to live account, while maintaining a paper_live mode for ongoing safe testing with real market data.
 
 ---
 
@@ -85,7 +85,7 @@ Broker Pool: {account_id → broker_instance}
 Mode Router (reads 'mode' from trading_accounts collection)
     ↓
 ┌──────────────┬──────────────┬──────────────┐
-│ paper_mock   │ paper_real   │    live      │
+│ paper_mock   │ paper_live   │    live      │
 ├──────────────┼──────────────┼──────────────┤
 │ Mock Pricing │ IBKR Pricing │ IBKR Pricing │
 │ Mock Orders  │ Mock Orders  │ IBKR Orders  │
@@ -95,7 +95,7 @@ Mode Router (reads 'mode' from trading_accounts collection)
 **Key Design Decision**: Use a `BrokerModeAdapter` wrapper class that:
 - Wraps real broker + mock broker instances
 - Routes `place_order()` calls based on mode
-- For `paper_real`: fetches live prices from IBKR, sends orders to Mock
+- For `paper_live`: fetches live prices from IBKR, sends orders to Mock
 
 ---
 
@@ -112,7 +112,7 @@ Mode Router (reads 'mode' from trading_accounts collection)
 db.trading_accounts.insertOne({
   "account_id": "IBKR_Paper_Test",
   "broker": "IBKR",
-  "mode": "paper_real",  // Start with paper_real mode
+  "mode": "paper_live",  // Start with paper_live mode
   "authentication_details": {
     "host": "127.0.0.1",
     "port": 4002,  // Paper port
@@ -512,7 +512,7 @@ sleep 30  # Wait for startup
 .venv/bin/python tests/signals_testing/run_ibkr_test.py
 ```
 
-**Expected Failure**: Account has `mode: "paper_real"` but execution service doesn't know how to handle it yet.
+**Expected Failure**: Account has `mode: "paper_live"` but execution service doesn't know how to handle it yet.
 
 ---
 
@@ -531,14 +531,14 @@ class BrokerModeAdapter(AbstractBroker):
     def __init__(self, real_broker, mock_broker, mode: str):
         self.real_broker = real_broker  # IBKR instance
         self.mock_broker = mock_broker  # Mock instance
-        self.mode = mode  # "paper_mock" | "paper_real" | "live"
+        self.mode = mode  # "paper_mock" | "paper_live" | "live"
 
     def place_order(self, order):
         if self.mode == "live":
             return self.real_broker.place_order(order)
-        else:  # paper_mock or paper_real
-            # For paper_real, enrich with live pricing
-            if self.mode == "paper_real":
+        else:  # paper_mock or paper_live
+            # For paper_live, enrich with live pricing
+            if self.mode == "paper_live":
                 order = self._enrich_with_real_pricing(order)
             return self.mock_broker.place_order(order)
 
@@ -561,7 +561,7 @@ class BrokerModeAdapter(AbstractBroker):
 - `place_order()` - Route to mock/real based on mode
 - `get_account_balance()` - Route to mock/real
 - `get_open_positions()` - Route to mock/real
-- `_enrich_with_real_pricing()` - Fetch live price from IBKR for paper_real mode
+- `_enrich_with_real_pricing()` - Fetch live price from IBKR for paper_live mode
 
 #### 1.3 Add Market Price Method to IBKR Broker
 **File**: `services/brokers/ibkr/ibkr_broker.py`
@@ -570,7 +570,7 @@ class BrokerModeAdapter(AbstractBroker):
 ```python
 def get_market_price(self, symbol: str, instrument_type: str) -> float:
     """
-    Get current market price for instrument (for paper_real mode).
+    Get current market price for instrument (for paper_live mode).
 
     Returns:
         Mid-price (bid+ask)/2 or last traded price
@@ -617,7 +617,7 @@ def initialize_broker_pool():
             }
             broker_instance = BrokerFactory.create_broker(broker_config)
 
-        elif mode == 'paper_real':
+        elif mode == 'paper_live':
             # Create BOTH IBKR + Mock, wrap in adapter
             real_config = {
                 "broker": "IBKR",
@@ -631,7 +631,7 @@ def initialize_broker_pool():
             }
             real_broker = BrokerFactory.create_broker(real_config)
             mock_broker = BrokerFactory.create_broker(mock_config)
-            broker_instance = BrokerModeAdapter(real_broker, mock_broker, mode='paper_real')
+            broker_instance = BrokerModeAdapter(real_broker, mock_broker, mode='paper_live')
 
         elif mode == 'live':
             # Create only IBKR broker
@@ -778,7 +778,7 @@ IBKR_LIVE_PASSWORD=Gagan114#
 ### Phase 3: Live Mode Testing (After Paper Tests Pass)
 
 #### 3.1 Switch to Live Mode
-**ONLY after paper_real tests work perfectly**
+**ONLY after paper_live tests work perfectly**
 
 **Step 1**: Update account mode
 ```javascript
@@ -831,7 +831,7 @@ The following testing sections were consolidated into Phase 2-3:
 
 **Phase 0**: Write ALL tests and test infrastructure
 **Phase 1**: Implement code to make tests pass (adapter, broker pool, safety features)
-**Phase 2**: Debug iteratively until paper_real tests pass
+**Phase 2**: Debug iteratively until paper_live tests pass
 **Phase 3**: Switch to live mode and test with real broker (1 signal first)
 
 This ensures we have clear success criteria and avoid over-engineering.
@@ -906,13 +906,13 @@ If issues arise:
 ## Risk Mitigation
 
 ### Edge Cases Handled
-1. **IB Gateway disconnect during paper_real**: Fallback to mock pricing with warning
+1. **IB Gateway disconnect during paper_live**: Fallback to mock pricing with warning
 2. **Mode mismatch**: Validate `IBKR_TRADING_MODE` matches account mode
 3. **Partial fills**: Already handled by existing `update_signal_store_with_execution()`
 4. **Connection retries**: Existing IBKR broker handles Error 326 (client_id in use)
 
 ### Testing Strategy
-- Start with paper_real mode (safest - real pricing, mock orders)
+- Start with paper_live mode (safest - real pricing, mock orders)
 - Test all 5 asset types before moving to live
 - Run single signal in live mode first before full test suite
 - Monitor VNC throughout for visual confirmation
@@ -921,9 +921,9 @@ If issues arise:
 
 ## Next Steps After Implementation
 
-1. **Phase 1 Testing**: Implement through Phase 2, test paper_real mode with all 5 signals
+1. **Phase 1 Testing**: Implement through Phase 2, test paper_live mode with all 5 signals
 2. **Phase 2 Validation**: Verify realistic pricing, no real orders submitted
-3. **Phase 3 Live Prep**: Only proceed to live after 100% confidence in paper_real results
+3. **Phase 3 Live Prep**: Only proceed to live after 100% confidence in paper_live results
 4. **Phase 4 Live Test**: Single AAPL stock signal in live mode
 5. **Phase 5 Full Live**: All 5 asset types in live mode (if Phase 4 succeeds)
 

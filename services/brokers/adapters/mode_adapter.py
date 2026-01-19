@@ -167,6 +167,7 @@ class BrokerModeAdapter(AbstractBroker):
         try:
             symbol = order.get('instrument')
             instrument_type = order.get('instrument_type', 'STOCK')
+            order_side = order.get('side', 'BUY')
 
             # Get live market price from real broker
             real_price = self.get_market_price(symbol, instrument_type)
@@ -176,11 +177,15 @@ class BrokerModeAdapter(AbstractBroker):
             enriched_order['price'] = real_price
             enriched_order['_price_source'] = 'real_broker'
 
-            logger.info(f"Enriched {symbol} with real market price: ${real_price:.2f}")
+            logger.info(
+                f"📈 [paper_live] Enriched {order_side} {symbol} order: "
+                f"price=${real_price:.2f} (from real broker), "
+                f"quantity={order.get('quantity', 'N/A')}"
+            )
             return enriched_order
 
         except Exception as e:
-            logger.warning(f"Failed to enrich with real pricing: {e}. Falling back to mock pricing.")
+            logger.warning(f"⚠️  Failed to enrich with real pricing: {e}. Falling back to mock pricing.")
             return order  # Return original order, let mock broker use its own pricing
 
     def get_market_price(self, symbol: str, instrument_type: str) -> float:

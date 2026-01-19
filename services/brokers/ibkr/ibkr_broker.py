@@ -942,13 +942,35 @@ class IBKRBroker(AbstractBroker):
             # Cancel market data subscription
             self.ib.cancelMktData(contract)
 
+            # Enhanced logging with data quality metrics
+            spread = None
+            spread_pct = None
+            if ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
+                spread = ticker.ask - ticker.bid
+                spread_pct = (spread / ticker.bid) * 100 if ticker.bid > 0 else 0
+
+            # Check if data is stale (ticker.time is the timestamp)
+            data_age_ms = None
+            if ticker.time:
+                data_age_ms = (datetime.now() - ticker.time).total_seconds() * 1000
+
             # Return mid-price if available, otherwise last price
             if ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
                 price = (ticker.bid + ticker.ask) / 2
-                logger.info(f"Market price for {symbol}: ${price:.2f} (bid={ticker.bid}, ask={ticker.ask})")
+                logger.info(
+                    f"📊 Market data for {symbol}: "
+                    f"mid=${price:.2f}, bid=${ticker.bid:.2f}, ask=${ticker.ask:.2f}, "
+                    f"last=${ticker.last if ticker.last else 'N/A'}, "
+                    f"spread=${spread:.4f} ({spread_pct:.3f}%), "
+                    f"age={data_age_ms:.0f}ms" if data_age_ms else f"age=N/A"
+                )
                 return price
             elif ticker.last and ticker.last > 0:
-                logger.info(f"Market price for {symbol}: ${ticker.last:.2f} (last price)")
+                logger.warning(
+                    f"⚠️  Using last price for {symbol} (no bid/ask): "
+                    f"last=${ticker.last:.2f}, "
+                    f"age={data_age_ms:.0f}ms" if data_age_ms else f"age=N/A"
+                )
                 return ticker.last
             else:
                 raise BrokerAPIError(
