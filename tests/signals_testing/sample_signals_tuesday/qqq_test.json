@@ -1,0 +1,44 @@
+[
+  {
+    "strategy_name": "IBKR_Test_Stock",
+    "passphrase": "test_password_123",
+    "signal_type": "ENTRY",
+    "entry_name": "$QQQ_Tuesday_1",
+    "account_equity": 1000000,
+    "signal_legs": [{
+      "instrument": "QQQ",
+      "instrument_type": "STOCK",
+      "action": "BUY",
+      "direction": "LONG",
+      "quantity": 5,
+      "order_type": "MARKET",
+      "price": 510.25,
+      "environment": "staging"
+    }],
+    "wait": 10,
+    "metadata": {
+      "test_type": "high_liquidity_tech",
+      "description": "QQQ - Nasdaq-100 ETF (tech sector exposure)"
+    }
+  },
+  {
+    "strategy_name": "IBKR_Test_Stock",
+    "passphrase": "test_password_123",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$QQQ_Tuesday_1",
+    "signal_legs": [{
+      "instrument": "QQQ",
+      "instrument_type": "STOCK",
+      "action": "SELL",
+      "direction": "SHORT",
+      "quantity": 5,
+      "order_type": "MARKET",
+      "price": 512.00,
+      "environment": "staging"
+    }],
+    "metadata": {
+      "test_type": "high_liquidity_tech_exit",
+      "description": "Exit QQQ position - verify position closure"
+    }
+  }
+]

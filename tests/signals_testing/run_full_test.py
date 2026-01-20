@@ -203,6 +203,12 @@ Test Results:
     )
     
     parser.add_argument(
+        "--file",
+        dest="file_path",
+        help="Path to a specific JSON file to send (overrides --folder)"
+    )
+    
+    parser.add_argument(
         "--seed",
         type=int,
         dest="seed",
@@ -240,23 +246,49 @@ Test Results:
 
     args = parser.parse_args()
     
-    # Validate folder exists
-    if not os.path.isdir(args.folder_path):
-        print(f"❌ Folder not found: {args.folder_path}")
-        sys.exit(1)
+    # Handle --file vs --folder
+    if args.file_path:
+        # Single file mode
+        if not os.path.isfile(args.file_path):
+            print(f"❌ File not found: {args.file_path}")
+            sys.exit(1)
+        
+        # Create a temporary folder with just this file
+        import tempfile
+        import shutil
+        temp_dir = tempfile.mkdtemp()
+        temp_file = os.path.join(temp_dir, os.path.basename(args.file_path))
+        shutil.copy(args.file_path, temp_file)
+        folder_path = temp_dir
+        cleanup_temp = True
+    else:
+        # Folder mode
+        folder_path = args.folder_path
+        cleanup_temp = False
+        
+        # Validate folder exists
+        if not os.path.isdir(folder_path):
+            print(f"❌ Folder not found: {folder_path}")
+            sys.exit(1)
     
     # Convert delay=0 to None (use signal's wait value)
     delay = None if args.delay == 0 else args.delay
     
-    # Run test
-    exit_code = run_test(
-        folder_path=args.folder_path,
-        seed=args.seed,
-        delay=delay,
-        output_dir=args.output_dir,
-        signal_count=args.signal_count,
-        pause_and_play=args.pause_and_play
-    )
+    try:
+        # Run test
+        exit_code = run_test(
+            folder_path=folder_path,
+            seed=args.seed,
+            delay=delay,
+            output_dir=args.output_dir,
+            signal_count=args.signal_count,
+            pause_and_play=args.pause_and_play
+        )
+    finally:
+        # Clean up temp directory if we created one
+        if cleanup_temp:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
     
     sys.exit(exit_code)
 

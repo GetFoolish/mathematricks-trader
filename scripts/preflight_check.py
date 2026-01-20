@@ -206,6 +206,95 @@ class PreflightChecker:
         except Exception as e:
             return False, f"Error checking IB Gateway: {str(e)}"
 
+    def check_market_data_connection(self) -> Tuple[bool, str]:
+        """Check market data by fetching AAPL price for each account"""
+        try:
+            if not self.test_accounts:
+                return False, "No test accounts configured"
+            
+            # Import here to avoid issues if ib_insync not installed
+            sys.path.insert(0, PROJECT_ROOT)
+            from services.brokers.ibkr.ibkr_broker import IBKRBroker
+            from ib_insync import Stock
+            
+            results = []
+            all_ok = True
+            
+            for account_id in self.test_accounts:
+                # Get IB Gateway Docker container port mapping
+                try:
+                    docker_result = subprocess.run(
+                        ['docker', 'ps', '--filter', 'name=ib-gateway', '--format', '{{.Ports}}'],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    
+                    # Parse port mapping (e.g., "0.0.0.0:62772->4004/tcp")
+                    ports_output = docker_result.stdout.strip()
+                    host_port = None
+                    for port_map in ports_output.split(','):
+                        if '->4004/tcp' in port_map or '->4002/tcp' in port_map:
+                            # Extract host port from "0.0.0.0:62772->4004/tcp"
+                            host_port = int(port_map.split(':')[1].split('->')[0])
+                            break
+                    
+                    if not host_port:
+                        results.append(f"{account_id}: IB Gateway port not found")
+                        all_ok = False
+                        continue
+                    
+                    # Build broker config for host connection
+                    config = {
+                        'broker': 'IBKR',
+                        'account_id': account_id,
+                        'host': '127.0.0.1',
+                        'port': host_port,
+                        'client_id': 99,  # Unique client ID for preflight
+                    }
+                    
+                    # Test market data connection
+                    broker = IBKRBroker(config)
+                    broker.connect()
+                    broker.ib.reqMarketDataType(1)  # Request live data
+                    broker.ib.sleep(0.5)
+                    
+                    # Create contract and request data
+                    contract = Stock('AAPL', 'SMART', 'USD')
+                    broker.ib.qualifyContracts(contract)
+                    ticker = broker.ib.reqMktData(contract, '', False, False)
+                    
+                    # Wait for data (max 3 seconds)
+                    price_found = False
+                    for _ in range(30):
+                        broker.ib.sleep(0.1)
+                        if ticker.bid or ticker.ask or ticker.last:
+                            mid = (ticker.bid + ticker.ask)/2 if (ticker.bid and ticker.ask) else ticker.last
+                            results.append(f"{account_id}: AAPL=${mid:.2f}")
+                            price_found = True
+                            break
+                    
+                    broker.ib.cancelMktData(contract)
+                    broker.disconnect()
+                    
+                    if not price_found:
+                        results.append(f"{account_id}: no market data")
+                        all_ok = False
+                        
+                except subprocess.TimeoutExpired:
+                    results.append(f"{account_id}: Docker timeout")
+                    all_ok = False
+                except Exception as e:
+                    results.append(f"{account_id}: {str(e)[:50]}")
+                    all_ok = False
+            
+            if all_ok:
+                return True, f"Market data streaming: {', '.join(results)}"
+            else:
+                return False, f"CRITICAL: Market data NOT streaming ({', '.join(results)}). Check IBKR subscription & permissions."
+        except Exception as e:
+            return False, f"Error checking market data: {str(e)}"
+
     def check_market_hours(self) -> Tuple[bool, str]:
         """Check if market is open (9:30 AM - 4:00 PM ET, weekdays)"""
         try:
@@ -414,13 +503,14 @@ class PreflightChecker:
         self.check("1. Docker Services Running", self.check_docker_services)
         self.check("2. MongoDB Connected", self.check_mongodb_connection)
         self.check("3. IB Gateway Connected", self.check_ib_gateway_connected)
-        self.check("4. Market Hours", self.check_market_hours)
-        self.check("5. Account Configuration", self.check_account_config)
-        self.check("6. Account Balance", self.check_account_balance)
-        self.check("7. Strategies Exist and Mapped", self.check_strategies_exist)
-        self.check("8. Service Health Endpoints", self.check_service_health)
-        self.check("9. Test Signal Files", self.check_test_signals_exist)
-        self.check("10. Clean Slate (No Stale Data)", self.check_clean_slate)
+        self.check("4. Market Data Connection (AAPL Price)", self.check_market_data_connection)
+        self.check("5. Market Hours", self.check_market_hours)
+        self.check("6. Account Configuration", self.check_account_config)
+        self.check("7. Account Balance", self.check_account_balance)
+        self.check("8. Strategies Exist and Mapped", self.check_strategies_exist)
+        self.check("9. Service Health Endpoints", self.check_service_health)
+        self.check("10. Test Signal Files", self.check_test_signals_exist)
+        self.check("11. Clean Slate (No Stale Data)", self.check_clean_slate)
         
         # Summary
         print(f"\n{BOLD}{BLUE}{'='*70}{RESET}")

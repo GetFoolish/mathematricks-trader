@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
@@ -121,8 +122,77 @@ def clear_test_data():
             check=True,
             capture_output=True
         )
-        time.sleep(3)  # Wait for service to restart
-        print("  execution-service restarted")
+        print("  execution-service restart initiated...")
+        
+        # Get the restart timestamp to filter logs
+        restart_timestamp = datetime.now()
+        
+        # Wait for service to be fully operational
+        print("  Waiting for execution-service to be ready...")
+        print("  (Note: IB Gateway initialization takes ~60s, please be patient)")
+        max_wait = 150  # 2.5 minutes max
+        wait_interval = 5  # Check every 5 seconds
+        elapsed = 0
+        
+        change_stream_ready = False
+        execution_ready = False
+        
+        while elapsed < max_wait:
+            time.sleep(wait_interval)
+            elapsed += wait_interval
+            
+            current_time = datetime.now().strftime("%H:%M:%S")
+            
+            # Check if container is running
+            try:
+                result = subprocess.run(
+                    ["docker", "inspect", "--format", "{{.State.Status}}", 
+                     "mathematricks-trader-execution-service-1"],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                status = result.stdout.strip()
+                
+                if status != "running":
+                    print(f"  [{current_time}] Waiting for container to start (status: {status})...")
+                    continue
+                
+                # Container is running, check RECENT logs (since restart) for readiness signals
+                # Use --since parameter to only get logs from after the restart
+                since_seconds = int((datetime.now() - restart_timestamp).total_seconds()) + 5
+                result = subprocess.run(
+                    ["docker", "logs", "--since", f"{since_seconds}s", 
+                     "mathematricks-trader-execution-service-1"],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                
+                logs = result.stdout + result.stderr
+                
+                # Check for BOTH critical readiness signals in RECENT logs only
+                change_stream_ready = "MongoDB Change Stream connected for trading_orders" in logs
+                execution_ready = "Execution Service ready - listening for orders" in logs
+                
+                if change_stream_ready and execution_ready:
+                    print(f"  [{current_time}] ✅ execution-service fully restarted and ready ({elapsed}s)")
+                    break
+                else:
+                    waiting_for = []
+                    if not execution_ready:
+                        waiting_for.append("IB Gateway initialization")
+                    if not change_stream_ready:
+                        waiting_for.append("MongoDB change stream")
+                    print(f"  [{current_time}] Waiting for {' and '.join(waiting_for)} to start...")
+                    
+            except subprocess.CalledProcessError as e:
+                print(f"  [{current_time}] Check failed: {e}, retrying...")
+                continue
+        else:
+            print(f"  [{current_time}] ⚠️  Warning: execution-service not fully ready after {max_wait}s")
+            print(f"     Change stream ready: {change_stream_ready}, Execution ready: {execution_ready}")
+            
     except subprocess.CalledProcessError as e:
         print(f"  Warning: Could not restart execution-service: {e}")
     except FileNotFoundError:

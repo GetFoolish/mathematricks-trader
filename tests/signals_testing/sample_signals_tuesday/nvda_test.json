@@ -1,0 +1,44 @@
+[
+  {
+    "strategy_name": "IBKR_Test_Stock",
+    "passphrase": "test_password_123",
+    "signal_type": "ENTRY",
+    "entry_name": "$NVDA_Tuesday_1",
+    "account_equity": 1000000,
+    "signal_legs": [{
+      "instrument": "NVDA",
+      "instrument_type": "STOCK",
+      "action": "BUY",
+      "direction": "LONG",
+      "quantity": 2,
+      "order_type": "MARKET",
+      "price": 138.50,
+      "environment": "staging"
+    }],
+    "wait": 10,
+    "metadata": {
+      "test_type": "high_price_stock",
+      "description": "NVDA - High-price, volatile stock (wider spreads expected)"
+    }
+  },
+  {
+    "strategy_name": "IBKR_Test_Stock",
+    "passphrase": "test_password_123",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$NVDA_Tuesday_1",
+    "signal_legs": [{
+      "instrument": "NVDA",
+      "instrument_type": "STOCK",
+      "action": "SELL",
+      "direction": "SHORT",
+      "quantity": 2,
+      "order_type": "MARKET",
+      "price": 140.25,
+      "environment": "staging"
+    }],
+    "metadata": {
+      "test_type": "high_price_stock_exit",
+      "description": "Exit NVDA position - verify position closure"
+    }
+  }
+]

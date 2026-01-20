@@ -245,14 +245,34 @@ class MockBroker(AbstractBroker):
         # Determine fill price based on order type
         order_type = order.get('order_type', 'MARKET')
         quantity = order.get('quantity', 0)
+        instrument = order.get('instrument', 'UNKNOWN')
 
         if order_type == 'LIMIT':
             # Use limit price for LIMIT orders
-            fill_price = order.get('limit_price', 100.0)
+            fill_price = order.get('limit_price')
+            if fill_price is None:
+                raise ValueError(f"LIMIT order for {instrument} missing 'limit_price' field")
         else:
-            # MARKET order - use simple mock price
-            # In a more sophisticated version, could use actual market data
-            fill_price = order.get('price', 100.0)  # Use suggested price if available
+            # MARKET order - MUST have price from BrokerModeAdapter (paper_live) or signal
+            fill_price = order.get('price')
+            if fill_price is None:
+                # Check if this came from paper_live mode enrichment
+                price_source = order.get('_price_source')
+                if price_source:
+                    logger.critical(
+                        f"⚠️ CRITICAL: {instrument} MARKET order has _price_source={price_source} "
+                        f"but 'price' field is None! BrokerModeAdapter enrichment failed."
+                    )
+                else:
+                    logger.critical(
+                        f"⚠️ CRITICAL: {instrument} MARKET order missing 'price' field! "
+                        f"For paper_live mode, BrokerModeAdapter should enrich with live price. "
+                        f"For paper_mock mode, signal should include price."
+                    )
+                raise ValueError(
+                    f"MARKET order for {instrument} missing 'price' field. "
+                    f"Cannot execute without a price (no fallback pricing)."
+                )
 
         # Store order in memory
         self.mock_orders[broker_order_id] = {

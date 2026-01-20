@@ -3,7 +3,7 @@ Interactive Brokers (IBKR) Broker Implementation
 Uses ib_insync for connection and order management
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from ib_insync import IB, Stock, Option, Forex, Future, Crypto, MarketOrder, LimitOrder
 
@@ -103,7 +103,7 @@ class IBKRBroker(AbstractBroker):
                 self.ib.connect(self.host, self.port, clientId=current_client_id)
 
                 # Wait briefly to catch Error 326 (client_id already in use)
-                time.sleep(0.5)
+                self.ib.sleep(0.5)
 
                 if self.ib.isConnected():
                     self.client_id = current_client_id  # Update to successful client_id
@@ -118,7 +118,7 @@ class IBKRBroker(AbstractBroker):
                     if attempt < max_retries - 1:
                         logger.warning(f"⚠️ client_id={current_client_id} may be in use, trying next...")
                         self.ib.disconnect()
-                        time.sleep(0.5)
+                        self.ib.sleep(0.5)
                     continue
 
             except Exception as e:
@@ -133,7 +133,7 @@ class IBKRBroker(AbstractBroker):
                         self.ib.disconnect()
                     except:
                         pass
-                    time.sleep(0.5)
+                    self.ib.sleep(0.5)
                     continue
 
                 # Final failure
@@ -923,69 +923,101 @@ class IBKRBroker(AbstractBroker):
             BrokerConnectionError: If not connected
             BrokerAPIError: If no market data available
         """
-        try:
-            if not self.is_connected():
-                raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+        max_retries = 10
+        base_delay = 1.0  # Start with 1 second
+        
+        for attempt in range(max_retries):
+            try:
+                if not self.is_connected():
+                    raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
 
-            # Create contract for the instrument
-            contract = self._create_contract_for_pricing(symbol, instrument_type)
+                # Create contract for the instrument
+                contract = self._create_contract_for_pricing(symbol, instrument_type)
 
-            # Request market data
-            ticker = self.ib.reqMktData(contract, '', False, False)
+                # Request market data
+                ticker = self.ib.reqMktData(contract, '', False, False)
 
-            # Wait for data to populate (max 2 seconds)
-            for _ in range(20):  # 20 iterations * 0.1s = 2s max
+                # Wait for data to populate (max 5 seconds with logging)
+                if attempt > 0:
+                    logger.info(f"⏳ Waiting for market data for {symbol}... (retry {attempt}/{max_retries-1})")
+                else:
+                    logger.info(f"⏳ Waiting for market data for {symbol}...")
+                    
+                for i in range(50):  # 50 iterations * 0.1s = 5s max
+                    self.ib.sleep(0.1)  # Use ib.sleep() for event loop processing
+                    if ticker.bid or ticker.ask or ticker.last:
+                        logger.info(f"✅ Market data received after {(i+1)*0.1:.1f}s: bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}")
+                        break
+                    if i % 10 == 9:  # Log every second
+                        logger.info(f"  [{i+1}/50] Still waiting... bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}")
+
+                # Cancel market data subscription
+                self.ib.cancelMktData(contract)
+                
+                # Small delay to ensure IB processes the cancellation before next request
                 self.ib.sleep(0.1)
-                if ticker.bid or ticker.ask or ticker.last:
-                    break
 
-            # Cancel market data subscription
-            self.ib.cancelMktData(contract)
+                # Enhanced logging with data quality metrics
+                spread = None
+                spread_pct = None
+                if ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
+                    spread = ticker.ask - ticker.bid
+                    spread_pct = (spread / ticker.bid) * 100 if ticker.bid > 0 else 0
 
-            # Enhanced logging with data quality metrics
-            spread = None
-            spread_pct = None
-            if ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
-                spread = ticker.ask - ticker.bid
-                spread_pct = (spread / ticker.bid) * 100 if ticker.bid > 0 else 0
+                # Check if data is stale (ticker.time is the timestamp)
+                data_age_ms = None
+                if ticker.time:
+                    data_age_ms = (datetime.now(timezone.utc) - ticker.time).total_seconds() * 1000
 
-            # Check if data is stale (ticker.time is the timestamp)
-            data_age_ms = None
-            if ticker.time:
-                data_age_ms = (datetime.now() - ticker.time).total_seconds() * 1000
+                # Return mid-price if available, otherwise last price
+                if ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
+                    price = (ticker.bid + ticker.ask) / 2
+                    logger.info(
+                        f"📊 Market data for {symbol}: "
+                        f"mid=${price:.2f}, bid=${ticker.bid:.2f}, ask=${ticker.ask:.2f}, "
+                        f"last=${ticker.last if ticker.last else 'N/A'}, "
+                        f"spread=${spread:.4f} ({spread_pct:.3f}%), "
+                        f"age={data_age_ms:.0f}ms" if data_age_ms else f"age=N/A"
+                    )
+                    return price
+                elif ticker.last and ticker.last > 0:
+                    logger.warning(
+                        f"⚠️  Using last price for {symbol} (no bid/ask): "
+                        f"last=${ticker.last:.2f}, "
+                        f"age={data_age_ms:.0f}ms" if data_age_ms else f"age=N/A"
+                    )
+                    return ticker.last
+                else:
+                    # No data received - retry if we have attempts left
+                    if attempt < max_retries - 1:
+                        retry_delay = base_delay * (2 ** attempt)  # Exponential backoff: 1s, 2s, 4s, 8s...
+                        logger.warning(
+                            f"⚠️  No market data for {symbol} on attempt {attempt + 1}/{max_retries}. "
+                            f"Retrying in {retry_delay:.0f}s... (bid={ticker.bid}, ask={ticker.ask}, last={ticker.last})"
+                        )
+                        self.ib.sleep(retry_delay)
+                        continue
+                    else:
+                        raise BrokerAPIError(
+                            f"No market data available for {symbol} ({instrument_type}) after {max_retries} attempts. "
+                            f"bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}",
+                            broker_name="IBKR"
+                        )
 
-            # Return mid-price if available, otherwise last price
-            if ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
-                price = (ticker.bid + ticker.ask) / 2
-                logger.info(
-                    f"📊 Market data for {symbol}: "
-                    f"mid=${price:.2f}, bid=${ticker.bid:.2f}, ask=${ticker.ask:.2f}, "
-                    f"last=${ticker.last if ticker.last else 'N/A'}, "
-                    f"spread=${spread:.4f} ({spread_pct:.3f}%), "
-                    f"age={data_age_ms:.0f}ms" if data_age_ms else f"age=N/A"
-                )
-                return price
-            elif ticker.last and ticker.last > 0:
-                logger.warning(
-                    f"⚠️  Using last price for {symbol} (no bid/ask): "
-                    f"last=${ticker.last:.2f}, "
-                    f"age={data_age_ms:.0f}ms" if data_age_ms else f"age=N/A"
-                )
-                return ticker.last
-            else:
-                raise BrokerAPIError(
-                    f"No market data available for {symbol} ({instrument_type}). "
-                    f"bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}",
-                    broker_name="IBKR"
-                )
-
-        except BrokerConnectionError:
-            raise
-        except BrokerAPIError:
-            raise
-        except Exception as e:
-            logger.error(f"Error getting market price for {symbol}: {e}", exc_info=True)
-            raise BrokerAPIError(f"Failed to get market price: {str(e)}", broker_name="IBKR")
+            except BrokerConnectionError:
+                raise
+            except BrokerAPIError as e:
+                # If it's the final retry, raise the error
+                if attempt >= max_retries - 1:
+                    raise
+                # Otherwise, log and retry with exponential backoff
+                retry_delay = base_delay * (2 ** attempt)
+                logger.warning(f"⚠️  Market data error on attempt {attempt + 1}/{max_retries}: {e}. Retrying in {retry_delay:.0f}s...")
+                self.ib.sleep(retry_delay)
+                continue
+            except Exception as e:
+                logger.error(f"Error getting market price for {symbol}: {e}", exc_info=True)
+                raise BrokerAPIError(f"Failed to get market price: {str(e)}", broker_name="IBKR")
 
     def _create_contract_for_pricing(self, symbol: str, instrument_type: str):
         """

@@ -163,6 +163,8 @@ class BrokerModeAdapter(AbstractBroker):
         Fetch live market price from real broker and add to order.
 
         This enables paper_live mode: testing with real market data without risking real money.
+        
+        CRITICAL: This MUST succeed in paper_live mode, as Mock broker has no fallback pricing.
         """
         try:
             symbol = order.get('instrument')
@@ -185,8 +187,15 @@ class BrokerModeAdapter(AbstractBroker):
             return enriched_order
 
         except Exception as e:
-            logger.warning(f"⚠️  Failed to enrich with real pricing: {e}. Falling back to mock pricing.")
-            return order  # Return original order, let mock broker use its own pricing
+            logger.critical(
+                f"❌ CRITICAL: Failed to enrich {order.get('instrument')} order with real pricing in paper_live mode: {e}. "
+                f"Cannot proceed - Mock broker requires a price and has no fallback."
+            )
+            raise BrokerAPIError(
+                f"Price enrichment failed for {order.get('instrument')} in paper_live mode: {str(e)}. "
+                f"Cannot execute order without live market price.",
+                broker_name=self.real_broker.broker_name
+            )
 
     def get_market_price(self, symbol: str, instrument_type: str) -> float:
         """

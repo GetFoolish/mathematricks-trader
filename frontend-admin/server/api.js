@@ -173,40 +173,78 @@ app.get('/api/v1/activity/signals', async (req, res) => {
 });
 
 // GET /api/v1/activity/orders
-// Fetches execution orders from signal_store.legs[].execution.orders[] (CONSOLIDATED schema v3)
+// Fetches BOTH pending orders from trading_orders AND executed orders from signal_store
 app.get('/api/v1/activity/orders', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     const environment = req.query.environment;
 
-    // Query for signals with any leg having execution.orders
-    const query = {
+    const orders = [];
+
+    // PART 1: Fetch PENDING orders from trading_orders collection
+    const pendingQuery = { status: 'PENDING' };
+    if (environment) {
+      pendingQuery.environment = environment;
+    }
+
+    const pendingOrders = await tradingOrdersCollection
+      .find(pendingQuery)
+      .sort({ timestamp: -1 })
+      .limit(limit)
+      .toArray();
+
+    pendingOrders.forEach(order => {
+      // Generate shorter order ID
+      const brokerShort = (order.account_id || 'UNK').replace(/[-_]MOCK/g, '').replace(/IBKR-/g, '');
+      const shortOrderId = order.fund_id 
+        ? `${order.signal_id}_${order.fund_id}_${brokerShort}`
+        : `${order.signal_id}_${brokerShort}`;
+
+      orders.push({
+        signal_id: order.signal_id,
+        leg_id: null,
+        leg_type: order.signal_type || 'UNKNOWN',
+        order_id: shortOrderId,
+        full_order_id: order.order_id,
+        broker_order_id: order.broker_order_id || null,
+        broker: order.account_id || 'N/A',
+        fund_id: order.fund_id || null,
+        instrument: order.instrument || 'N/A',
+        signal_type: order.signal_type || 'UNKNOWN',
+        quantity_requested: order.quantity || 0,
+        quantity_filled: 0,
+        avg_fill_price: null,
+        filled_at: null,
+        status: 'PENDING',
+        environment: order.environment || 'production',
+        fills: [],
+        created_at: order.timestamp // For sorting
+      });
+    });
+
+    // PART 2: Fetch EXECUTED orders from signal_store.legs[].execution.orders[]
+    const executedQuery = {
       'legs.execution.orders': { $exists: true, $ne: [] }
     };
     if (environment) {
-      query.environment = environment;
+      executedQuery.environment = environment;
     }
 
     const signals = await signalStoreCollection
-      .find(query)
+      .find(executedQuery)
       .sort({ created_at: -1 })
       .limit(limit)
       .toArray();
 
-    // Flatten execution.orders[] from ALL legs of all signals into a single array
-    const orders = [];
     signals.forEach(signal => {
       const instrument = signal.instrument || 'N/A';
 
-      // Iterate through each leg in the legs array
       (signal.legs || []).forEach(leg => {
         if (!leg.execution || !leg.execution.orders) return;
 
         const signalType = leg.leg_type || 'UNKNOWN';
 
         leg.execution.orders.forEach(order => {
-          // Generate shorter, more readable order ID
-          // Format: {signal_id}_{fund}_{broker_short}
           const brokerShort = (order.account_id || 'UNK').replace(/[-_]MOCK/g, '').replace(/IBKR-/g, '');
           const shortOrderId = `${signal.signal_id}_${order.fund_id}_${brokerShort}`;
 
@@ -223,9 +261,9 @@ app.get('/api/v1/activity/orders', async (req, res) => {
             leg_id: leg.leg_id,
             leg_type: signalType,
             order_id: shortOrderId,
-            full_order_id: order.order_id, // Keep full ID for reference
+            full_order_id: order.order_id,
             broker_order_id: order.broker_order_id,
-            broker: order.account_id || 'N/A', // Broker/account
+            broker: order.account_id || 'N/A',
             fund_id: order.fund_id,
             instrument: instrument,
             signal_type: signalType,
@@ -235,20 +273,24 @@ app.get('/api/v1/activity/orders', async (req, res) => {
             filled_at: order.filled_at,
             status: status,
             environment: signal.environment,
-            fills: order.fills
+            fills: order.fills,
+            created_at: order.filled_at // For sorting
           });
         });
       });
     });
 
-    // Sort by filled_at descending
+    // Sort by timestamp descending (most recent first)
     orders.sort((a, b) => {
-      const timeA = a.filled_at ? new Date(a.filled_at).getTime() : 0;
-      const timeB = b.filled_at ? new Date(b.filled_at).getTime() : 0;
+      const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
       return timeB - timeA;
     });
 
-    res.json({ status: 'success', count: orders.length, orders: serializeDocument(orders) });
+    // Limit total results
+    const limitedOrders = orders.slice(0, limit);
+
+    res.json({ status: 'success', count: limitedOrders.length, orders: serializeDocument(limitedOrders) });
   } catch (error) {
     console.error('[API] Error fetching orders:', error);
     res.status(500).json({ detail: error.message });
