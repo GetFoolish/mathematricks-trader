@@ -49,7 +49,7 @@ import send_test_signal
 
 
 def run_test(folder_path: str = "sample_signals", seed: int = None, delay: int = None,
-             output_dir: str = "../../test_results", signal_count: int = None, pause_and_play: bool = False):
+             output_dir: str = "./test_results", signal_count: int = None, pause_and_play: bool = False):
     """
     Run full test suite from a signal folder
 

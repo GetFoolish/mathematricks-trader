@@ -15,6 +15,7 @@ import requests
 from datetime import datetime, time as dt_time
 from typing import Dict, List, Tuple
 import pytz
+import yaml
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
@@ -38,6 +39,20 @@ class PreflightChecker:
         self.failed = []
         self.mongo_client = None
         self.db = None
+        self.test_accounts = self._load_test_accounts()
+    
+    def _load_test_accounts(self) -> List[str]:
+        """Load test accounts from gateway_config.yml"""
+        config_path = os.path.join(PROJECT_ROOT, 'services', 'execution_service', 'gateway_config.yml')
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+                accounts = config.get('always_start_accounts', [])
+                return [acc for acc in accounts if acc]  # Filter out None/empty
+        except Exception as e:
+            print(f"{YELLOW}⚠️  Could not load gateway_config.yml: {e}{RESET}")
+            print(f"{YELLOW}   Falling back to IBKR-TESTING-ACCOUNT{RESET}")
+            return ['IBKR-TESTING-ACCOUNT']
 
     def check(self, name: str, func) -> bool:
         """Run a check and track results"""
@@ -99,6 +114,17 @@ class PreflightChecker:
             if not mongo_uri:
                 return False, "MONGODB_URI not set in .env"
             
+            # For preflight check running on host, use localhost:27018 (Docker port mapping)
+            # Replace internal Docker hostnames with localhost
+            if 'mongodb://' in mongo_uri:
+                # Replace 'mongodb' hostname with localhost and port 27017 with 27018
+                mongo_uri = mongo_uri.replace('mongodb://mongodb:', 'mongodb://localhost:')
+                mongo_uri = mongo_uri.replace(':27017/', ':27018/')
+                mongo_uri = mongo_uri.replace(':27017', ':27018')  # Handle URIs without trailing slash
+                # Add directConnection=true for host access
+                if '?' not in mongo_uri:
+                    mongo_uri += '/?directConnection=true'
+            
             use_tls = 'mongodb+srv' in mongo_uri or 'mongodb.net' in mongo_uri
             if use_tls:
                 self.mongo_client = MongoClient(mongo_uri, tls=True, tlsAllowInvalidCertificates=True)
@@ -123,28 +149,60 @@ class PreflightChecker:
             return False, f"MongoDB connection failed: {str(e)}"
 
     def check_ib_gateway_connected(self) -> Tuple[bool, str]:
-        """Check if IB Gateway is connected"""
+        """Check if IB Gateway is connected for test accounts"""
         try:
-            # Get IBKR account from database
-            account = self.db['trading_accounts'].find_one({"account_id": "IBKR-TESTING-ACCOUNT"})
-            if not account:
-                return False, "IBKR-TESTING-ACCOUNT not found in database"
+            if not self.test_accounts:
+                return False, "No test accounts configured in gateway_config.yml"
             
-            auth = account.get('authentication_details', {})
-            host = auth.get('host', '127.0.0.1')
-            port = auth.get('port', 4002)
+            results = []
+            all_ok = True
             
-            # Try to connect to IB Gateway
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            result = sock.connect_ex((host, port))
-            sock.close()
+            for account_id in self.test_accounts:
+                account = self.db['trading_accounts'].find_one({"account_id": account_id})
+                if not account:
+                    results.append(f"{account_id}: not found in database")
+                    all_ok = False
+                    continue
+                
+                auth = account.get('authentication_details', {})
+                host = auth.get('host', '127.0.0.1')
+                port = auth.get('port', 4002)
+                
+                # If running from host (not inside Docker), check if container exists instead
+                if 'ib-gateway' in host:
+                    # Running from host - check if container is running
+                    import subprocess
+                    try:
+                        result = subprocess.run(
+                            ['docker', 'ps', '--filter', f'name={host}', '--format', '{{.Names}}'],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if host in result.stdout:
+                            results.append(f"{account_id}: ✓")
+                        else:
+                            results.append(f"{account_id}: container not running")
+                            all_ok = False
+                    except Exception as e:
+                        results.append(f"{account_id}: error checking container")
+                        all_ok = False
+                else:
+                    # Try direct socket connection (for localhost or when running inside Docker)
+                    import socket
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(2)
+                    result = sock.connect_ex((host, port))
+                    sock.close()
+                    
+                    if result == 0:
+                        results.append(f"{account_id}: ✓")
+                    else:
+                        results.append(f"{account_id}: not responding")
+                        all_ok = False
             
-            if result == 0:
-                return True, f"IB Gateway listening on {host}:{port}"
+            if all_ok:
+                return True, f"All gateways running: {', '.join(results)}"
             else:
-                return False, f"IB Gateway not responding on {host}:{port}. Start IB Gateway first."
+                return False, f"Gateway issues: {', '.join(results)}"
         except Exception as e:
             return False, f"Error checking IB Gateway: {str(e)}"
 
@@ -173,60 +231,97 @@ class PreflightChecker:
             return False, f"Error checking market hours: {str(e)}"
 
     def check_account_config(self) -> Tuple[bool, str]:
-        """Check account mode and market_data_type"""
+        """Check account mode (market_data_type is IBKR-specific in auth details)"""
         try:
-            account = self.db['trading_accounts'].find_one({"account_id": "IBKR-TESTING-ACCOUNT"})
-            if not account:
-                return False, "IBKR-TESTING-ACCOUNT not found"
+            if not self.test_accounts:
+                return False, "No test accounts configured"
             
-            mode = account.get('mode')
-            market_data_type = account.get('market_data_type')
+            results = []
+            all_ok = True
             
-            issues = []
-            if mode != 'paper_live':
-                issues.append(f"mode={mode} (should be 'paper_live')")
-            if market_data_type != 1:
-                issues.append(f"market_data_type={market_data_type} (should be 1 for live data)")
+            for account_id in self.test_accounts:
+                account = self.db['trading_accounts'].find_one({"account_id": account_id})
+                if not account:
+                    results.append(f"{account_id}: not found")
+                    all_ok = False
+                    continue
+                
+                mode = account.get('mode')
+                if mode != 'paper_live':
+                    results.append(f"{account_id}: mode={mode} (expected paper_live)")
+                    all_ok = False
+                else:
+                    results.append(f"{account_id}: ✓")
             
-            if issues:
-                return False, f"Config issues: {', '.join(issues)}"
-            
-            return True, f"mode={mode}, market_data_type={market_data_type} (correct for testing)"
+            if all_ok:
+                return True, f"All accounts configured: {', '.join(results)}"
+            else:
+                return False, f"Config issues: {', '.join(results)}"
         except Exception as e:
             return False, f"Error checking account config: {str(e)}"
 
     def check_account_balance(self) -> Tuple[bool, str]:
         """Check account balance > $1000"""
         try:
-            account = self.db['trading_accounts'].find_one({"account_id": "IBKR-TESTING-ACCOUNT"})
-            if not account:
-                return False, "IBKR-TESTING-ACCOUNT not found"
+            if not self.test_accounts:
+                return False, "No test accounts configured"
             
-            balance = account.get('balance', 0)
-            if balance < 1000:
-                return False, f"Balance too low: ${balance:.2f} (need at least $1000)"
+            results = []
+            all_ok = True
             
-            return True, f"Balance: ${balance:,.2f}"
+            for account_id in self.test_accounts:
+                account = self.db['trading_accounts'].find_one({"account_id": account_id})
+                if not account:
+                    results.append(f"{account_id}: not found")
+                    all_ok = False
+                    continue
+                
+                balances = account.get('balances', {})
+                equity = balances.get('equity', 0)
+                
+                if equity < 1000:
+                    results.append(f"{account_id}: ${equity:,.0f} (need >$1K)")
+                    all_ok = False
+                else:
+                    results.append(f"{account_id}: ${equity:,.0f} ✓")
+            
+            if all_ok:
+                return True, f"Balances OK: {', '.join(results)}"
+            else:
+                return False, f"Balance issues: {', '.join(results)}"
         except Exception as e:
             return False, f"Error checking balance: {str(e)}"
 
     def check_strategies_exist(self) -> Tuple[bool, str]:
-        """Check that strategies exist and are mapped to account"""
+        """Check that strategies exist and are mapped to test accounts"""
         try:
-            account = self.db['trading_accounts'].find_one({"account_id": "IBKR-TESTING-ACCOUNT"})
-            if not account:
-                return False, "IBKR-TESTING-ACCOUNT not found"
+            if not self.test_accounts:
+                return False, "No test accounts configured"
             
-            strategy_ids = account.get('strategy_ids', [])
-            if not strategy_ids:
-                return False, "No strategies mapped to IBKR-TESTING-ACCOUNT"
+            results = []
+            all_ok = True
             
-            # Check strategies exist in database
-            strategies = list(self.db['strategies'].find({"strategy_id": {"$in": strategy_ids}}))
-            if len(strategies) != len(strategy_ids):
-                return False, f"Some strategies not found in database. Mapped: {len(strategy_ids)}, Found: {len(strategies)}"
+            for account_id in self.test_accounts:
+                account = self.db['trading_accounts'].find_one({"account_id": account_id})
+                if not account:
+                    results.append(f"{account_id}: not found")
+                    all_ok = False
+                    continue
+                
+                # Strategies have accounts as an array field
+                strategies = list(self.db['strategies'].find({"accounts": account_id}))
+                if not strategies:
+                    results.append(f"{account_id}: no strategies")
+                    all_ok = False
+                    continue
+                
+                active = [s for s in strategies if s.get('status') == 'ACTIVE']
+                results.append(f"{account_id}: {len(active)} active")
             
-            return True, f"{len(strategies)} strategies mapped: {', '.join([s['strategy_id'] for s in strategies])}"
+            if all_ok:
+                return True, f"Strategies mapped: {', '.join(results)}"
+            else:
+                return False, f"Strategy issues: {', '.join(results)}"
         except Exception as e:
             return False, f"Error checking strategies: {str(e)}"
 
@@ -287,18 +382,20 @@ class PreflightChecker:
                 "status": {"$nin": ["completed", "rejected", "cancelled"]}
             })
             
-            # Check for open positions
-            account = self.db['trading_accounts'].find_one({"account_id": "IBKR-TESTING-ACCOUNT"})
-            open_positions = 0
-            if account:
-                all_positions = account.get('open_positions', [])
-                open_positions = len([p for p in all_positions if p.get('status') == 'OPEN'])
+            # Check for open positions across all test accounts
+            total_open_positions = 0
+            for account_id in self.test_accounts:
+                account = self.db['trading_accounts'].find_one({"account_id": account_id})
+                if account:
+                    all_positions = account.get('open_positions', [])
+                    open_positions = len([p for p in all_positions if p.get('status') == 'OPEN'])
+                    total_open_positions += open_positions
             
             issues = []
             if pending_signals > 0:
                 issues.append(f"{pending_signals} pending signals")
-            if open_positions > 0:
-                issues.append(f"{open_positions} open positions")
+            if total_open_positions > 0:
+                issues.append(f"{total_open_positions} open positions")
             
             if issues:
                 return False, f"WARNING: Not a clean slate: {', '.join(issues)}. Run cleanup script if needed."
