@@ -18,6 +18,8 @@ import os
 import subprocess
 import sys
 import time
+import json
+import requests
 from datetime import datetime
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -124,18 +126,13 @@ def clear_test_data():
         )
         print("  execution-service restart initiated...")
         
-        # Get the restart timestamp to filter logs
-        restart_timestamp = datetime.now()
-        
-        # Wait for service to be fully operational
-        print("  Waiting for execution-service to be ready...")
-        print("  (Note: IB Gateway initialization takes ~60s, please be patient)")
-        max_wait = 150  # 2.5 minutes max
-        wait_interval = 5  # Check every 5 seconds
+        # Wait for service to be healthy by polling health endpoint
+        print("  Waiting for execution-service to be healthy...")
+        max_wait = 90  # 1.5 minutes max
+        wait_interval = 2  # Check every 2 seconds
         elapsed = 0
         
-        change_stream_ready = False
-        execution_ready = False
+        service_ready = False
         
         while elapsed < max_wait:
             time.sleep(wait_interval)
@@ -143,55 +140,48 @@ def clear_test_data():
             
             current_time = datetime.now().strftime("%H:%M:%S")
             
-            # Check if container is running
             try:
-                result = subprocess.run(
-                    ["docker", "inspect", "--format", "{{.State.Status}}", 
-                     "mathematricks-trader-execution-service-1"],
-                    check=True,
-                    capture_output=True,
-                    text=True
-                )
-                status = result.stdout.strip()
+                # Check health endpoint via host network (execution service exposes 8083)
+                response = requests.get('http://localhost:8083/health', timeout=2)
                 
-                if status != "running":
-                    print(f"  [{current_time}] Waiting for container to start (status: {status})...")
-                    continue
-                
-                # Container is running, check RECENT logs (since restart) for readiness signals
-                # Use --since parameter to only get logs from after the restart
-                since_seconds = int((datetime.now() - restart_timestamp).total_seconds()) + 5
-                result = subprocess.run(
-                    ["docker", "logs", "--since", f"{since_seconds}s", 
-                     "mathematricks-trader-execution-service-1"],
-                    check=True,
-                    capture_output=True,
-                    text=True
-                )
-                
-                logs = result.stdout + result.stderr
-                
-                # Check for BOTH critical readiness signals in RECENT logs only
-                change_stream_ready = "MongoDB Change Stream connected for trading_orders" in logs
-                execution_ready = "Execution Service ready - listening for orders" in logs
-                
-                if change_stream_ready and execution_ready:
-                    print(f"  [{current_time}] ✅ execution-service fully restarted and ready ({elapsed}s)")
-                    break
+                if response.status_code == 200:
+                    health_data = response.json()
+                    if health_data.get('ready'):
+                        service_ready = True
+                        brokers = health_data.get('brokers_connected', 0)
+                        pending = health_data.get('pending_orders_processed', 0)
+                        print(f"  [{current_time}] ✅ execution-service ready ({elapsed}s)")
+                        print(f"     Brokers connected: {brokers}, Pending orders processed: {pending}")
+                        break
+                    else:
+                        status = health_data.get('status', 'unknown')
+                        print(f"  [{current_time}] Waiting for service (status: {status})...")
+                elif response.status_code == 503:
+                    print(f"  [{current_time}] Service starting...")
                 else:
-                    waiting_for = []
-                    if not execution_ready:
-                        waiting_for.append("IB Gateway initialization")
-                    if not change_stream_ready:
-                        waiting_for.append("MongoDB change stream")
-                    print(f"  [{current_time}] Waiting for {' and '.join(waiting_for)} to start...")
+                    print(f"  [{current_time}] Unexpected status code: {response.status_code}")
                     
-            except subprocess.CalledProcessError as e:
+            except requests.exceptions.ConnectionError:
+                print(f"  [{current_time}] Waiting for health endpoint to be available...")
+            except requests.exceptions.Timeout:
+                print(f"  [{current_time}] Health check timeout, retrying...")
+            except Exception as e:
                 print(f"  [{current_time}] Check failed: {e}, retrying...")
-                continue
-        else:
-            print(f"  [{current_time}] ⚠️  Warning: execution-service not fully ready after {max_wait}s")
-            print(f"     Change stream ready: {change_stream_ready}, Execution ready: {execution_ready}")
+        
+        if not service_ready:
+            print(f"  [{current_time}] ⚠️  Warning: execution-service not ready after {max_wait}s")
+            print(f"     Container may still be initializing - check logs if issues occur")
+        
+        # Verify MongoDB connection with a simple query
+        print("  Verifying MongoDB connection...")
+        try:
+            # Simple ping to verify connection
+            client.admin.command('ping')
+            # Quick test query
+            db['trading_accounts'].find_one()
+            print(f"  ✅ MongoDB connection verified")
+        except Exception as e:
+            print(f"  ⚠️  Warning: MongoDB connection test failed: {e}")
             
     except subprocess.CalledProcessError as e:
         print(f"  Warning: Could not restart execution-service: {e}")

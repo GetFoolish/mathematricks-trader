@@ -16,6 +16,9 @@ import time
 import queue
 import requests
 import pytz
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+import uvicorn
 
 # Add services directory to path so we can import brokers package
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -33,6 +36,9 @@ from brokers.exceptions import (
 
 # Import Telegram notifier
 from telegram.notifier import TelegramNotifier
+
+# Import for health checks
+import socket
 
 # Load environment variables from project root
 env_path = os.path.join(PROJECT_ROOT, '.env')
@@ -130,6 +136,54 @@ gateway_controller = GatewayController()
 # Telegram Notifier
 telegram = TelegramNotifier()
 logger.info(f"Telegram notifications: {'enabled' if telegram.enabled else 'disabled'}")
+
+
+# ========================================================================
+# FASTAPI HEALTH CHECK SERVER
+# ========================================================================
+
+# Global service status
+service_status = {
+    'ready': False,
+    'broker_pool_size': 0,
+    'brokers_connected': 0,
+    'change_stream_connected': False,
+    'pending_orders_processed': 0
+}
+
+# Create FastAPI app for health checks
+app = FastAPI(title="Execution Service", version="1.0")
+
+@app.get('/health')
+def health_check():
+    """Health check endpoint"""
+    if service_status['ready']:
+        return {
+            'status': 'healthy',
+            'ready': True,
+            **service_status
+        }
+    else:
+        return JSONResponse(
+            status_code=503,
+            content={
+                'status': 'starting',
+                'ready': False,
+                **service_status
+            }
+        )
+
+@app.get('/status')
+def status_check():
+    """Detailed status endpoint"""
+    return {
+        **service_status,
+        'broker_pool': list(broker_pool.keys()) if 'broker_pool' in globals() else []
+    }
+
+def run_fastapi_server():
+    """Run FastAPI server in background thread"""
+    uvicorn.run(app, host='0.0.0.0', port=8083, log_level='error')
 
 
 # ========================================================================
@@ -408,6 +462,113 @@ def start_required_gateways(accounts: List[Dict]):
             logger.error(f"❌ Failed to start gateway for {account_id}")
 
 
+def check_gateway_health(host: str, port: int, timeout: int = 2) -> bool:
+    """
+    Check if IB Gateway API is ready by attempting an actual API connection.
+    This is more reliable than just checking if the port is open.
+    
+    Args:
+        host: Gateway hostname (container name or IP)
+        port: API port (4002 for paper, 4001 for live)
+        timeout: Connection timeout in seconds
+        
+    Returns:
+        True if gateway API is ready and responding, False otherwise
+    """
+    try:
+        from ib_insync import IB
+        
+        # Create temporary IB connection
+        ib = IB()
+        
+        # Try to connect with a short timeout
+        # Use a high client_id to avoid conflicts with actual broker connections
+        test_client_id = 9999
+        
+        try:
+            ib.connect(host, port, clientId=test_client_id, timeout=timeout)
+            
+            # If we get here, API is ready
+            is_connected = ib.isConnected()
+            ib.disconnect()
+            
+            return is_connected
+            
+        except Exception as e:
+            # API not ready yet (TimeoutError, connection refused, etc.)
+            try:
+                ib.disconnect()
+            except:
+                pass
+            return False
+            
+    except Exception:
+        # Fallback to simple socket check if ib_insync fails
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+
+
+def wait_for_gateways_ready(accounts: List[Dict], max_wait: int = 60) -> None:
+    """
+    Wait for all IBKR gateways to be ready with health checks.
+    
+    Args:
+        accounts: List of account configurations
+        max_wait: Maximum time to wait in seconds (default 60)
+    """
+    # Find all IBKR accounts that need gateways
+    ibkr_accounts = [acc for acc in accounts if acc.get('broker') == 'IBKR']
+    
+    if not ibkr_accounts:
+        logger.info("No IBKR accounts - skipping gateway health checks")
+        return
+    
+    logger.info(f"⏳ Checking health of {len(ibkr_accounts)} IB Gateway(s)...")
+    
+    start_time = time.time()
+    check_interval = 2  # Check every 2 seconds
+    
+    while time.time() - start_time < max_wait:
+        all_ready = True
+        
+        for account in ibkr_accounts:
+            account_id = account.get('account_id')
+            auth = account.get('authentication_details', {})
+            
+            # Get gateway host and port
+            host = auth.get('host', f"ib-gateway-{account_id.lower().replace('_', '-')}")
+            port = auth.get('port', 4004)  # Default to paper port
+            
+            if not check_gateway_health(host, port):
+                all_ready = False
+                elapsed = int(time.time() - start_time)
+                logger.debug(f"   Gateway {account_id} not ready yet (elapsed: {elapsed}s)")
+                break
+        
+        if all_ready:
+            elapsed = int(time.time() - start_time)
+            logger.info(f"✅ All IB Gateways ready in {elapsed} seconds")
+            # Small grace period to let API fully stabilize after first successful connection
+            if elapsed < 5:
+                grace_period = 3
+                logger.info(f"   Waiting {grace_period}s grace period for API stabilization...")
+                time.sleep(grace_period)
+            return
+        
+        time.sleep(check_interval)
+    
+    # Timeout reached
+    elapsed = int(time.time() - start_time)
+    logger.warning(f"⚠️ Gateway health check timeout after {elapsed}s - proceeding anyway")
+    logger.warning("   Some gateways may not be fully ready yet")
+
+
 def initialize_broker_pool():
     """
     Initialize broker pool by creating broker instances for all active accounts.
@@ -437,10 +598,8 @@ def initialize_broker_pool():
     # Start IBKR gateways for accounts that need them
     start_required_gateways(accounts)
     
-    # Wait for gateways to be ready
-    import time
-    logger.info("⏳ Waiting 60 seconds for IB Gateways to initialize...")
-    time.sleep(60)
+    # Wait for gateways to be ready (with health checks)
+    wait_for_gateways_ready(accounts, max_wait=60)
 
     # Create broker instance for each active account
     for account in accounts:
@@ -1605,12 +1764,19 @@ def periodic_account_updates():
 
 if __name__ == "__main__":
     logger.info("🚀 Execution Service Starting")
+    
+    # Start FastAPI health check server in background thread
+    fastapi_thread = threading.Thread(target=run_fastapi_server, daemon=True)
+    fastapi_thread.start()
+    logger.info("✅ Health check server started on port 8083")
 
     # Connect to all brokers in pool (continue even if some fail - orders will route to available brokers)
     if not connect_all_brokers():
         logger.warning("⚠️  No brokers connected - orders will queue until brokers available")
     else:
         logger.info(f"✅ Broker pool: {len(broker_pool)} broker(s) ready")
+        service_status['broker_pool_size'] = len(broker_pool)
+        service_status['brokers_connected'] = len(broker_pool)
 
     # Initialize Mock broker with empty positions
     if args.use_mock_broker:
@@ -1627,10 +1793,32 @@ if __name__ == "__main__":
         )
         logger.info(f"✅ Mock broker account '{account_id}' initialized with empty positions")
 
+    # Check for existing PENDING orders that were created before service started
+    # (MongoDB Change Streams only see NEW changes, not existing documents)
+    logger.info("Checking for existing PENDING orders...")
+    pending_count = 0
+    try:
+        pending_orders = list(trading_orders_collection.find({'status': 'PENDING'}).sort('created_at', 1))
+        if pending_orders:
+            pending_count = len(pending_orders)
+            logger.info(f"Found {pending_count} existing PENDING orders - processing them now")
+            for order in pending_orders:
+                # Wrap in same format as change stream events
+                order_queue.put({'order_data': order})
+        else:
+            logger.info("No existing PENDING orders found")
+    except Exception as e:
+        logger.error(f"Error checking for existing PENDING orders: {e}")
+    
+    service_status['pending_orders_processed'] = pending_count
+    
     # Start MongoDB Change Stream watcher in background thread
     orders_watcher_thread = threading.Thread(target=watch_trading_orders, daemon=True)
     orders_watcher_thread.start()
+    service_status['change_stream_connected'] = True
 
+    # Mark service as ready
+    service_status['ready'] = True
     logger.info("✅ Execution Service ready - listening for orders via MongoDB Change Streams")
     logger.info("*" * 50)
     try:

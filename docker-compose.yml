@@ -34,6 +34,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock  # For gateway management
     ports:
       - "5679:5679" # Debug port
+      - "8083:8083" # Health check endpoint
     depends_on:
       mongodb:
         condition: service_healthy
