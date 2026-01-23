@@ -6,7 +6,7 @@ import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
 import { Dashboards } from './pages/Dashboards';
 import { Allocations } from './pages/Allocations';
-import { Activity } from './pages/Activity';
+import { Activity } from './pages/ActivityNew';
 import { Strategies } from './pages/Strategies';
 import { StrategyApproval } from './pages/StrategyApproval';
 import { Accounts } from './pages/Accounts';

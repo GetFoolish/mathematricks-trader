@@ -6,6 +6,8 @@ Monitors MongoDB for new signals and processes them
 import time
 import logging
 import datetime
+import os
+import requests
 from typing import Optional, Callable
 from dateutil import parser
 from pymongo import MongoClient
@@ -85,13 +87,14 @@ class MongoDBWatcher:
         signal_id = raw_signal_doc['signalID']
         leg_id = f"{signal_id}__{leg_type.lower()}_{leg_index}"
 
+        now = datetime.datetime.utcnow()
         return {
             "leg_id": leg_id,
             "leg_type": leg_type,
             "leg_index": leg_index,
             "raw": {
                 "_id": raw_signal_doc['_id'],  # Reference to trading_signals_raw
-                "received_at": raw_signal_doc.get('received_at', datetime.datetime.utcnow()),
+                "received_at": raw_signal_doc.get('received_at', now),
                 "sent_epoch": raw_signal_doc.get('signal_sent_EPOCH'),
                 "entry_name": raw_signal_doc.get('entry_name'),
                 "exit_name": raw_signal_doc.get('exit_name'),
@@ -101,7 +104,15 @@ class MongoDBWatcher:
             },
             "decision": None,  # Will be populated by cerebro
             "execution": None,  # Will be populated by execution service
-            "created_at": datetime.datetime.utcnow()
+            "processing_timestamps": {
+                "signal_received": raw_signal_doc.get('received_at', now),  # When signal was first received
+                "signal_ingestion_processed": now,  # When signal_ingestion created this leg
+                "cerebro_processed": None,  # Will be set by cerebro
+                "execution_started": None,  # Will be set by execution service
+                "execution_completed": None  # Will be set by execution service
+            },
+            "processing_lag": None,  # Will be calculated after execution completes
+            "created_at": now
         }
 
     def _build_signal_store_doc(self, raw_signal_doc: dict, signal_array: list) -> dict:
@@ -133,8 +144,10 @@ class MongoDBWatcher:
             # === IDENTITY ===
             "signal_id": signal_id,  # Signal ID from ENTRY leg
             "base_signal_id": signal_id,  # Same as signal_id for ENTRY, used to find parent for EXIT
+            "entry_name": raw_signal_doc.get('entry_name'),  # entry_name for linking EXIT signals
             "strategy_id": raw_signal_doc['strategy_name'],
             "environment": raw_signal_doc.get('environment', 'production'),
+            "mode": raw_signal_doc.get('mode'),  # Trading mode (mock_mock, mock_live, paper_live, live_live)
             "instrument": instrument,
 
             # === LEGS ARRAY (ONE DOCUMENT PER SIGNAL!) ===
@@ -230,7 +243,10 @@ class MongoDBWatcher:
 
                     if is_exit_or_scale and parent_signal_id:
                         # EXIT/SCALE: Find parent signal and append leg
-                        parent_doc = self.signal_store_collection.find_one({"base_signal_id": parent_signal_id})
+                        # Try to find by entry_name first (matches entry_signal_id), fallback to base_signal_id
+                        parent_doc = self.signal_store_collection.find_one({"entry_name": parent_signal_id})
+                        if not parent_doc:
+                            parent_doc = self.signal_store_collection.find_one({"base_signal_id": parent_signal_id})
 
                         if parent_doc:
                             # Calculate leg index
@@ -401,7 +417,10 @@ class MongoDBWatcher:
 
                         if is_exit_or_scale and parent_signal_id:
                             # EXIT/SCALE: Find parent signal and append leg
-                            parent_doc = self.signal_store_collection.find_one({"base_signal_id": parent_signal_id})
+                            # Try to find by entry_name first (matches entry_signal_id), fallback to base_signal_id
+                            parent_doc = self.signal_store_collection.find_one({"entry_name": parent_signal_id})
+                            if not parent_doc:
+                                parent_doc = self.signal_store_collection.find_one({"base_signal_id": parent_signal_id})
 
                             if parent_doc:
                                 # Calculate leg index
@@ -444,6 +463,70 @@ class MongoDBWatcher:
                             {"_id": raw_signal_doc['_id']},
                             {"$set": {"mathematricks_signal_id": mathematricks_signal_id}}
                         )
+
+                        # ============================================================
+                        # CALL CEREBRO API (Direct API call with retry logic)
+                        # ============================================================
+                        cerebro_success = False
+                        max_retries = 3
+                        retry_delays = [0.5, 2, 5]  # exponential backoff
+                        
+                        for attempt in range(max_retries):
+                            try:
+                                cerebro_url = os.getenv('CEREBRO_SERVICE_URL', 'http://cerebro-service:8082')
+                                api_endpoint = f"{cerebro_url}/api/v1/process-signal"
+                                
+                                payload = {
+                                    "signal_store_id": str(mathematricks_signal_id),
+                                    "leg_index": leg_index if is_exit_or_scale else 0
+                                }
+                                
+                                if attempt == 0:
+                                    logger.info(f"📤 Calling Cerebro API: {api_endpoint}")
+                                else:
+                                    logger.info(f"🔄 Retry attempt {attempt + 1}/{max_retries} for Cerebro API")
+                                logger.debug(f"   Payload: {payload}")
+                                
+                                # Timeout: 5 seconds for first attempt, 10s for retries
+                                timeout = 10 if attempt > 0 else 5
+                                response = requests.post(
+                                    api_endpoint,
+                                    json=payload,
+                                    timeout=timeout
+                                )
+                                
+                                # Check if request was accepted
+                                if response.status_code == 200:
+                                    logger.info(f"✅ Cerebro API accepted signal")
+                                    cerebro_success = True
+                                    break
+                                else:
+                                    logger.warning(f"⚠️ Cerebro API returned status {response.status_code}")
+                                    if attempt < max_retries - 1:
+                                        time.sleep(retry_delays[attempt])
+                                
+                            except requests.exceptions.ConnectionError as e:
+                                logger.warning(f"⚠️ Cerebro connection failed (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                                if attempt < max_retries - 1:
+                                    logger.info(f"   Retrying in {retry_delays[attempt]}s...")
+                                    time.sleep(retry_delays[attempt])
+                                else:
+                                    logger.error(f"❌ Cerebro not available after {max_retries} attempts")
+                                    logger.error(f"   Signal {raw_signal_doc['signalID']} may not be processed by Cerebro!")
+                            except requests.exceptions.Timeout:
+                                # Timeout is OK - Cerebro is processing, just took >timeout to respond
+                                logger.info(f"⏱️ Cerebro API timeout (processing in background)")
+                                cerebro_success = True  # Consider this a success
+                                break
+                            except requests.exceptions.RequestException as e:
+                                logger.error(f"❌ Failed to call Cerebro API: {str(e)}")
+                                if attempt < max_retries - 1:
+                                    time.sleep(retry_delays[attempt])
+                                else:
+                                    logger.error(f"   Signal {raw_signal_doc['signalID']} may not be processed by Cerebro!")
+                            except Exception as e:
+                                logger.error(f"❌ Unexpected error calling Cerebro API: {str(e)}", exc_info=True)
+                                break
 
                         # Convert to signal format for callback
                         received_time = raw_signal_doc['received_at']

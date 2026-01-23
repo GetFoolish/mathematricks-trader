@@ -1,0 +1,17 @@
+{
+  "signal_id": "test_rapid_signals_1_{{timestamp}}",
+  "strategy_id": "test_strategy_1",
+  "account_id": "IBKR-TESTING-ACCOUNT",
+  "instrument": "AAPL",
+  "instrument_type": "STOCK",
+  "signal_type": "ENTRY",
+  "direction": "LONG",
+  "signal_time": "{{current_time}}",
+  "quantity": 1,
+  "metadata": {
+    "test_name": "rapid_signals",
+    "test_category": "edge_cases",
+    "description": "Multiple signals sent within seconds - tests concurrent processing",
+    "notes": "Send this signal 3-5 times in rapid succession to test system handling"
+  }
+}

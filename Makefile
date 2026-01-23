@@ -1,4 +1,4 @@
-.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard clean-old-logs export-seed-data reseed-db test-signals
+.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard clean-old-logs export-seed-data reseed-db
 
 # Auto-detect timezone from system
 export TZ := $(shell readlink /etc/localtime 2>/dev/null | sed 's|^.*/zoneinfo/||' || echo "UTC")
@@ -25,7 +25,6 @@ help:
 	@echo "make clean-old-logs - Truncate Docker container logs (keeps containers running)"
 	@echo "make export-seed-data - Export current MongoDB data as seed data"
 	@echo "make reseed-db     - Restore MongoDB from latest seed data"
-	@echo "make test-signals  - Reseed DB, start services, and run all test signals"
 	@echo "Frontend running @ http://localhost:5173/"
 
 
@@ -142,3 +141,42 @@ test-signals:
 	@echo ""
 	@echo "🧪 Running test signals..."
 	@.venv/bin/python tests/signals_testing/run_full_test.py --folder tests/signals_testing/sample_signals
+
+# Test Framework Targets
+test:
+	@echo "🧪 Running all tests with preflight checks..."
+	@python tests/run_tests.py 9
+
+test-preflight:
+	@echo "� Running preflight checks only..."
+	@python tests/run_tests.py preflight
+
+test-comprehensive:
+	@echo "🚀 Running comprehensive test suite..."
+	@python tests/run_tests.py all
+
+test-unit:
+	@echo "🧪 Running unit tests with preflight checks..."
+	@python tests/run_tests.py 1
+
+test-integration:
+	@echo "🧪 Running integration tests with preflight checks..."
+	@python tests/run_tests.py 2
+
+test-e2e:
+	@echo "🧪 Running end-to-end tests with preflight checks..."
+	@python tests/run_tests.py 3
+
+test-fast:
+	@echo "🧪 Running fast tests with preflight checks..."
+	@python tests/run_tests.py 4
+
+test-coverage:
+	@echo "🧪 Running tests with coverage and preflight checks..."
+	@python tests/run_tests.py 8
+	@echo ""
+	@echo "📊 Coverage report generated in htmlcov/index.html"
+
+test-clean:
+	@echo "🧹 Cleaning test artifacts..."
+	@python tests/run_tests.py clean

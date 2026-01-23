@@ -1,0 +1,232 @@
+[
+  {
+    "strategy_name": "Com1-Met",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735980000,
+    "signalID": "sig_com1_met_001",
+    "entry_name": "$COM1_MET_1",
+    "account_equity": 33000,
+    "signal_legs": [
+      {
+        "instrument": "GC",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 2,
+        "order_type": "MARKET",
+        "price": 2050.0,
+        "stop_loss": 2040.0,
+        "take_profit": 2065.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com1-Met",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735980060,
+    "signalID": "sig_com1_met_002",
+    "entry_name": "$COM1_MET_2",
+    "account_equity": 18000,
+    "signal_legs": [
+      {
+        "instrument": "GC",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 1,
+        "order_type": "MARKET",
+        "price": 2052.0,
+        "stop_loss": 2040.0,
+        "take_profit": 2070.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com1-Met",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735980180,
+    "signalID": "sig_com1_met_003",
+    "entry_signal_id": "$COM1_MET_1",
+    "account_equity": 30000,
+    "signal_legs": [
+      {
+        "instrument": "GC",
+        "instrument_type": "FUTURE",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 2,
+        "order_type": "MARKET",
+        "price": 2060.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com1-Met",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735980240,
+    "signalID": "sig_com1_met_004",
+    "entry_signal_id": "$COM1_MET_2",
+    "account_equity": 54000,
+    "signal_legs": [
+      {
+        "instrument": "GC",
+        "instrument_type": "FUTURE",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 1,
+        "order_type": "MARKET",
+        "price": 2062.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com1-Met",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735980330,
+    "signalID": "sig_com1_met_005",
+    "entry_name": "$COM1_MET_3",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "SI",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 5,
+        "order_type": "MARKET",
+        "price": 29.5,
+        "stop_loss": 29.2,
+        "take_profit": 30.1
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com1-Met",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735980390,
+    "signalID": "sig_com1_met_006",
+    "entry_name": "$COM1_MET_4",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "SI",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 3,
+        "order_type": "MARKET",
+        "price": 29.6,
+        "stop_loss": 29.2,
+        "take_profit": 30.2
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com1-Met",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735980510,
+    "signalID": "sig_com1_met_007",
+    "entry_signal_id": "$COM1_MET_3",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "SI",
+        "instrument_type": "FUTURE",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 5,
+        "order_type": "MARKET",
+        "price": 29.85
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com1-Met",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735980570,
+    "signalID": "sig_com1_met_008",
+    "entry_signal_id": "$COM1_MET_4",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "SI",
+        "instrument_type": "FUTURE",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 3,
+        "order_type": "MARKET",
+        "price": 29.9
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com1-Met",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735980660,
+    "signalID": "sig_com1_met_009",
+    "entry_name": "$COM1_MET_5",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "HG",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 3,
+        "order_type": "MARKET",
+        "price": 4.2,
+        "stop_loss": 4.15,
+        "take_profit": 4.3
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com1-Met",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735980780,
+    "signalID": "sig_com1_met_010",
+    "entry_signal_id": "$COM1_MET_5",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "HG",
+        "instrument_type": "FUTURE",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 3,
+        "order_type": "MARKET",
+        "price": 4.27
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 0
+  }
+]

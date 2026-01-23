@@ -13,6 +13,10 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 import requests
 import threading
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+import uvicorn
 
 # Portfolio constructor imports
 from portfolio_constructor.base import PortfolioConstructor
@@ -364,14 +368,16 @@ def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict, 
             logger.error(f"   Document has {len(legs)} legs, raw_signal_id={raw_signal_id}")
             return
 
-        # Update the specific leg's decision field
+        # Update the specific leg's decision field and add cerebro timestamp
+        now = datetime.utcnow()
         signal_store_collection.update_one(
             {"_id": ObjectId(signal_store_id)},
             {
                 "$set": {
                     f"legs.{leg_index}.decision": decision_doc,
+                    f"legs.{leg_index}.processing_timestamps.cerebro_processed": now,
                     "processing_complete": status in ["APPROVED", "RESIZE"],
-                    "updated_at": datetime.utcnow()
+                    "updated_at": now
                 }
             }
         )
@@ -1342,11 +1348,23 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
         return
 
-    # Build normalized signal from first leg (for compatibility with existing code)
+    # Build normalized signal from first leg in raw data (for compatibility with existing code)
+    # NOTE: For multi-leg signals, 'legs' array has all legs from the raw signal
+    # For ENTRY signals, use first leg. For EXIT/SCALE signals, should also use first leg
+    # since EXIT signals typically have only one leg in their signal_legs array
     first_leg = legs[0]
 
     # Get the signal-level leg_index from current_leg (for CONSOLIDATED schema)
-    signal_leg_index = current_leg.get('leg_index', 0) if 'current_leg' in locals() and current_leg else 0
+    # Use the leg that was just processed (if available)
+    signal_leg_index = 0  # default
+    if 'current_leg' in locals() and current_leg:
+        signal_leg_index = current_leg.get('leg_index', 0)
+    elif legs_array and isinstance(legs_array, list):
+        # If current_leg not available, find the most recent leg without a decision
+        for leg in legs_array:
+            if not leg.get('decision'):
+                signal_leg_index = leg.get('leg_index', 0)
+                break
 
     normalized_signal = {
         'signal_id': signal_id,
@@ -1364,6 +1382,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         'entry_signal_id': raw_obj.get('entry_signal_id') or raw_signal.get('entry_signal_id'),
         'entry_name': raw_obj.get('entry_name'),
         'exit_name': raw_obj.get('exit_name'),
+        'account_equity': raw_obj.get('account_equity') or raw_signal.get('account_equity'),
         'legs': legs
     }
 
@@ -2305,11 +2324,12 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         "order_id": order_id,
                         "signal_id": signal_id,
                         "mathematricks_signal_id": signal_store_id,  # For execution_service to update signal_store
+                        "raw_signal_mongodb_id": normalized_signal.get('raw_signal_mongodb_id'),  # To match leg in signal_store
                         "strategy_id": normalized_signal.get('strategy_id'),
                         "fund_id": fund_id,  # NEW: Fund architecture support
                         "account_id": target_account_name,  # NEW: Renamed from "account"
                         "account": target_account_name,  # DEPRECATED: Keep for backward compatibility
-                        "timestamp": datetime.utcnow(),
+                        "timestamp": datetime.utcnow().isoformat(),  # Convert to ISO string for JSON
                         "instrument": leg_result.get('instrument'),
                         "direction": order_direction,
                         "action": order_action,
@@ -2317,7 +2337,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         "side": "SELL" if signal_type in ['EXIT', 'SCALE_OUT'] else "BUY",  # Explicit side for execution service
                         "order_type": leg_result.get('order_type', 'MARKET'),
                         "price": leg_result.get('price_used', 0),
-                        "quantity": leg_quantity,
+                        "quantity": int(leg_quantity),  # Convert to int for Pydantic validation
                         "stop_loss": first_leg.get('stop_loss'),
                         "take_profit": first_leg.get('take_profit'),
                         "expiry": first_leg.get('expiry'),
@@ -2340,19 +2360,54 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         },
                         "environment": normalized_signal.get('environment', 'staging'),
                         "status": "PENDING",
-                        "created_at": datetime.utcnow()
+                        "created_at": datetime.utcnow().isoformat()  # Convert to ISO string for JSON
                     }
 
-                    # For EXIT signals, add entry_signal_id reference
+                    # For EXIT signals, add entry_signal_id reference (MongoDB ObjectId)
                     if decision_obj.metadata.get('entry_signal_id'):
                         trading_order['entry_signal_id'] = decision_obj.metadata['entry_signal_id']
-                        trading_order['entry_signal_ref'] = decision_obj.metadata.get('entry_signal_ref')
+                        # Note: entry_signal_ref removed - execution service doesn't use it
 
-                    # Save to MongoDB (execution service watches via Change Stream)
-                    trading_orders_collection.insert_one(trading_order)
+                    # NOTE: trading_orders collection REMOVED
+                    # Order data is now stored directly in signal_store legs by execution_service
+                    # trading_orders_collection.insert_one(trading_order)  # REMOVED
+                    
                     all_fund_orders.append(order_id)
                     orders_created.append(order_id)
-                    logger.info(f"✅ Trading order created: {order_id} for {leg_quantity} {leg_result.get('instrument')} in account {target_account_name}")
+                    logger.info(f"✅ Trading order prepared: {order_id} for {leg_quantity} {leg_result.get('instrument')} in account {target_account_name}")
+
+                    # ============================================================
+                    # CALL EXECUTION API (Direct API call with full order data)
+                    # ============================================================
+                    try:
+                        execution_url = os.getenv('EXECUTION_SERVICE_URL', 'http://execution-service:8083')
+                        api_endpoint = f"{execution_url}/api/v1/execute-order"
+                        
+                        # Pass full order data to execution service
+                        payload = trading_order
+                        
+                        logger.info(f"📤 Calling Execution API: {api_endpoint}")
+                        logger.info(f"   Payload: {payload}")
+                        
+                        response = requests.post(
+                            api_endpoint,
+                            json=payload,
+                            timeout=30  # 30 second timeout
+                        )
+                        
+                        response.raise_for_status()
+                        result = response.json()
+                        
+                        logger.info(f"✅ Execution API response: {result.get('status')} - {result.get('message')}")
+                        
+                    except requests.exceptions.RequestException as e:
+                        logger.error(f"❌ Failed to call Execution API for order {order_id}: {str(e)}")
+                        if hasattr(e, 'response') and e.response is not None:
+                            logger.error(f"   Response body: {e.response.text}")
+                        logger.error(f"   Order may not execute automatically!")
+                        # Don't raise - can be manually re-triggered
+                    except Exception as e:
+                        logger.error(f"❌ Unexpected error calling Execution API: {str(e)}", exc_info=True)
 
                     # Pub/Sub removed - execution service watches MongoDB Change Streams
                     # Unified signal processing log for order creation
@@ -2404,62 +2459,124 @@ def signals_callback(message):
         message.ack()
 
 
-def watch_signals():
-    """
-    Watch MongoDB Change Streams for new signals (replaces Pub/Sub subscriber)
-    """
-    logger.info("Starting MongoDB Change Stream watcher for signals...")
-    
-    # Watch for new signals in signal_store collection
-    # CONSOLIDATED SCHEMA v3: Watch for both 'insert' (new signals) and 'update' (new legs added)
-    pipeline = [
-        {
-            '$match': {
-                'operationType': {'$in': ['insert', 'update']},
-                # Don't filter on cerebro_decision - we'll check legs array for unprocessed legs
-            }
+# ============================================================================
+# FASTAPI HTTP SERVER (Replaces Change Stream Watcher)
+# ============================================================================
+
+# Pydantic models for API requests
+class ProcessSignalRequest(BaseModel):
+    signal_store_id: str
+    leg_index: int = 0
+
+class ProcessSignalResponse(BaseModel):
+    status: str
+    signal_id: str
+    message: str
+    orders_created: Optional[list] = None
+
+# Create FastAPI app
+app = FastAPI(title="Cerebro Service", version="1.0")
+
+# Service health status
+service_status = {
+    'ready': False,
+    'signals_processed': 0,
+    'last_signal_time': None
+}
+
+@app.get('/health')
+def health_check():
+    """Health check endpoint"""
+    if service_status['ready']:
+        return {
+            'status': 'healthy',
+            'ready': True,
+            **service_status
         }
-    ]
+    else:
+        return JSONResponse(
+            status_code=503,
+            content={
+                'status': 'starting',
+                'ready': False,
+                **service_status
+            }
+        )
+
+@app.get('/status')
+def status_check():
+    """Detailed status endpoint"""
+    return {
+        **service_status,
+        'portfolio_constructor_initialized': portfolio_constructor is not None
+    }
+
+@app.post('/api/v1/process-signal', response_model=ProcessSignalResponse)
+def process_signal_endpoint(request: ProcessSignalRequest):
+    """
+    Process a signal from signal_store collection.
+    Called by signal_ingestion after adding a leg to signal_store.
     
-    while True:
-        try:
-            with signal_store_collection.watch(pipeline, full_document='updateLookup') as stream:
-                logger.info("✅ CerebroService listening for signals via MongoDB Change Streams...")
-                for change in stream:
-                    try:
-                        # Get fullDocument - for updates, this requires full_document='updateLookup'
-                        signal_data = change.get('fullDocument')
+    IMPORTANT: Responds immediately, processes in background thread.
+    This prevents blocking signal_ingestion from sending more signals.
+    
+    Args:
+        signal_store_id: MongoDB ObjectId of the signal_store document
+        leg_index: Index of the leg that was just added (0 for ENTRY, 1+ for EXIT/SCALE)
+    
+    Returns:
+        ProcessSignalResponse with status (processing started)
+    """
+    try:
+        from bson import ObjectId
+        
+        logger.info(f"📥 API Request: Process signal {request.signal_store_id}, leg {request.leg_index}")
+        
+        # Quick validation - just check signal exists
+        signal_data = signal_store_collection.find_one({'_id': ObjectId(request.signal_store_id)}, {'signal_id': 1})
+        
+        if not signal_data:
+            logger.error(f"❌ Signal document {request.signal_store_id} not found")
+            raise HTTPException(status_code=404, detail=f"Signal {request.signal_store_id} not found")
+        
+        signal_id = signal_data.get('signal_id', 'UNKNOWN')
+        
+        # Start processing in background thread - respond immediately
+        def process_in_background():
+            try:
+                # Re-fetch full document in background thread
+                signal_data_full = signal_store_collection.find_one({'_id': ObjectId(request.signal_store_id)})
+                if signal_data_full:
+                    signal_data_full['mathematricks_signal_id'] = str(signal_data_full['_id'])
+                    logger.info(f"Processing signal: {signal_id}")
+                    process_signal_with_constructor(signal_data_full)
+                    service_status['signals_processed'] += 1
+                    service_status['last_signal_time'] = datetime.utcnow().isoformat()
+                    logger.info(f"✅ Background processing complete for {signal_id}")
+            except Exception as e:
+                logger.error(f"🚨 ERROR in background processing for {signal_id}: {str(e)}", exc_info=True)
+        
+        # Start background thread
+        background_thread = threading.Thread(target=process_in_background, daemon=True)
+        background_thread.start()
+        
+        # Respond immediately
+        return ProcessSignalResponse(
+            status="accepted",
+            signal_id=signal_id,
+            message=f"Signal {signal_id} accepted for processing"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"🚨 ERROR accepting signal {request.signal_store_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error accepting signal: {str(e)}")
 
-                        if not signal_data:
-                            # If fullDocument is not available, fetch it manually
-                            doc_id = change['documentKey']['_id']
-                            signal_data = signal_store_collection.find_one({'_id': doc_id})
-                            if not signal_data:
-                                logger.warning(f"Document not found for _id: {doc_id}")
-                                continue
-
-                        signal_id = signal_data.get('signal_id', 'UNKNOWN')
-
-                        # Extract the _id from signal_store as mathematricks_signal_id
-                        # This is required for cerebro to update the signal_store with its decision
-                        signal_store_id = signal_data.get('_id')
-                        if signal_store_id:
-                            signal_data['mathematricks_signal_id'] = str(signal_store_id)
-
-                        logger.info(f"Received signal: {signal_id}")
-
-                        # Process signal
-                        process_signal_with_constructor(signal_data)
-                        
-                    except Exception as e:
-                        signal_id = signal_data.get('signal_id', 'UNKNOWN') if 'signal_data' in locals() else 'UNKNOWN'
-                        logger.error(f"🚨 ERROR processing signal {signal_id}: {str(e)}", exc_info=True)
-                        
-        except Exception as e:
-            logger.error(f"Change Stream error: {str(e)}")
-            logger.warning("Reconnecting in 5 seconds...")
-            time.sleep(5)
-            logger.info("Attempting to reconnect...")
+def run_fastapi_server():
+    """Run FastAPI server (blocking)"""
+    logger.info("Starting Cerebro FastAPI server on port 8082...")
+    uvicorn.run(app, host='0.0.0.0', port=8082, log_level='info')
 
 
 # ============================================================================
@@ -2467,16 +2584,19 @@ def watch_signals():
 # ============================================================================
 
 if __name__ == "__main__":
-    logger.info("Starting Cerebro Service (MongoDB Change Streams)")
-
-    # Pub/Sub removed - using MongoDB Change Streams for all communication
-    # (Cerebro watches signal_store, writes to trading_orders, execution watches trading_orders)
+    logger.info("Starting Cerebro Service (HTTP API)")
+    logger.info("Architecture: Direct API calls (no Change Streams)")
+    logger.info("Signal flow: signal_ingestion → HTTP POST → cerebro → HTTP POST → execution")
 
     # Initialize portfolio constructor
     initialize_portfolio_constructor()
 
     # Load allocations
     reload_allocations()
+    
+    # Mark service as ready
+    service_status['ready'] = True
+    logger.info("✅ Cerebro Service ready")
 
-    # Start MongoDB Change Stream watcher for signals (BLOCKS)
-    watch_signals()
+    # Start FastAPI HTTP server (BLOCKS)
+    run_fastapi_server()

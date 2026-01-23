@@ -5,7 +5,7 @@
 
 set -e
 
-MONGODB_URI="mongodb://mongodb:27017"
+MONGODB_URI="mongodb://mongodb:27018"
 DATABASE="mathematricks_trading"
 SEED_DIR="/seed_data"
 TEMP_DIR="/tmp/mongodb_seed_$$"

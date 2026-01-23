@@ -48,11 +48,11 @@ docker cp "$TEMP_DIR/dump" "$CONTAINER_NAME:/seed_restore_data"
 
 # Drop existing database to avoid duplicate key errors
 echo "🗑️  Dropping existing database..."
-docker exec "$CONTAINER_NAME" mongosh mathematricks_trading --quiet --eval "db.dropDatabase()"
+docker exec "$CONTAINER_NAME" mongosh --port 27018 mathematricks_trading --quiet --eval "db.dropDatabase()"
 
 # Restore using mongorestore with --drop flag to ensure clean replacement
 echo "🔄 Running mongorestore..."
-docker exec "$CONTAINER_NAME" mongorestore --drop /seed_restore_data
+docker exec "$CONTAINER_NAME" mongorestore --port 27018 --drop /seed_restore_data
 
 # Clean up
 docker exec "$CONTAINER_NAME" rm -rf /seed_restore_data

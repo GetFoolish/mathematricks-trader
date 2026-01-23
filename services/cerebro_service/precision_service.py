@@ -33,7 +33,9 @@ class PrecisionService:
             mongo_uri: MongoDB connection URI (defaults to env variable or localhost)
         """
         if mongo_uri is None:
-            mongo_uri = os.getenv('MONGO_URI', 'mongodb://mongodb:27017/')
+            mongo_uri = os.getenv('MONGODB_URI')
+            if not mongo_uri:
+                raise ValueError("MONGODB_URI environment variable is required for PrecisionService")
         
         self.mongo_client = MongoClient(mongo_uri)
         self.db = self.mongo_client['mathematricks_trading']

@@ -557,10 +557,11 @@ class BrokerPoller:
         """
         Get or create broker instance with mode-based routing support.
 
-        Supports 3-mode trading system:
-        - paper_mock: Create only Mock broker
-        - paper_live: Create IBKR + Mock, wrap in BrokerModeAdapter
-        - live: Create only real broker
+        Supports 4-mode trading system (account_type × data_source):
+        - mock_mock: Create only Mock broker
+        - mock_live: Create real broker + Mock, wrap in BrokerModeAdapter
+        - paper_live: Create only real broker (IBKR paper account)
+        - live_live: Create only real broker (production)
 
         Args:
             account_id: Account ID (for caching)
@@ -572,22 +573,33 @@ class BrokerPoller:
         if account_id not in self.broker_instances:
             logger.debug(f"Creating new broker instance for {account_id}")
 
-            # Check mode from account document
+            # Check account_type and data_source from account document
             account = self.repository.get_account(account_id)
-            mode = account.get('mode', 'paper_mock') if account else 'paper_mock'
+            if not account:
+                logger.error(f"Account {account_id} not found")
+                return None
+            
+            account_type = account.get('account_type')
+            data_source = account.get('data_source')
+            
+            if not account_type or not data_source:
+                logger.error(f"Account {account_id} missing required fields: account_type={account_type}, data_source={data_source}")
+                return None
+            
             broker_name = config.get('broker', 'Mock')
+            computed_mode = f"{account_type}_{data_source}"
 
             try:
-                if mode == 'paper_mock':
-                    # Create only Mock broker
-                    logger.debug(f"Creating Mock broker for {account_id} (mode: paper_mock)")
+                if account_type == 'mock' and data_source == 'mock':
+                    # mock_mock: Create only Mock broker
+                    logger.debug(f"Creating Mock broker for {account_id} (mode: {computed_mode})")
                     mock_config = config.copy()
                     mock_config['broker'] = 'Mock'
                     broker_instance = BrokerFactory.create_broker(mock_config)
 
-                elif mode == 'paper_live':
-                    # Create BOTH real + mock, wrap in adapter
-                    logger.debug(f"Creating {broker_name} + Mock brokers for {account_id} (mode: paper_live)")
+                elif account_type == 'mock' and data_source == 'live':
+                    # mock_live: Create BOTH real + mock, wrap in adapter
+                    logger.debug(f"Creating {broker_name} + Mock brokers for {account_id} (mode: {computed_mode})")
 
                     # Create real broker
                     real_broker = BrokerFactory.create_broker(config)
@@ -600,21 +612,31 @@ class BrokerPoller:
 
                     # Wrap in adapter
                     from services.brokers.adapters import BrokerModeAdapter
-                    broker_instance = BrokerModeAdapter(real_broker, mock_broker, mode='paper_live')
+                    broker_instance = BrokerModeAdapter(
+                        real_broker, 
+                        mock_broker, 
+                        account_type='mock',
+                        data_source='live'
+                    )
 
-                elif mode == 'live':
-                    # Create only real broker
-                    logger.debug(f"Creating LIVE broker for {account_id} - REAL MONEY AT RISK!")
+                elif account_type == 'paper' and data_source == 'live':
+                    # paper_live: Create only real broker (IBKR paper account)
+                    logger.debug(f"Creating {broker_name} broker for {account_id} (mode: {computed_mode} - IBKR Paper)")
+                    broker_instance = BrokerFactory.create_broker(config)
+
+                elif account_type == 'live' and data_source == 'live':
+                    # live_live: Create only real broker
+                    logger.critical(f"Creating LIVE broker for {account_id} (mode: {computed_mode}) - REAL MONEY AT RISK!")
                     broker_instance = BrokerFactory.create_broker(config)
 
                 else:
-                    logger.error(f"Invalid mode '{mode}' for account {account_id}. Falling back to paper_mock.")
+                    logger.error(f"Invalid mode: account_type='{account_type}', data_source='{data_source}' for {account_id}. Falling back to mock_mock.")
                     mock_config = config.copy()
                     mock_config['broker'] = 'Mock'
                     broker_instance = BrokerFactory.create_broker(mock_config)
 
                 self.broker_instances[account_id] = broker_instance
-                logger.info(f"✅ Created broker for {account_id} (mode: {mode})")
+                logger.info(f"✅ Created broker for {account_id} (mode: {computed_mode})")
 
             except Exception as e:
                 logger.error(f"Failed to create broker for {account_id}: {e}")

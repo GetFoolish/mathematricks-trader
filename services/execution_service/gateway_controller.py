@@ -87,21 +87,32 @@ class GatewayController:
         # Get configuration
         username = auth['username']
         password = auth['password']
-        trading_mode = auth.get('trading_mode', 'paper')
         
-        # Determine ports
-        if trading_mode == 'live':
+        # Determine ports based on account_type (mock | paper | live)
+        account_type = account.get('account_type')
+        
+        if not account_type:
+            logger.error(f"Account {account_id} missing account_type field")
+            return False
+        
+        # Use account_type field to determine port
+        if account_type == 'live':
             internal_port = 4003  # Live API port
-        else:
+        else:  # paper or mock
             internal_port = 4004  # Paper API port
         
-        logger.info(f"🚀 Creating IB Gateway for {account_id} (mode: {trading_mode})...")
+        logger.info(f"Using account_type='{account_type}' for port: {internal_port}")
+        
+        logger.info(f"🚀 Creating IB Gateway for {account_id} (port: {internal_port})...")
         
         # Build environment variables
+        # Set TRADING_MODE for IB Gateway based on account_type
+        trading_mode = 'live' if account_type == 'live' else 'paper'
+        
         env_vars = {
             'TWS_USERID': username,
             'TWS_PASSWORD': password,
-            'TRADING_MODE': trading_mode,
+            'TRADING_MODE': trading_mode,  # 'live' or 'paper' for IB Gateway
             'TWOFA_TIMEOUT_ACTION': 'restart',  # Auto-handle 2FA by restarting
             'READ_ONLY_API': 'no',
             'IBC_AcceptIncomingConnectionAction': 'accept',

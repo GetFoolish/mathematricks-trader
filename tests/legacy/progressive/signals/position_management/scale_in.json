@@ -1,0 +1,17 @@
+{
+  "signal_id": "test_scale_in_{{timestamp}}",
+  "strategy_id": "test_strategy_1",
+  "account_id": "IBKR-TESTING-ACCOUNT",
+  "instrument": "TSLA",
+  "instrument_type": "STOCK",
+  "signal_type": "ENTRY",
+  "direction": "LONG",
+  "signal_time": "{{current_time}}",
+  "quantity": 1,
+  "metadata": {
+    "test_name": "scale_in",
+    "test_category": "position_management",
+    "description": "Progressive position building test",
+    "notes": "Send multiple ENTRY signals for same instrument to build position gradually"
+  }
+}

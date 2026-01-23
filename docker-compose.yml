@@ -12,6 +12,7 @@ services:
       - ./services:/app/services
     ports:
       - "5678:5678" # Debug port
+      - "8082:8082" # HTTP API endpoint
     depends_on:
       mongodb:
         condition: service_healthy
@@ -20,7 +21,14 @@ services:
       - MONGODB_URI=${MONGODB_URI}
       - PYTHONPATH=/app/services/cerebro_service:/app
       - ACCOUNT_DATA_SERVICE_URL=${ACCOUNT_DATA_SERVICE_URL}
+      - EXECUTION_SERVICE_URL=http://execution-service:8083
       - USE_MOCK_BROKER=true  # Enable mock broker for staging/testing
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 60s
     command: python -m services.cerebro_service.cerebro_main
 
   execution-service:
@@ -44,6 +52,12 @@ services:
       - TZ=${TZ}
       - MONGODB_URI=${MONGODB_URI}
       - ACCOUNT_DATA_SERVICE_URL=${ACCOUNT_DATA_SERVICE_URL}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/health').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
     command: python -m services.execution_service.execution_main
 
   account-data-service:
@@ -73,12 +87,12 @@ services:
     image: mongo:6.0
     hostname: mongodb
     ports:
-      - "27018:27017"
+      - "27018:27018"
     volumes:
       - mongo_data:/data/db
-    command: [ "--replSet", "rs0", "--bind_ip_all" ]
+    command: [ "--replSet", "rs0", "--bind_ip_all", "--port", "27018" ]
     healthcheck:
-      test: ["CMD-SHELL", "echo \"try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongodb:27017' }] }) }\" | mongosh --port 27017 --quiet"]
+      test: ["CMD-SHELL", "echo \"try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongodb:27018' }] }) }\" | mongosh --port 27018 --quiet"]
       interval: 10s
       timeout: 10s
       retries: 5
@@ -107,9 +121,12 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+      cerebro-service:
+        condition: service_healthy
     environment:
       - TZ=${TZ}
       - MONGODB_URI=${MONGODB_URI}
+      - CEREBRO_SERVICE_URL=http://cerebro-service:8082
     command: python -m services.signal_ingestion.signal_ingestion_main --staging
 
   # Portfolio Builder
@@ -167,7 +184,7 @@ services:
         condition: service_healthy
     environment:
       - VITE_API_URL=http://localhost:8000
-      - MONGODB_URI=mongodb://mongodb:27017/?replicaSet=rs0
+      - MONGODB_URI=mongodb://mongodb:27018/?replicaSet=rs0
       - API_PORT=8000
     command: sh -c "npm install && npm run dev:all"
 

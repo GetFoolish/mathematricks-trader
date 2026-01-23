@@ -10,6 +10,7 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27018/?repli
 let db;
 let signalStoreCollection;
 let tradingOrdersCollection;
+let rawSignalsCollection;
 
 // Connect to MongoDB
 async function connectToMongo() {
@@ -19,6 +20,8 @@ async function connectToMongo() {
     db = client.db('mathematricks_trading');
     signalStoreCollection = db.collection('signal_store');
     tradingOrdersCollection = db.collection('trading_orders');
+    // Add collections for new Activity tabs
+    rawSignalsCollection = db.collection('trading_signals_raw');
     console.log('[API] Connected to MongoDB (mathematricks_trading)');
   } catch (error) {
     console.error('[API] MongoDB connection error:', error);
@@ -742,6 +745,156 @@ app.post('/api/v1/dashboards/:dashboard_id/reload-all', async (req, res) => {
     res.json({ status: 'success', reloaded: dashboard.widgets.length });
   } catch (error) {
     console.error('[API] Error reloading dashboard widgets:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// NEW ACTIVITY TAB ENDPOINTS
+// ============================================================================
+
+// GET /api/v1/activity/raw-signals - Tab 1: Raw Signals from trading_signals_raw
+app.get('/api/v1/activity/raw-signals', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const environment = req.query.environment;
+
+    const query = {};
+    if (environment) {
+      query.environment = environment;
+    }
+
+    const rawSignals = await rawSignalsCollection
+      .find(query)
+      .sort({ received_at: -1 })
+      .limit(limit)
+      .toArray();
+
+    res.json({
+      raw_signals: serializeDocument(rawSignals),
+      count: rawSignals.length
+    });
+  } catch (error) {
+    console.error('[API] Error fetching raw signals:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/v1/activity/signal-store - Tab 2: Signal Store
+app.get('/api/v1/activity/signal-store', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const environment = req.query.environment;
+
+    const query = {};
+    if (environment) {
+      query.environment = environment;
+    }
+
+    const signals = await signalStoreCollection
+      .find(query)
+      .sort({ created_at: -1 })
+      .limit(limit)
+      .toArray();
+
+    res.json({
+      signals: serializeDocument(signals),
+      count: signals.length
+    });
+  } catch (error) {
+    console.error('[API] Error fetching signal store:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/v1/activity/trading-orders-full - Tab 3: Trading Orders
+app.get('/api/v1/activity/trading-orders-full', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const environment = req.query.environment;
+
+    const query = {};
+    if (environment) {
+      query.environment = environment;
+    }
+
+    const orders = await tradingOrdersCollection
+      .find(query)
+      .sort({ created_at: -1 })
+      .limit(limit)
+      .toArray();
+
+    res.json({
+      orders: serializeDocument(orders),
+      count: orders.length
+    });
+  } catch (error) {
+    console.error('[API] Error fetching trading orders:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/v1/activity/signal-status - Tab 4: Signal Status (one row per signal)
+app.get('/api/v1/activity/signal-status', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const environment = req.query.environment;
+
+    const query = {};
+    if (environment) {
+      query.environment = environment;
+    }
+
+    const signals = await signalStoreCollection
+      .find(query)
+      .sort({ created_at: -1 })
+      .limit(limit)
+      .toArray();
+
+    // Transform to status view: one row per signal with summary info
+    const statusData = signals.map(doc => {
+      const position = doc.position || {};
+      const legs = doc.legs || [];
+      
+      // Count ENTRY and EXIT legs
+      const entryLegs = legs.filter(leg => leg.leg_type === 'ENTRY');
+      const exitLegs = legs.filter(leg => leg.leg_type === 'EXIT');
+
+      // Get decision status from first leg
+      const firstLegDecision = legs.length > 0 ? (legs[0].decision || {}) : {};
+      const decisionStatus = firstLegDecision.status || 'PENDING';
+
+      return {
+        _id: doc._id,
+        signal_id: doc.signal_id,
+        base_signal_id: doc.base_signal_id,
+        strategy_id: doc.strategy_id,
+        instrument: doc.instrument,
+        environment: doc.environment,
+        mode: doc.mode,
+        position_status: position.status || 'PENDING',
+        entry_quantity: position.entry_quantity || 0,
+        exit_quantity: position.exit_quantity || 0,
+        remaining_quantity: position.remaining_quantity || 0,
+        pnl: position.pnl,
+        opened_at: position.opened_at,
+        closed_at: position.closed_at,
+        created_at: doc.created_at,
+        updated_at: doc.updated_at,
+        entry_legs_count: entryLegs.length,
+        exit_legs_count: exitLegs.length,
+        decision_status: decisionStatus,
+        processing_complete: doc.processing_complete,
+        raw_document: doc // Include full document for detail view
+      };
+    });
+
+    res.json({
+      signals: serializeDocument(statusData),
+      count: statusData.length
+    });
+  } catch (error) {
+    console.error('[API] Error fetching signal status:', error);
     res.status(500).json({ error: error.message });
   }
 });

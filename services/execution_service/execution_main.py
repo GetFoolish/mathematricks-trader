@@ -16,8 +16,9 @@ import time
 import queue
 import requests
 import pytz
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 import uvicorn
 
 # Add services directory to path so we can import brokers package
@@ -180,6 +181,87 @@ def status_check():
         **service_status,
         'broker_pool': list(broker_pool.keys()) if 'broker_pool' in globals() else []
     }
+
+# Pydantic models for API requests
+class ExecuteOrderRequest(BaseModel):
+    # Accept full order data from cerebro (not just order_id)
+    order_id: str
+    signal_id: Optional[str] = None
+    mathematricks_signal_id: Optional[str] = None
+    raw_signal_mongodb_id: Optional[str] = None
+    strategy_id: Optional[str] = None
+    fund_id: Optional[str] = None
+    account_id: Optional[str] = None
+    account: Optional[str] = None
+    timestamp: Optional[str] = None
+    instrument: Optional[str] = None
+    direction: Optional[str] = None
+    action: Optional[str] = None
+    signal_type: Optional[str] = None
+    side: Optional[str] = None
+    order_type: Optional[str] = None
+    price: Optional[float] = None
+    quantity: Optional[int] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    expiry: Optional[str] = None
+    instrument_type: Optional[str] = None
+    underlying: Optional[str] = None
+    exchange: Optional[str] = None
+    leg_index: Optional[int] = None
+    total_legs: Optional[int] = None
+    is_multi_leg: Optional[bool] = None
+    allocation_name: Optional[str] = None
+    account_allocated_capital: Optional[float] = None
+    cerebro_decision: Optional[dict] = None
+    environment: Optional[str] = None
+    status: Optional[str] = None
+    created_at: Optional[str] = None
+    entry_signal_id: Optional[str] = None
+    entry_signal_ref: Optional[dict] = None
+    
+    class Config:
+        extra = "allow"  # Allow additional fields
+
+class ExecuteOrderResponse(BaseModel):
+    status: str
+    order_id: str
+    message: str
+
+@app.post('/api/v1/execute-order', response_model=ExecuteOrderResponse)
+def execute_order_endpoint(request: ExecuteOrderRequest):
+    """
+    Execute a trading order.
+    Called by cerebro after creating order data.
+    
+    Args:
+        request: ExecuteOrderRequest containing full order details
+    
+    Returns:
+        ExecuteOrderResponse with status and message
+    """
+    try:
+        logger.info(f"📥 API Request: Execute order {request.order_id}")
+        
+        # Convert request to dict for processing
+        order_data = request.dict()
+        
+        # Add to queue for processing
+        order_queue.put({'order_data': order_data})
+        
+        logger.info(f"✅ Order {request.order_id} queued for execution")
+        
+        return ExecuteOrderResponse(
+            status="queued",
+            order_id=request.order_id,
+            message=f"Order {request.order_id} queued for execution"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"🚨 ERROR queuing order {request.order_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error queuing order: {str(e)}")
 
 def run_fastapi_server():
     """Run FastAPI server in background thread"""
@@ -377,6 +459,10 @@ def _build_broker_config(broker_name: str, account_id: str, auth_details: Dict) 
             "practice": auth_details.get('practice', True)
         })
     
+    elif broker_name == 'Mock':
+        # Mock: No special auth needed, pass through any provided details
+        config.update(auth_details)
+    
     else:
         # Unknown broker - pass through auth_details
         logger.warning(f"Unknown broker type: {broker_name}, passing through auth_details")
@@ -573,12 +659,13 @@ def initialize_broker_pool():
     """
     Initialize broker pool by creating broker instances for all active accounts.
     Supports multi-broker architecture: IBKR, Binance, Bybit, Alpaca, Oanda, Mock
-    Supports 3-mode trading system: paper_mock, paper_live, live.
+    Supports 4-mode trading system: mock_mock, mock_live, paper_live, live_live.
 
-    Mode handling:
-    - paper_mock: Create only Mock broker
-    - paper_live: Create real broker + Mock, wrap in BrokerModeAdapter
-    - live: Create only real broker
+    Mode handling (computed from account_type × data_source):
+    - mock_mock: Create only Mock broker (fast testing)
+    - mock_live: Create real broker + Mock, wrap in BrokerModeAdapter
+    - paper_live: Create only real broker (IBKR paper account on port 4004)
+    - live_live: Create only real broker (production trading)
 
     For IBKR accounts: Creates IB Gateway containers as needed
     For other brokers: Uses API keys from MongoDB authentication_details
@@ -601,20 +688,44 @@ def initialize_broker_pool():
     # Wait for gateways to be ready (with health checks)
     wait_for_gateways_ready(accounts, max_wait=60)
 
+    # Track initialized brokers for summary log
+    initialized_brokers = []
+
     # Create broker instance for each active account
     for account in accounts:
         account_id = account.get('account_id')
         broker_name = account.get('broker')
         auth_details = account.get('authentication_details', {})
-        mode = account.get('mode', 'paper_mock')  # Default to paper_mock if not specified
+        
+        # Get mode (can be string or list)
+        mode = account.get('mode')
+        
+        # Convert mode to list if it's a string (backward compatibility)
+        if isinstance(mode, str):
+            modes = [mode]
+        elif isinstance(mode, list):
+            modes = mode
+        else:
+            logger.error(f"Account {account_id} has invalid mode field: {mode}. Skipping.")
+            continue
+        
+        # For backward compatibility, use first mode to determine broker type
+        # In future, we could create multiple broker instances for multi-mode accounts
+        primary_mode = modes[0]
+        mode_parts = primary_mode.split('_')
+        if len(mode_parts) != 2:
+            logger.error(f"Account {account_id} has invalid mode format: {primary_mode}. Expected format: <account_type>_<data_source>")
+            continue
+        
+        account_type, data_source = mode_parts
+        computed_mode = primary_mode
 
         try:
             # Build broker-specific config
             real_config = _build_broker_config(broker_name, account_id, auth_details)
             
-            if mode == 'paper_mock':
-                # Create only Mock broker
-                logger.info(f"Creating Mock broker for {account_id} (mode: paper_mock)")
+            if account_type == 'mock' and data_source == 'mock':
+                # mock_mock: Create only Mock broker
                 broker_config = {
                     "broker": "Mock",
                     "account_id": account_id,
@@ -622,12 +733,9 @@ def initialize_broker_pool():
                 }
                 broker_instance = BrokerFactory.create_broker(broker_config)
 
-            elif mode == 'paper_live':
-                # Create BOTH real broker + Mock, wrap in BrokerModeAdapter
-                logger.info(f"Creating {broker_name} + Mock brokers for {account_id} (mode: paper_live)")
-
+            elif account_type == 'mock' and data_source == 'live':
+                # mock_live: Create BOTH real broker + Mock, wrap in BrokerModeAdapter
                 # Create real broker
-                logger.info(f"{broker_name} broker config: {real_config}")
                 real_broker = BrokerFactory.create_broker(real_config)
 
                 # Create mock broker in read-only mode (prevents MongoDB config overwrites)
@@ -641,29 +749,46 @@ def initialize_broker_pool():
 
                 # Wrap in BrokerModeAdapter
                 from services.brokers.adapters import BrokerModeAdapter
-                broker_instance = BrokerModeAdapter(real_broker, mock_broker, mode='paper_live')
+                broker_instance = BrokerModeAdapter(
+                    real_broker, 
+                    mock_broker, 
+                    account_type='mock',
+                    data_source='live'
+                )
 
-            elif mode == 'live':
-                # Create only real broker
-                logger.warning(f"⚠️ Creating LIVE {broker_name} broker for {account_id} - REAL MONEY AT RISK!")
+            elif account_type == 'paper' and data_source == 'live':
+                # paper_live: Create only real broker (IBKR paper account on port 4004)
+                broker_instance = BrokerFactory.create_broker(real_config)
+
+            elif account_type == 'live' and data_source == 'live':
+                # live_live: Create only real broker (production)
                 broker_instance = BrokerFactory.create_broker(real_config)
 
             else:
-                logger.error(f"❌ Invalid mode '{mode}' for account {account_id}. Skipping.")
+                logger.error(f"❌ Invalid mode: account_type='{account_type}', data_source='{data_source}' for account {account_id}. Skipping.")
                 continue
 
             # Add to broker pool
             broker_pool[account_id] = broker_instance
-            logger.info(f"✅ Created {broker_name} broker for account: {account_id} (mode: {mode})")
+            
+            # Track for summary
+            broker_display = f"{broker_name}+Mock" if account_type == 'mock' and data_source == 'live' else broker_name
+            initialized_brokers.append(f"{account_id} ({broker_display}, modes: {','.join(modes)})")
 
         except Exception as e:
             logger.error(f"❌ Failed to create broker for account {account_id}: {str(e)}")
-            logger.error(f"   broker={broker_name}, mode={mode}")
+            logger.error(f"   broker={broker_name}, account_type={account_type}, data_source={data_source}")
             import traceback
             logger.error(traceback.format_exc())
             continue
 
-    logger.info(f"Broker pool initialized with {len(broker_pool)} broker(s)")
+    # Summary log
+    if initialized_brokers:
+        logger.info(f"✅ Broker pool initialized with {len(broker_pool)} broker(s):")
+        for broker_info in initialized_brokers:
+            logger.info(f"   • {broker_info}")
+    else:
+        logger.warning("⚠️ Broker pool is empty - no brokers initialized")
 
 
 def get_broker_for_account(account_id: str) -> Optional['AbstractBroker']:
@@ -1035,13 +1160,20 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
     - signal_store has ONE document per signal with legs[] array
     - Each leg has its own execution data: legs[i].execution
     - Position status calculated from ALL legs: position.status (PENDING → OPEN → PARTIAL → CLOSED)
+    - All order details are stored in the leg (NO separate trading_orders collection)
 
     Args:
-        order_data: Original order data from trading order
+        order_data: Original order data from cerebro
         execution_data: Execution results (quantity_filled, avg_fill_price, fills, etc.)
     """
     try:
         from bson import ObjectId
+        import sys
+        import os
+        
+        # Add parent directory to path for imports
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        from common.lag_calculator import calculate_processing_lag
 
         mathematricks_signal_id = order_data.get('mathematricks_signal_id')
         if not mathematricks_signal_id:
@@ -1095,6 +1227,7 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
             return
 
         # Build order document
+        now = datetime.utcnow()
         order_doc = {
             "order_id": order_data.get('order_id'),
             "broker_order_id": execution_data.get('broker_order_id'),
@@ -1103,7 +1236,7 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
             "quantity_requested": order_data.get('quantity', 0),
             "quantity_filled": execution_data['quantity_filled'],
             "avg_fill_price": execution_data['avg_fill_price'],
-            "filled_at": datetime.utcnow(),
+            "filled_at": now,
             "fills": execution_data.get('fills', [])
         }
 
@@ -1136,6 +1269,15 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
                 "total_cost_basis": total_value if not is_exit_or_scale_out else None,
                 "total_proceeds": total_value if is_exit_or_scale_out else None
             }
+        
+        # Update timestamps for execution
+        updated_timestamps = current_leg.get('processing_timestamps', {})
+        if not updated_timestamps.get('execution_started'):
+            updated_timestamps['execution_started'] = now
+        updated_timestamps['execution_completed'] = now
+        
+        # Calculate processing lag
+        processing_lag = calculate_processing_lag(updated_timestamps)
 
         # Update the specific leg's execution using positional operator
         signal_store_collection.update_one(
@@ -1146,7 +1288,9 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
             {
                 "$set": {
                     f"legs.{leg_index}.execution": leg_execution,
-                    "updated_at": datetime.utcnow()
+                    f"legs.{leg_index}.processing_timestamps": updated_timestamps,
+                    f"legs.{leg_index}.processing_lag": processing_lag,
+                    "updated_at": now
                 }
             }
         )
@@ -1553,46 +1697,8 @@ def cancel_order(order_id: str) -> bool:
         return False
 
 
-def watch_trading_orders():
-    """
-    Watch MongoDB Change Streams for new trading orders
-    Runs in background thread - adds orders to queue for main thread processing
-    """
-    logger.info("Starting MongoDB Change Stream watcher for trading_orders...")
-    
-    pipeline = [
-        {
-            '$match': {
-                'operationType': 'insert',
-                'fullDocument.status': 'PENDING'
-            }
-        }
-    ]
-    
-    while True:
-        try:
-            with trading_orders_collection.watch(pipeline) as stream:
-                logger.info("✅ MongoDB Change Stream connected for trading_orders")
-                for change in stream:
-                    try:
-                        order_data = change['fullDocument']
-                        order_id = order_data.get('order_id')
-                        
-                        logger.debug(f"Received trading order via Change Stream: {order_id} - adding to queue")
-                        
-                        # Add order to queue for main thread processing
-                        order_queue.put({
-                            'order_data': order_data,
-                            'resume_token': stream.resume_token
-                        })
-                    
-                    except Exception as e:
-                        logger.error(f"Error processing change stream event: {str(e)}", exc_info=True)
-        
-        except Exception as e:
-            logger.error(f"MongoDB Change Stream error: {str(e)}")
-            logger.warning("Reconnecting to trading_orders Change Stream in 5 seconds...")
-            time.sleep(5)
+# Change Stream watcher removed - orders now received via HTTP API
+# (Direct API call from cerebro after creating order)
 
 
 def process_order_from_queue(order_item: Dict[str, Any]):
@@ -1688,13 +1794,9 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                 logger.debug(f"Updating signal_store for {order_id}")
                 update_signal_store_with_execution(order_data, execution_data)
 
-                # Update order status in database
-                trading_orders_collection.update_one(
-                    {"order_id": order_id},
-                    {"$set": {"status": execution['status'], "updated_at": datetime.utcnow()}}
-                )
+                # NOTE: trading_orders collection removed - all order data now in signal_store
 
-                signal_logger.info(f"ORDER: {signal_id} | EXECUTION_CONFIRMED | Fill confirmed and saved to database")
+                signal_logger.info(f"ORDER: {signal_id} | EXECUTION_CONFIRMED | Fill confirmed and saved to signal_store")
                 logger.info(f"✅ ORDER COMPLETED: {order_data.get('instrument')} | Filled: {filled_qty} @ ${avg_fill_price:.2f} | Status: {execution['status']}")
                 
                 # Send Telegram notification for filled order
@@ -1708,23 +1810,16 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                     account=order_data.get('account')
                 )
             else:
-                # Order submitted but not filled yet - just update status
-                signal_logger.info(f"ORDER: {signal_id} | WAITING_FOR_FILL | Order accepted by IBKR, waiting for execution...")
-                logger.info(f"📋 Order {order_id} submitted to IBKR, status: {status}")
-                trading_orders_collection.update_one(
-                    {"order_id": order_id},
-                    {"$set": {"status": status, "ib_order_id": result.get('ib_order_id'), "updated_at": datetime.utcnow()}}
-                )
+                # Order submitted but not filled yet - just log status
+                signal_logger.info(f"ORDER: {signal_id} | WAITING_FOR_FILL | Order accepted by broker, waiting for execution...")
+                logger.info(f"📋 Order {order_id} submitted to broker, status: {status}")
+                # NOTE: trading_orders collection removed - status tracked in signal_store
         else:
             # Order failed
-            signal_logger.error(f"ORDER: {signal_id} | ORDER_REJECTED | IBKR rejected the order - check execution_service.log for details")
+            signal_logger.error(f"ORDER: {signal_id} | ORDER_REJECTED | Broker rejected the order - check execution_service.log for details")
             logger.error(f"❌ Order {order_id} failed to execute")
 
-            # Update order status
-            trading_orders_collection.update_one(
-                {"order_id": order_id},
-                {"$set": {"status": "REJECTED", "updated_at": datetime.utcnow()}}
-            )
+            # NOTE: trading_orders collection removed - rejection tracked in signal_store
 
             # For exit orders, this is critical - implement retry logic
             if order_data.get('action') == 'EXIT':
@@ -1793,33 +1888,14 @@ if __name__ == "__main__":
         )
         logger.info(f"✅ Mock broker account '{account_id}' initialized with empty positions")
 
-    # Check for existing PENDING orders that were created before service started
-    # (MongoDB Change Streams only see NEW changes, not existing documents)
-    logger.info("Checking for existing PENDING orders...")
-    pending_count = 0
-    try:
-        pending_orders = list(trading_orders_collection.find({'status': 'PENDING'}).sort('created_at', 1))
-        if pending_orders:
-            pending_count = len(pending_orders)
-            logger.info(f"Found {pending_count} existing PENDING orders - processing them now")
-            for order in pending_orders:
-                # Wrap in same format as change stream events
-                order_queue.put({'order_data': order})
-        else:
-            logger.info("No existing PENDING orders found")
-    except Exception as e:
-        logger.error(f"Error checking for existing PENDING orders: {e}")
+    service_status['pending_orders_processed'] = 0  # No longer checking for pending orders in trading_orders
     
-    service_status['pending_orders_processed'] = pending_count
+    # Change Stream watcher removed - orders now received via HTTP API
+    # (Direct API call from cerebro after creating order)
     
-    # Start MongoDB Change Stream watcher in background thread
-    orders_watcher_thread = threading.Thread(target=watch_trading_orders, daemon=True)
-    orders_watcher_thread.start()
-    service_status['change_stream_connected'] = True
-
     # Mark service as ready
     service_status['ready'] = True
-    logger.info("✅ Execution Service ready - listening for orders via MongoDB Change Streams")
+    logger.info("✅ Execution Service ready - listening for orders via HTTP API")
     logger.info("*" * 50)
     try:
         while True:

@@ -29,7 +29,7 @@ if ! docker ps | grep -q "$CONTAINER_NAME"; then
 fi
 
 # Verify MongoDB is accessible
-if ! docker exec "$CONTAINER_NAME" mongosh "$DATABASE" --quiet --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+if ! docker exec "$CONTAINER_NAME" mongosh --port 27018 "$DATABASE" --quiet --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
     echo "❌ Error: Cannot connect to MongoDB in container"
     echo "   Verify container is healthy: docker ps"
     exit 1
@@ -47,6 +47,7 @@ echo "📤 Exporting entire database..."
 echo ""
 
 docker exec "$CONTAINER_NAME" mongodump \
+    --port 27018 \
     --db "$DATABASE" \
     --out "$CONTAINER_DUMP_PATH/dump"
 
@@ -129,7 +130,7 @@ fi
 
 # Get live database collections and counts
 echo "  📊 Comparing collections and document counts..."
-LIVE_COLLECTIONS=$(docker exec "$CONTAINER_NAME" mongosh "$DATABASE" --quiet --eval "
+LIVE_COLLECTIONS=$(docker exec "$CONTAINER_NAME" mongosh --port 27018 "$DATABASE" --quiet --eval "
 db.getCollectionNames().sort().forEach(function(col) { 
   print(col + ':' + db.getCollection(col).countDocuments({})); 
 });" 2>/dev/null | sort)
@@ -140,6 +141,7 @@ docker cp "$VERIFY_TEMP_DIR/dump/$DATABASE" "$CONTAINER_NAME:/tmp/verify_dump_$$
 # Get exported collections and counts by restoring to a temp database
 VERIFY_DB="temp_verify_$$"
 docker exec "$CONTAINER_NAME" mongorestore \
+    --port 27018 \
     --db "$VERIFY_DB" \
     --dir "/tmp/verify_dump_$$" \
     --quiet > /dev/null 2>&1
@@ -153,13 +155,13 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-EXPORTED_COLLECTIONS=$(docker exec "$CONTAINER_NAME" mongosh "$VERIFY_DB" --quiet --eval "
+EXPORTED_COLLECTIONS=$(docker exec "$CONTAINER_NAME" mongosh --port 27018 "$VERIFY_DB" --quiet --eval "
 db.getCollectionNames().sort().forEach(function(col) { 
   print(col + ':' + db.getCollection(col).countDocuments({})); 
 });" 2>/dev/null | sort)
 
 # Clean up verification database and temp files
-docker exec "$CONTAINER_NAME" mongosh "$VERIFY_DB" --quiet --eval "db.dropDatabase()" > /dev/null 2>&1
+docker exec "$CONTAINER_NAME" mongosh --port 27018 "$VERIFY_DB" --quiet --eval "db.dropDatabase()" > /dev/null 2>&1
 docker exec "$CONTAINER_NAME" rm -rf "/tmp/verify_dump_$$"
 cd "$OLDPWD"
 rm -rf "$VERIFY_TEMP_DIR"

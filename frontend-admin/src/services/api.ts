@@ -245,6 +245,35 @@ class ApiClient {
     return response.data;
   }
 
+  // NEW Activity Tab APIs
+  async getRawSignals(limit: number = 100, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.frontendApiClient.get('/api/v1/activity/raw-signals', { params });
+    return response.data;
+  }
+
+  async getSignalStore(limit: number = 100, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.frontendApiClient.get('/api/v1/activity/signal-store', { params });
+    return response.data;
+  }
+
+  async getTradingOrdersFull(limit: number = 100, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.frontendApiClient.get('/api/v1/activity/trading-orders-full', { params });
+    return response.data;
+  }
+
+  async getSignalStatus(limit: number = 100, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.frontendApiClient.get('/api/v1/activity/signal-status', { params });
+    return response.data;
+  }
+
   // ============================================================================
   // Fund Management APIs (v5)
   // ============================================================================
