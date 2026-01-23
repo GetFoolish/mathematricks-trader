@@ -190,7 +190,9 @@ def build_decision_v2(
                 'direction': leg.get('direction'),
                 'order_type': leg.get('order_type', 'MARKET'),
                 'quantity': leg.get('quantity', 0),
-                'price_used': leg.get('price', 0)
+                'price_used': leg.get('price', 0),
+                # Preserve nested option legs (e.g., strike/expiry/right) if present
+                'legs': leg.get('legs') if leg.get('legs') and isinstance(leg.get('legs'), list) else None
             })
 
     for leg in leg_results:
@@ -203,6 +205,9 @@ def build_decision_v2(
             "order_type": leg.get('order_type', 'MARKET'),
             "price": leg.get('price_used', 0),
             "margin_required": leg.get('initial_margin', 0)
+            # If this leg contains nested option 'legs', attach them so execution receives full details
+        ,
+        "legs": leg.get('legs') if leg.get('legs') else None
         })
 
     # Build decision.math as formatted string (7 sections matching log_detailed_calculation_math)
@@ -2343,8 +2348,13 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         "expiry": first_leg.get('expiry'),
                         # Multi-asset support: pass through instrument_type and related fields
                         "instrument_type": leg_result.get('instrument_type', 'STOCK'),
-                        "underlying": first_leg.get('underlying'),  # For options
+                        # For options, underlying is the instrument (SPY); for futures, use exchange
+                        "underlying": leg_result.get('instrument') if leg_result.get('instrument_type') == 'OPTION' else first_leg.get('underlying'),
                         "exchange": first_leg.get('exchange'),  # For futures
+                        # If this leg (or the raw first_leg) includes nested option legs,
+                        # pass them through so execution service and brokers can construct
+                        # complex OPTION contracts (IBKR requires a `legs` list).
+                        "legs": leg_result.get('legs') or first_leg.get('legs'),
                         # Multi-leg metadata
                         "leg_index": leg_index,
                         "total_legs": len(leg_results),

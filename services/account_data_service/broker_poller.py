@@ -573,20 +573,21 @@ class BrokerPoller:
         if account_id not in self.broker_instances:
             logger.debug(f"Creating new broker instance for {account_id}")
 
-            # Check account_type and data_source from account document
+            # Check account_type from account document
             account = self.repository.get_account(account_id)
             if not account:
                 logger.error(f"Account {account_id} not found")
                 return None
             
             account_type = account.get('account_type')
-            data_source = account.get('data_source')
-            
-            if not account_type or not data_source:
-                logger.error(f"Account {account_id} missing required fields: account_type={account_type}, data_source={data_source}")
+            if not account_type:
+                logger.error(f"Account {account_id} missing required field: account_type={account_type}")
                 return None
             
             broker_name = config.get('broker', 'Mock')
+            
+            # Data source is determined by broker: Mock broker = mock data, real brokers = live data
+            data_source = "mock" if broker_name == "Mock" else "live"
             computed_mode = f"{account_type}_{data_source}"
 
             try:

@@ -709,16 +709,15 @@ def initialize_broker_pool():
             logger.error(f"Account {account_id} has invalid mode field: {mode}. Skipping.")
             continue
         
-        # For backward compatibility, use first mode to determine broker type
-        # In future, we could create multiple broker instances for multi-mode accounts
-        primary_mode = modes[0]
-        mode_parts = primary_mode.split('_')
-        if len(mode_parts) != 2:
-            logger.error(f"Account {account_id} has invalid mode format: {primary_mode}. Expected format: <account_type>_<data_source>")
+        # Compute data_source from broker field (Mock = mock data, others = live data)
+        account_type = account.get('account_type')
+        if not account_type:
+            logger.error(f"Account {account_id} missing account_type field")
             continue
         
-        account_type, data_source = mode_parts
-        computed_mode = primary_mode
+        # Data source is determined by broker: Mock broker = mock data, real brokers = live data
+        data_source = "mock" if broker_name == "Mock" else "live"
+        computed_mode = f"{account_type}_{data_source}"
 
         try:
             # Build broker-specific config

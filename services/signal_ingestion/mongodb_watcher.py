@@ -68,6 +68,9 @@ class MongoDBWatcher:
                 raw_leg['expiry'] = leg['expiry']
             if leg.get('option_type'):
                 raw_leg['option_type'] = leg['option_type']
+            # Preserve nested option legs if provided (multi-leg option strategies)
+            if leg.get('legs') and isinstance(leg.get('legs'), list):
+                raw_leg['legs'] = leg['legs']
             raw_legs.append(raw_leg)
 
         # Determine leg_type from first leg's action (or signal_type if available)

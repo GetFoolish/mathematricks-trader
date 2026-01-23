@@ -23,11 +23,19 @@ import random
 import time
 import logging
 from pymongo import MongoClient
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Import yfinance for realistic option contract lookup
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+    print("⚠️  Warning: yfinance not available, option signals will use hardcoded values")
 
 
 def setup_logging():
@@ -64,7 +72,165 @@ def setup_logging():
 logger = setup_logging()
 
 
-def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None, mode: str = None):
+def get_realistic_option_contract(symbol: str, right: str = 'C', offset_from_atm: float = 5.0):
+    """
+    Fetch a realistic option contract for the given symbol using yfinance
+    
+    Args:
+        symbol: Underlying symbol (e.g., 'SPY')
+        right: Option type - 'C' for call, 'P' for put
+        offset_from_atm: Dollar offset from ATM strike (positive for OTM calls/ITM puts)
+    
+    Returns:
+        dict with keys: strike, expiry (YYYYMMDD format), current_price
+        or None if lookup fails
+    """
+    if not YFINANCE_AVAILABLE:
+        logger.info(f"   ⚠️  yfinance not available, skipping realistic option lookup")
+        return None
+    
+    try:
+        # Fetch ticker data
+        ticker = yf.Ticker(symbol)
+        
+        # Get current price
+        try:
+            current_price = ticker.history(period='1d')['Close'].iloc[-1]
+        except:
+            # Fallback to fast_info
+            current_price = ticker.fast_info.get('lastPrice')
+        
+        if not current_price or current_price <= 0:
+            logger.info(f"   ⚠️  Could not fetch current price for {symbol}")
+            return None
+        
+        logger.info(f"   📊 Current {symbol} price: ${current_price:.2f}")
+        
+        # Get available expiration dates
+        expirations = ticker.options
+        if not expirations:
+            logger.info(f"   ⚠️  No option expirations available for {symbol}")
+            return None
+        
+        # Find next expiration at least 7 days out (avoid weekly expiries too close)
+        target_date = datetime.now() + timedelta(days=7)
+        valid_expirations = [exp for exp in expirations if datetime.strptime(exp, '%Y-%m-%d') >= target_date]
+        
+        if not valid_expirations:
+            # Fallback to nearest available
+            selected_expiry_str = expirations[0]
+        else:
+            selected_expiry_str = valid_expirations[0]
+        
+        # Convert to YYYYMMDD format for IBKR
+        expiry_date = datetime.strptime(selected_expiry_str, '%Y-%m-%d')
+        expiry_ibkr = expiry_date.strftime('%Y%m%d')
+        
+        # Get option chain for selected expiry
+        opt_chain = ticker.option_chain(selected_expiry_str)
+        chain = opt_chain.calls if right == 'C' else opt_chain.puts
+        
+        if chain.empty:
+            logger.info(f"   ⚠️  No {right} options available for {selected_expiry_str}")
+            return None
+        
+        # Calculate target strike (ATM + offset)
+        target_strike = current_price + offset_from_atm
+        
+        # Find closest available strike to target
+        chain['strike_diff'] = abs(chain['strike'] - target_strike)
+        closest_row = chain.loc[chain['strike_diff'].idxmin()]
+        selected_strike = closest_row['strike']
+        
+        logger.info(f"   ✅ Selected {right} option: strike=${selected_strike:.2f}, expiry={expiry_ibkr}")
+        
+        return {
+            'strike': float(selected_strike),
+            'expiry': expiry_ibkr,
+            'current_price': float(current_price),
+            'offset_from_atm': float(selected_strike - current_price)
+        }
+        
+    except Exception as e:
+        logger.info(f"   ⚠️  Error fetching option contract for {symbol}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def update_option_signal_with_realistic_contract(signal: dict):
+    """
+    Update an option signal with realistic strike/expiry from yfinance
+    
+    Modifies signal in-place if it contains option legs
+    
+    Args:
+        signal: Signal dictionary to update
+    
+    Returns:
+        str: 'updated' if signal was updated, 'not_option' if not an option signal, 
+             'failed' if option signal but lookup failed
+    """
+    # Check if this signal has option legs
+    signal_legs = signal.get('signal_legs') or signal.get('signal', [])
+    
+    if not signal_legs or not isinstance(signal_legs, list):
+        return 'not_option'
+    
+    has_options = False
+    all_updated = True
+    
+    for leg in signal_legs:
+        instrument_type = leg.get('instrument_type', '').upper()
+        
+        # Skip non-option legs
+        if instrument_type != 'OPTION':
+            continue
+        
+        has_options = True
+        
+        # Check if leg has nested option details
+        option_legs = leg.get('legs', [])
+        if not option_legs or not isinstance(option_legs, list):
+            continue
+        
+        # Get underlying symbol
+        underlying = leg.get('underlying') or leg.get('instrument')
+        if not underlying:
+            logger.info(f"   ⚠️  Option leg missing underlying symbol")
+            all_updated = False
+            continue
+        
+        # Fetch realistic contract for first option leg
+        # (for now, assume all nested legs in a spread would use same underlying)
+        first_option = option_legs[0]
+        right = first_option.get('right', 'C')
+        
+        # Determine offset based on action (5 OTM for buys, ATM for sells)
+        action = first_option.get('action', 'BUY').upper()
+        offset = 5.0 if action == 'BUY' else 0.0
+        
+        logger.info(f"   🔍 Fetching realistic option contract for {underlying}...")
+        realistic = get_realistic_option_contract(underlying, right=right, offset_from_atm=offset)
+        
+        if realistic:
+            # Update all nested option legs with realistic strike/expiry
+            for opt_leg in option_legs:
+                opt_leg['strike'] = realistic['strike']
+                opt_leg['expiry'] = realistic['expiry']
+            
+            logger.info(f"   ✅ Updated option signal with realistic contract")
+        else:
+            logger.info(f"   ❌ Failed to get realistic contract for {underlying}")
+            all_updated = False
+    
+    if not has_options:
+        return 'not_option'
+    
+    return 'updated' if all_updated else 'failed'
+
+
+def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None, mode: str = None, run_id_suffix: str = None):
     """
     Insert signal directly into MongoDB signal_store collection
 
@@ -72,6 +238,8 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
         payload: Signal JSON matching webhook format
         signal_type: Type of signal ("entry", "exit", or "single")
         previous_entry_id: MongoDB ObjectId of previous ENTRY signal (for EXIT signals)
+        mode: Trading mode (mock_mock, mock_live, paper_live, live_live)
+        run_id_suffix: Optional 6-digit suffix to append to signalID for uniqueness across test runs
     """
     # Connect to MongoDB
     # Use MONGODB_URI_LOCAL for Mac scripts, fallback to MONGODB_URI for Docker
@@ -128,6 +296,13 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
         timestamp = signal_doc["signal_sent_EPOCH"]
         random_id = random.randint(1000, 9999)
         signal_doc["signalID"] = f"sig_{timestamp}_{random_id}"
+    
+    # Append run_id_suffix to signalID for uniqueness across test runs (prevents duplicate blocking)
+    if run_id_suffix:
+        # Extract base signalID without any existing suffix
+        base_signal_id = signal_doc["signalID"]
+        # Append the 6-digit suffix
+        signal_doc["signalID"] = f"{base_signal_id}_{run_id_suffix}"
 
     # Insert into trading_signals_raw collection
     try:
@@ -336,6 +511,10 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
     """
     import glob
 
+    # Generate unique 6-character suffix for this test run (prevents duplicate signal blocking)
+    # Use last 6 chars of current timestamp to ensure uniqueness across test runs
+    run_id_suffix = str(int(time.time()))[-6:]
+
     # Log separator for new test run
     logger.info("\n" + "-" * 100)
     logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] NEW SIGNAL SEND STARTED")
@@ -400,6 +579,82 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
     total_exits = sum(len(exits) for exits in exit_signals_by_entry.values())
     print(f"\n📊 Total signals loaded: {total_entries + total_exits} ({total_entries} ENTRY, {total_exits} EXIT)")
 
+    # Update option signals with realistic contract details BEFORE shuffling/sending
+    # This ensures ENTRY and EXIT signals use the same strike/expiry
+    # CRITICAL: Skip option signals that fail to get realistic contracts to avoid broker errors
+    print(f"\n🔍 Checking for option signals to update with realistic contracts...")
+    option_signals_updated = 0
+    failed_option_signals = []
+    
+    # Update ENTRY signals and track failures
+    entries_to_remove = []
+    for i, (entry_sig, source_file) in enumerate(entry_signals):
+        result = update_option_signal_with_realistic_contract(entry_sig)
+        if result == 'updated':
+            option_signals_updated += 1
+        elif result == 'failed':
+            # Mark this ENTRY and its EXITs for removal
+            entry_name = entry_sig.get("entry_name", "UNKNOWN")
+            failed_option_signals.append(f"{source_file}:{entry_name}")
+            entries_to_remove.append(i)
+            logger.info(f"   ⚠️  Skipping option signal {source_file}:{entry_name} (could not get realistic contract)")
+    
+    # Remove failed ENTRY signals (in reverse order to preserve indices)
+    for i in reversed(entries_to_remove):
+        entry_signals.pop(i)
+    
+    # Remove EXIT signals corresponding to failed ENTRY signals
+    for (source_file, entry_ref), exit_list in list(exit_signals_by_entry.items()):
+        # Check if this EXIT references a failed ENTRY
+        for failed_sig_id in failed_option_signals:
+            if f"{source_file}:{entry_ref}" == failed_sig_id or entry_ref in failed_sig_id:
+                del exit_signals_by_entry[(source_file, entry_ref)]
+                logger.info(f"   ⚠️  Skipping EXIT signal for failed ENTRY {failed_sig_id}")
+                break
+    
+    # Update EXIT signals (must use same strike/expiry as their ENTRY)
+    # We need to match EXIT to ENTRY and copy the contract details
+    for (source_file, entry_ref), exit_list in exit_signals_by_entry.items():
+        # Find the corresponding ENTRY signal
+        matching_entry = None
+        for entry_sig, entry_source in entry_signals:
+            if entry_source == source_file:
+                entry_name = entry_sig.get("entry_name")
+                if entry_name == entry_ref or entry_ref == "$PREVIOUS":
+                    matching_entry = entry_sig
+                    break
+        
+        # If we found the ENTRY, copy its option contract details to EXIT
+        if matching_entry:
+            # Get option contract from ENTRY
+            entry_legs = matching_entry.get('signal_legs') or matching_entry.get('signal', [])
+            for entry_leg in entry_legs:
+                if entry_leg.get('instrument_type', '').upper() == 'OPTION':
+                    entry_option_legs = entry_leg.get('legs', [])
+                    if entry_option_legs:
+                        # Found the ENTRY option contract, now update EXIT signals
+                        for exit_sig, exit_source in exit_list:
+                            exit_legs = exit_sig.get('signal_legs') or exit_sig.get('signal', [])
+                            for exit_leg in exit_legs:
+                                if exit_leg.get('instrument_type', '').upper() == 'OPTION':
+                                    exit_option_legs = exit_leg.get('legs', [])
+                                    if exit_option_legs:
+                                        # Copy strike/expiry from ENTRY to EXIT
+                                        for i, exit_opt in enumerate(exit_option_legs):
+                                            if i < len(entry_option_legs):
+                                                exit_opt['strike'] = entry_option_legs[i]['strike']
+                                                exit_opt['expiry'] = entry_option_legs[i]['expiry']
+                                        logger.info(f"   ✅ Copied option contract from ENTRY to EXIT signal")
+    
+    if option_signals_updated > 0:
+        print(f"✅ Updated {option_signals_updated} option signal(s) with realistic contracts")
+    if failed_option_signals:
+        print(f"⚠️  Skipped {len(failed_option_signals)} option signal(s) - could not fetch realistic contracts")
+        print(f"    Failed: {', '.join(failed_option_signals)}")
+    if option_signals_updated == 0 and not failed_option_signals:
+        print(f"✓ No option signals found (or yfinance unavailable)")
+    print()
+
     # Shuffle signals with realistic interleaving
     if seed >= 0:
         shuffle_type = "reproducible" if seed > 0 else "randomized"
@@ -450,7 +705,7 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
                     logger.info(f"   ⚠️  WARNING: Variable {entry_ref} not found in registry")
 
         # Send signal
-        result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode)
+        result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode, run_id_suffix=run_id_suffix)
         signals_sent += 1
 
         # Capture ENTRY signalID and register named variable for EXIT signals to reference
@@ -667,6 +922,9 @@ See sample files in services/signal_ingestion/sample_signals/
         print(f"📋 Processing {len(payload)} sequential signals")
         print("=" * 80)
 
+        # Generate unique 6-character suffix for this test run
+        run_id_suffix = str(int(time.time()))[-6:]
+
         total_wait_time = 0
         entry_id_registry = {}  # Maps variable names (e.g., "$ENTRY_1") to signal_store IDs
 
@@ -690,7 +948,7 @@ See sample files in services/signal_ingestion/sample_signals/
                         print(f"⚠️ WARNING: Variable {entry_ref} not found in registry")
 
             # Send signal (pass signal_type lowercase and resolved_entry_id)
-            result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode)
+            result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode, run_id_suffix=run_id_suffix)
 
             # Capture ENTRY signal_id and register named variable
             if signal_type == "ENTRY" and result and result.get("signal_id"):
