@@ -250,7 +250,7 @@ export default function SignalStoreTab() {
                                   const serviceStatus = getServiceStatus(leg);
                                   
                                   return (
-                                    <div key={legIdx} className="border border-gray-700 rounded-lg overflow-hidden">
+                                    <div key={legIdx} className="border border-gray-700 rounded-lg overflow-visible">
                                       {/* Leg Header */}
                                       <div
                                         onClick={() => setExpandedLegId(isLegExpanded ? null : legId)}
