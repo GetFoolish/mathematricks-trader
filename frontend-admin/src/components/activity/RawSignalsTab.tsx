@@ -48,13 +48,13 @@ export default function RawSignalsTab() {
   };
 
   if (loading) {
-    return <div className="flex justify-center items-center p-8">Loading...</div>;
+    return <div className="flex justify-center items-center p-8 text-gray-400">Loading...</div>;
   }
 
   if (error) {
     return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4 m-4">
-        <p className="text-red-800">Error: {error}</p>
+      <div className="bg-red-900/20 border border-red-700 rounded-lg p-4 m-4">
+        <p className="text-red-400">Error: {error}</p>
         <button
           onClick={fetchRawSignals}
           className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
@@ -66,12 +66,12 @@ export default function RawSignalsTab() {
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full bg-gray-900">
       {/* Table View */}
       <div className={`${selectedSignal ? 'w-1/2' : 'w-full'} overflow-auto`}>
         <div className="p-4">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xl font-bold">Raw Signals ({rawSignals.length})</h2>
+            <h2 className="text-xl font-bold text-white">Raw Signals ({rawSignals.length})</h2>
             <button
               onClick={fetchRawSignals}
               className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
@@ -80,22 +80,22 @@ export default function RawSignalsTab() {
             </button>
           </div>
 
-          <div className="overflow-x-auto bg-white rounded-lg shadow">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+          <div className="overflow-x-auto bg-gray-800 rounded-lg shadow">
+            <table className="min-w-full divide-y divide-gray-700">
+              <thead className="bg-gray-900/50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Signal ID</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Strategy</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mode</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Environment</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Received At</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Signal ID</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Strategy</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Type</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Mode</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Environment</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Received At</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-gray-800 divide-y divide-gray-700">
                 {rawSignals.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
+                    <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
                       No raw signals found
                     </td>
                   </tr>
@@ -104,28 +104,28 @@ export default function RawSignalsTab() {
                     <tr
                       key={signal._id}
                       onClick={() => setSelectedSignal(signal)}
-                      className={`cursor-pointer hover:bg-blue-50 ${
-                        selectedSignal?._id === signal._id ? 'bg-blue-100' : ''
+                      className={`cursor-pointer hover:bg-gray-700/50 transition-colors ${
+                        selectedSignal?._id === signal._id ? 'bg-gray-700' : ''
                       }`}
                     >
-                      <td className="px-4 py-3 text-sm font-mono">{signal.signalID}</td>
-                      <td className="px-4 py-3 text-sm">{signal.strategy_name || 'N/A'}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-gray-300">{signal.signalID}</td>
+                      <td className="px-4 py-3 text-sm text-gray-300">{signal.strategy_name || 'N/A'}</td>
                       <td className="px-4 py-3 text-sm">
                         <span
                           className={`px-2 py-1 rounded text-xs ${
                             signal.signal_type === 'ENTRY'
-                              ? 'bg-green-100 text-green-800'
+                              ? 'bg-green-900/30 text-green-400'
                               : signal.signal_type === 'EXIT'
-                              ? 'bg-red-100 text-red-800'
-                              : 'bg-gray-100 text-gray-800'
+                              ? 'bg-red-900/30 text-red-400'
+                              : 'bg-gray-700 text-gray-300'
                           }`}
                         >
                           {signal.signal_type || 'N/A'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-sm font-mono">{signal.mode || 'N/A'}</td>
-                      <td className="px-4 py-3 text-sm">{signal.environment || 'N/A'}</td>
-                      <td className="px-4 py-3 text-sm">{formatTimestamp(signal.received_at || signal.created_at)}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-gray-300">{signal.mode || 'N/A'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-300">{signal.environment || 'N/A'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-300">{formatTimestamp(signal.received_at || signal.created_at)}</td>
                     </tr>
                   ))
                 )}
@@ -137,13 +137,13 @@ export default function RawSignalsTab() {
 
       {/* Detail View */}
       {selectedSignal && (
-        <div className="w-1/2 border-l border-gray-200 overflow-auto">
+        <div className="w-1/2 border-l border-gray-700 overflow-auto bg-gray-900">
           <div className="p-4">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-bold">Signal Details</h3>
+              <h3 className="text-lg font-bold text-white">Signal Details</h3>
               <button
                 onClick={() => setSelectedSignal(null)}
-                className="text-gray-500 hover:text-gray-700"
+                className="text-gray-400 hover:text-gray-200"
               >
                 ✕
               </button>
