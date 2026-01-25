@@ -8,7 +8,7 @@ import logging
 import json
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import requests
@@ -154,6 +154,68 @@ def round_quantity_for_instrument(quantity: float, instrument_type: str) -> floa
     return precision_service.normalize_quantity(quantity, precision)
 
 
+def allocate_quantity_across_accounts(
+    total_quantity: int,
+    account_allocations: List[Dict[str, Any]],
+    target_capital: float,
+    instrument_type: str
+) -> List[int]:
+    """
+    Allocate quantity across multiple accounts ensuring sum equals total_quantity.
+    Uses floor division with remainder distribution to avoid rounding errors.
+    
+    Args:
+        total_quantity: Total quantity to distribute
+        account_allocations: List of {account_id, allocated_capital} dicts
+        target_capital: Total capital being distributed
+        instrument_type: Instrument type for precision rules
+        
+    Returns:
+        List of integer quantities, one per account, summing to total_quantity
+        
+    Example:
+        Input: total_quantity=231, 2 accounts with equal capital
+        Output: [115, 116] (NOT [116, 116])
+    """
+    if not account_allocations:
+        return []
+    
+    num_accounts = len(account_allocations)
+    
+    # Calculate base quantity and remainder using floor division
+    base_qty = total_quantity // num_accounts
+    remainder = total_quantity % num_accounts
+    
+    # Distribute base quantity to all accounts
+    quantities = [base_qty] * num_accounts
+    
+    # Distribute remainder one-by-one to accounts with higher capital allocation
+    # Sort by allocated_capital descending to give remainder to larger accounts
+    sorted_indices = sorted(
+        range(num_accounts),
+        key=lambda i: account_allocations[i].get('allocated_capital', 0),
+        reverse=True
+    )
+    
+    for i in range(remainder):
+        quantities[sorted_indices[i]] += 1
+    
+    # Verify sum equals total (assertion for safety)
+    actual_sum = sum(quantities)
+    if actual_sum != total_quantity:
+        logger.error(
+            f"⚠️ Quantity allocation error: {quantities} sum to {actual_sum}, expected {total_quantity}"
+        )
+        # Adjust last account to force correct sum
+        quantities[-1] += (total_quantity - actual_sum)
+    
+    logger.info(
+        f"✅ Allocated {total_quantity} contracts across {num_accounts} accounts: {quantities}"
+    )
+    
+    return quantities
+
+
 # Helper function to build v2 decision document
 def build_decision_v2(
     status: str,
@@ -212,15 +274,27 @@ def build_decision_v2(
 
     # Build decision.math as formatted string (7 sections matching log_detailed_calculation_math)
     math_lines = []
-    raw_qty = signal.get('quantity', 0)
+    
+    # Extract original quantity from signal (check legs structure first, fallback to top-level)
+    raw_qty = 0
+    if legs and len(legs) > 0:
+        raw_qty = legs[0].get('quantity', 0)
+    elif signal.get('legs') and len(signal.get('legs', [])) > 0:
+        raw_qty = signal['legs'][0].get('quantity', 0)
+    else:
+        raw_qty = signal.get('quantity', 0)
+    
     final_qty = decision_obj.quantity if decision_obj else 0
+
+    # Extract first leg info for display (prefer passed legs param, fallback to signal.legs)
+    first_leg = legs[0] if legs and len(legs) > 0 else (signal.get('legs', [{}])[0] if signal.get('legs') else signal)
 
     # --- 1. SIGNAL INPUT ---
     math_lines.append("--- 1. SIGNAL INPUT ---")
-    math_lines.append(f"Instrument: {signal.get('instrument', 'N/A')} ({signal.get('instrument_type', 'UNKNOWN')})")
-    math_lines.append(f"Action: {signal.get('action', 'N/A')} {signal.get('direction', '')}")
+    math_lines.append(f"Instrument: {first_leg.get('instrument', 'N/A')} ({first_leg.get('instrument_type', 'UNKNOWN')})")
+    math_lines.append(f"Action: {first_leg.get('action', 'N/A')} {first_leg.get('direction', '')}")
     math_lines.append(f"Raw Quantity: {raw_qty}")
-    math_lines.append(f"Price: ${signal.get('price', 0):,.2f}")
+    math_lines.append(f"Price: ${first_leg.get('price', 0):,.2f}")
 
     if decision_obj and decision_obj.metadata:
         metadata = decision_obj.metadata
@@ -1642,8 +1716,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             entry_signal = None
 
             if entry_signal_id and entry_signal_id != "$PREVIOUS":
-                # Check if entry_signal_id is a symbolic reference like "$ENTRY_1"
-                if entry_signal_id.startswith("$ENTRY"):
+                # Check if it's a symbolic reference starting with $ (e.g., $SPX_1D_OPT_1, $ENTRY_1, etc.)
+                if entry_signal_id.startswith("$"):
                     # Look up by entry_name (supports both v1 signal_data.entry_name and v2 raw.entry_name)
                     logger.info(f"✅ EXIT signal has symbolic entry_signal_id: {entry_signal_id}")
                     strategy_id = normalized_signal.get('strategy_id')
@@ -1749,6 +1823,33 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 logger.info(f"✅ Found entry signal: {entry_signal['signal_id']}")
                 logger.info(f"✅ Entry quantity filled: {entry_quantity_filled}")
 
+                # Calculate proportional exit based on raw quantities
+                # If ENTRY raw qty = 4 and EXIT raw qty = 2, we close 50% of the position
+                raw_exit_qty = None
+                raw_entry_qty = None
+                exit_ratio = 1.0  # Default to 100% (full exit)
+
+                # Get raw EXIT quantity from current signal
+                if legs and len(legs) > 0:
+                    raw_exit_qty = legs[0].get('quantity')
+                
+                # Get raw ENTRY quantity from entry signal
+                if entry_leg:
+                    entry_raw = entry_leg.get('raw', {})
+                    entry_raw_legs = entry_raw.get('legs', [])
+                    if entry_raw_legs and len(entry_raw_legs) > 0:
+                        raw_entry_qty = entry_raw_legs[0].get('quantity')
+                
+                # Calculate exit ratio for proportional exits
+                if raw_entry_qty and raw_exit_qty and raw_entry_qty > 0:
+                    exit_ratio = raw_exit_qty / raw_entry_qty
+                    logger.info(f"📊 Proportional exit: raw_exit={raw_exit_qty}, raw_entry={raw_entry_qty}, ratio={exit_ratio:.2%}")
+                    if exit_ratio > 1.0:
+                        logger.warning(f"⚠️ Exit ratio > 100% ({exit_ratio:.2%}) - capping at 100%")
+                        exit_ratio = 1.0
+                else:
+                    logger.info(f"📊 Full exit (100%): raw quantities not available or invalid")
+
                 # For multi-leg EXIT signals, query entry's leg_results for exact quantities
                 exit_leg_results = []
                 if is_multi_leg and legs:
@@ -1808,8 +1909,9 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     # Use primary leg quantity for decision (backward compatibility)
                     exact_quantity = exit_leg_results[0]['quantity'] if exit_leg_results else entry_quantity_filled
                 else:
-                    # Single-leg EXIT - use the entry's filled quantity
-                    exact_quantity = entry_quantity_filled
+                    # Single-leg EXIT - apply proportional exit ratio to entry's filled quantity
+                    exact_quantity = int(entry_quantity_filled * exit_ratio)
+                    logger.info(f"📊 Exit quantity: {entry_quantity_filled} × {exit_ratio:.2%} = {exact_quantity}")
 
                 # Create new decision with exact quantity (no margin calculator)
                 exit_metadata = {
@@ -2225,7 +2327,8 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             status=decision_obj.action,
             reason=decision_obj.reason,
             signal=signal,
-            decision_obj=decision_obj
+            decision_obj=decision_obj,
+            legs=legs  # Pass legs explicitly so raw_qty can be extracted
         )
 
         # Write decision to signal_store (embedded)
@@ -2277,24 +2380,33 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         
             # Create orders for each account × each leg
             orders_created = []
-            for account_alloc in account_allocations:
+            
+            # Pre-allocate quantities for each leg across all accounts to ensure sum matches total
+            leg_account_quantities = {}
+            for leg_result in leg_results:
+                leg_index = leg_result.get('leg_index', 0)
+                leg_base_quantity = int(leg_result.get('quantity', 0))
+                leg_instrument_type = leg_result.get('instrument_type', 'STOCK')
+                
+                # Use proper allocation function to distribute quantities
+                allocated_quantities = allocate_quantity_across_accounts(
+                    total_quantity=leg_base_quantity,
+                    account_allocations=account_allocations,
+                    target_capital=target_capital,
+                    instrument_type=leg_instrument_type
+                )
+                leg_account_quantities[leg_index] = allocated_quantities
+            
+            for account_idx, account_alloc in enumerate(account_allocations):
                 target_account_name = account_alloc['account_id']
                 account_capital = account_alloc['allocated_capital']
-
-                # Calculate quantity for this account based on capital allocation
-                price_used = normalized_signal.get('price', 1.0)
-                if price_used <= 0:
-                    price_used = 1.0
-                account_quantity = account_capital / price_used
 
                 for leg_result in leg_results:
                     leg_index = leg_result.get('leg_index', 0)
                     leg_instrument_type = leg_result.get('instrument_type', 'STOCK')
 
-                    # Scale leg quantity by account's capital allocation ratio
-                    leg_base_quantity = leg_result.get('quantity', 0)
-                    leg_account_quantity = leg_base_quantity * (account_capital / target_capital) if target_capital > 0 else 0
-                    leg_quantity = round_quantity_for_instrument(leg_account_quantity, leg_instrument_type)
+                    # Get pre-allocated quantity for this account and leg
+                    leg_quantity = leg_account_quantities[leg_index][account_idx]
 
                     if leg_quantity <= 0:
                         logger.warning(f"Leg {leg_index+1} quantity is 0 for account {target_account_name}, skipping")

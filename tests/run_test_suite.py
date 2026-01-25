@@ -394,102 +394,92 @@ class TestSuite:
                 print(f"\n   ❌ UNEXPECTED ERROR in {name}: {e}")
                 self.failed.append(name)
     
-    def run_signal_tests(self, mode: str = None, up_to: str = None, signal_count: int = None, signals_folder: str = None) -> bool:
+    def run_signal_tests(self, data_source: str = 'mock', signal_count: int = None, signals_folder: str = None) -> bool:
         """Run signal tests using run_signal_tests_full.py"""
         self.print_header(f"🧪 Signal Testing")
         
         try:
             import subprocess
             
-            # Determine which modes to test
-            modes_to_test = []
-            
-            if up_to:
-                mode_order = ['mock_mock', 'mock_live', 'paper_live', 'live_live']
-                try:
-                    up_to_idx = mode_order.index(up_to)
-                    modes_to_test = mode_order[:up_to_idx + 1]
-                except ValueError:
-                    print(f"   ❌ Invalid mode: {up_to}")
-                    return False
-            elif mode:
-                modes_to_test = [mode]
-            else:
-                # Default: test first 3 modes (skip live_live)
-                modes_to_test = ['mock_mock', 'mock_live', 'paper_live']
-            
-            print(f"   Testing modes: {', '.join(modes_to_test)}")
-            
-            # Use provided signals folder or default to tests/sample_signals
+            # Use provided signals folder or default to tests/sample_signals/mock
             if signals_folder:
                 signals_folder_path = Path(signals_folder)
             else:
-                signals_folder_path = self.project_root / 'tests' / 'sample_signals'
+                signals_folder_path = self.project_root / 'tests' / 'sample_signals' / 'mock'
             
             if not signals_folder_path.exists():
                 print(f"   ❌ Signal folder not found: {signals_folder_path}")
                 return False
             
+            # Infer broker from folder name
+            folder_name = signals_folder_path.name
+            broker_map = {
+                'mock': 'mock',
+                'ibkr-paper': 'ibkr_paper',
+                'ibkr-live': 'ibkr_live',
+                'binance-paper': 'binance_paper',
+                'binance-live': 'binance_live',
+                'production': 'production'
+            }
+            
+            broker = broker_map.get(folder_name, 'mock')
+            
+            # Build mode from broker and data_source
+            mode = f"{broker}_{data_source}" if broker != 'mock' else 'mock_mock'
+            
             # Count signal files
             signal_files = list(signals_folder_path.glob('*.json'))
-            print(f"   Found {len(signal_files)} signal file(s) in {signals_folder_path.name}\n")
+            print(f"   Folder: {signals_folder_path}")
+            print(f"   Broker: {broker}")
+            print(f"   Data Source: {data_source}")
+            print(f"   Mode: {mode}")
+            print(f"   Found {len(signal_files)} signal file(s)\n")
             
-            # Run test for each mode
-            all_passed = True
-            for test_mode in modes_to_test:
-                print(f"\n{'─'*80}")
-                print(f"🚀 Testing mode: {test_mode.upper()}")
-                print('─'*80 + "\n")
-                
-                # Build command
-                test_script = self.project_root / 'tests' / 'run_signal_tests_full.py'
-                cmd = [
-                    sys.executable,
-                    str(test_script),
-                    '--mode', test_mode,
-                    '--folder', str(signals_folder_path),
-                    '--output-dir', str(self.project_root / 'test_results')
-                ]
-                
-                # Add signal_count if specified
-                if signal_count is not None:
-                    cmd.extend(['--signal_count', str(signal_count)])
-                
-                # Run the test
-                try:
-                    result = subprocess.run(
-                        cmd,
-                        cwd=str(self.project_root),
-                        capture_output=False,
-                        text=True,
-                        timeout=600 * 2  # 20 minute timeout
-                    )
-                    
-                    if result.returncode == 0:
-                        print(f"\n   ✅ {test_mode.upper()} tests PASSED")
-                        self.passed.append(f"Signal Tests ({test_mode})")
-                    else:
-                        print(f"\n   ❌ {test_mode.upper()} tests FAILED")
-                        self.failed.append(f"Signal Tests ({test_mode})")
-                        all_passed = False
-                        
-                        # Stop testing if a mode fails
-                        print(f"\n   ⚠️  {test_mode} had failures, stopping signal testing")
-                        break
-                        
-                except subprocess.TimeoutExpired:
-                    print(f"\n   ❌ {test_mode.upper()} tests TIMEOUT")
-                    self.failed.append(f"Signal Tests ({test_mode})")
-                    all_passed = False
-                    break
-                    
-                except Exception as e:
-                    print(f"\n   ❌ Error running {test_mode}: {e}")
-                    self.failed.append(f"Signal Tests ({test_mode})")
-                    all_passed = False
-                    break
+            print(f"\n{'─'*80}")
+            print(f"🚀 Testing: {mode.upper()}")
+            print('─'*80 + "\n")
             
-            return all_passed
+            # Build command
+            test_script = self.project_root / 'tests' / 'run_signal_tests_full.py'
+            cmd = [
+                sys.executable,
+                str(test_script),
+                '--mode', mode,
+                '--folder', str(signals_folder_path),
+            ]
+            
+            # Add signal_count if specified
+            if signal_count is not None:
+                cmd.extend(['--signal_count', str(signal_count)])
+            
+            # Run the test
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=str(self.project_root),
+                    capture_output=False,
+                    text=True,
+                    timeout=600 * 2  # 20 minute timeout
+                )
+                
+                if result.returncode == 0:
+                    print(f"\n   ✅ {mode.upper()} tests PASSED")
+                    self.passed.append(f"Signal Tests ({mode})")
+                    return True
+                else:
+                    print(f"\n   ❌ {mode.upper()} tests FAILED")
+                    self.failed.append(f"Signal Tests ({mode})")
+                    return False
+                    
+            except subprocess.TimeoutExpired:
+                print(f"\n   ❌ {mode.upper()} tests TIMEOUT")
+                self.failed.append(f"Signal Tests ({mode})")
+                return False
+                
+            except Exception as e:
+                print(f"\n   ❌ Error running {mode}: {e}")
+                self.failed.append(f"Signal Tests ({mode})")
+                return False
             
         except Exception as e:
             print(f"\n   ❌ FAIL: {e}")
@@ -538,44 +528,37 @@ Examples:
   # Clean test data (reset balances, clear signals)
   python tests/run_test_suite.py --clean
   
-  # Run all tests (system + signal tests up to paper_live)
-  python tests/run_test_suite.py --all
-  
-  # Clean and run all tests
-  python tests/run_test_suite.py --clean && python tests/run_test_suite.py --all
-  
   # Run only system validation tests
   python tests/run_test_suite.py --system
   
-  # Run signal tests in specific mode
-  python tests/run_test_suite.py --signal-testing --mode mock_mock
+  # Test mock broker with mock data
+  python tests/run_test_suite.py --signal-testing --signals-folder tests/sample_signals/mock --data-source mock
   
-  # Run signal tests up to paper_live
-  python tests/run_test_suite.py --signal-testing --up-to paper_live
+  # Test IBKR paper with mock data
+  python tests/run_test_suite.py --signal-testing --signals-folder tests/sample_signals/ibkr-paper --data-source mock
   
-  # Run everything including live_live
-  python tests/run_test_suite.py --all --include-live
+  # Test IBKR paper with live data (yfinance updates)
+  python tests/run_test_suite.py --signal-testing --signals-folder tests/sample_signals/ibkr-paper --data-source live
+  
+  # Clean and test
+  python tests/run_test_suite.py --clean --signal-testing --signals-folder tests/sample_signals/mock
         """
     )
     
     parser.add_argument('--all', action='store_true',
-                       help='Run all tests (system + signal tests up to paper_live)')
+                       help='Run all tests (system + signal tests)')
     parser.add_argument('--system', action='store_true',
                        help='Run system validation tests only')
     parser.add_argument('--signal-testing', action='store_true',
                        help='Run signal tests')
-    parser.add_argument('--mode', type=str, choices=['mock_mock', 'mock_live', 'paper_live', 'live_live'],
-                       help='Run signal tests in specific mode')
-    parser.add_argument('--up-to', type=str, choices=['mock_mock', 'mock_live', 'paper_live', 'live_live'],
-                       help='Run signal tests up to this mode')
-    parser.add_argument('--include-live', action='store_true',
-                       help='Include live_live mode in --all tests (USE WITH CAUTION)')
+    parser.add_argument('--data-source', type=str, choices=['mock', 'live'],
+                       help='Data source for testing (mock or live market data)', default='mock')
     parser.add_argument('--clean', action='store_true',
                        help='Clean test data: reset balances, clear signals, restart services')
     parser.add_argument('--signal_count', type=int,
-                       help='Limit total number of signals to send (applies per-mode)')
+                       help='Limit total number of signals to send')
     parser.add_argument('--signals-folder', type=str,
-                       help='Path to signals folder (default: tests/sample_signals)')
+                       help='Path to signals folder (e.g., tests/sample_signals/mock, tests/sample_signals/ibkr-paper)')
     
     args = parser.parse_args()
     
@@ -588,14 +571,14 @@ Examples:
             return 1
         
         # If only --clean was specified, exit after cleaning
-        if not any([args.all, args.system, args.signal_testing, args.mode, args.up_to]):
+        if not any([args.all, args.system, args.signal_testing]):
             return 0
         
         # Otherwise continue to run tests after cleaning
         print("\n")  # Add spacing before test output
     
     # Default to --all if no test args specified (and not just --clean)
-    if not args.clean and not any([args.all, args.system, args.signal_testing, args.mode, args.up_to]):
+    if not args.clean and not any([args.all, args.system, args.signal_testing]):
         args.all = True
     
     print("="*80)
@@ -616,18 +599,12 @@ Examples:
             return suite.print_summary()
     
     # Run signal tests
-    if args.all:
-        # Run up to paper_live by default (or live_live if --include-live)
-        up_to_mode = 'live_live' if args.include_live else 'paper_live'
-        suite.run_signal_tests(up_to=up_to_mode, signal_count=args.signal_count)
-    elif args.signal_testing:
-        if args.mode:
-            suite.run_signal_tests(mode=args.mode, signal_count=args.signal_count, signals_folder=args.signals_folder)
-        elif args.up_to:
-            suite.run_signal_tests(up_to=args.up_to, signal_count=args.signal_count, signals_folder=args.signals_folder)
-        else:
-            # Default to mock_mock if no mode specified
-            suite.run_signal_tests(mode='mock_mock', signal_count=args.signal_count, signals_folder=args.signals_folder)
+    if args.signal_testing:
+        suite.run_signal_tests(
+            data_source=args.data_source,
+            signal_count=args.signal_count,
+            signals_folder=args.signals_folder
+        )
     
     # Print summary
     return suite.print_summary()

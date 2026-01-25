@@ -581,79 +581,87 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
 
     # Update option signals with realistic contract details BEFORE shuffling/sending
     # This ensures ENTRY and EXIT signals use the same strike/expiry
+    # ONLY applies to mock_live, paper_live, live_live modes (mock_mock uses hardcoded values)
     # CRITICAL: Skip option signals that fail to get realistic contracts to avoid broker errors
-    print(f"\n🔍 Checking for option signals to update with realistic contracts...")
     option_signals_updated = 0
     failed_option_signals = []
     
-    # Update ENTRY signals and track failures
-    entries_to_remove = []
-    for i, (entry_sig, source_file) in enumerate(entry_signals):
-        result = update_option_signal_with_realistic_contract(entry_sig)
-        if result == 'updated':
-            option_signals_updated += 1
-        elif result == 'failed':
-            # Mark this ENTRY and its EXITs for removal
-            entry_name = entry_sig.get("entry_name", "UNKNOWN")
-            failed_option_signals.append(f"{source_file}:{entry_name}")
-            entries_to_remove.append(i)
-            logger.info(f"   ⚠️  Skipping option signal {source_file}:{entry_name} (could not get realistic contract)")
+    # Check if we should update option contracts based on mode
+    should_update_options = mode in ['mock_live', 'paper_live', 'live_live']
     
-    # Remove failed ENTRY signals (in reverse order to preserve indices)
-    for i in reversed(entries_to_remove):
-        entry_signals.pop(i)
-    
-    # Remove EXIT signals corresponding to failed ENTRY signals
-    for (source_file, entry_ref), exit_list in list(exit_signals_by_entry.items()):
-        # Check if this EXIT references a failed ENTRY
-        for failed_sig_id in failed_option_signals:
-            if f"{source_file}:{entry_ref}" == failed_sig_id or entry_ref in failed_sig_id:
-                del exit_signals_by_entry[(source_file, entry_ref)]
-                logger.info(f"   ⚠️  Skipping EXIT signal for failed ENTRY {failed_sig_id}")
-                break
-    
-    # Update EXIT signals (must use same strike/expiry as their ENTRY)
-    # We need to match EXIT to ENTRY and copy the contract details
-    for (source_file, entry_ref), exit_list in exit_signals_by_entry.items():
-        # Find the corresponding ENTRY signal
-        matching_entry = None
-        for entry_sig, entry_source in entry_signals:
-            if entry_source == source_file:
-                entry_name = entry_sig.get("entry_name")
-                if entry_name == entry_ref or entry_ref == "$PREVIOUS":
-                    matching_entry = entry_sig
+    if should_update_options:
+        print(f"\n🔍 Checking for option signals to update with realistic contracts (mode={mode})...")
+        
+        # Update ENTRY signals and track failures
+        entries_to_remove = []
+        for i, (entry_sig, source_file) in enumerate(entry_signals):
+            result = update_option_signal_with_realistic_contract(entry_sig)
+            if result == 'updated':
+                option_signals_updated += 1
+            elif result == 'failed':
+                # Mark this ENTRY and its EXITs for removal
+                entry_name = entry_sig.get("entry_name", "UNKNOWN")
+                failed_option_signals.append(f"{source_file}:{entry_name}")
+                entries_to_remove.append(i)
+                logger.info(f"   ⚠️  Skipping option signal {source_file}:{entry_name} (could not get realistic contract)")
+        
+        # Remove failed ENTRY signals (in reverse order to preserve indices)
+        for i in reversed(entries_to_remove):
+            entry_signals.pop(i)
+        
+        # Remove EXIT signals corresponding to failed ENTRY signals
+        for (source_file, entry_ref), exit_list in list(exit_signals_by_entry.items()):
+            # Check if this EXIT references a failed ENTRY
+            for failed_sig_id in failed_option_signals:
+                if f"{source_file}:{entry_ref}" == failed_sig_id or entry_ref in failed_sig_id:
+                    del exit_signals_by_entry[(source_file, entry_ref)]
+                    logger.info(f"   ⚠️  Skipping EXIT signal for failed ENTRY {failed_sig_id}")
                     break
         
-        # If we found the ENTRY, copy its option contract details to EXIT
-        if matching_entry:
-            # Get option contract from ENTRY
-            entry_legs = matching_entry.get('signal_legs') or matching_entry.get('signal', [])
-            for entry_leg in entry_legs:
-                if entry_leg.get('instrument_type', '').upper() == 'OPTION':
-                    entry_option_legs = entry_leg.get('legs', [])
-                    if entry_option_legs:
-                        # Found the ENTRY option contract, now update EXIT signals
-                        for exit_sig, exit_source in exit_list:
-                            exit_legs = exit_sig.get('signal_legs') or exit_sig.get('signal', [])
-                            for exit_leg in exit_legs:
-                                if exit_leg.get('instrument_type', '').upper() == 'OPTION':
-                                    exit_option_legs = exit_leg.get('legs', [])
-                                    if exit_option_legs:
-                                        # Copy strike/expiry from ENTRY to EXIT
-                                        for i, exit_opt in enumerate(exit_option_legs):
-                                            if i < len(entry_option_legs):
-                                                exit_opt['strike'] = entry_option_legs[i]['strike']
-                                                exit_opt['expiry'] = entry_option_legs[i]['expiry']
-                                        logger.info(f"   ✅ Copied option contract from ENTRY to EXIT signal")
-    
-    if option_signals_updated > 0:
-        print(f"✅ Updated {option_signals_updated} option signal(s) with realistic contracts")
-    if failed_option_signals:
-        print(f"⚠️  Skipped {len(failed_option_signals)} option signal(s) - could not fetch realistic contracts")
-        print(f"    Failed: {', '.join(failed_option_signals)}")
-    if option_signals_updated == 0 and not failed_option_signals:
-        print(f"✓ No option signals found (or yfinance unavailable)")
-    print()
+        # Update EXIT signals (must use same strike/expiry as their ENTRY)
+        # We need to match EXIT to ENTRY and copy the contract details
+        for (source_file, entry_ref), exit_list in exit_signals_by_entry.items():
+            # Find the corresponding ENTRY signal
+            matching_entry = None
+            for entry_sig, entry_source in entry_signals:
+                if entry_source == source_file:
+                    entry_name = entry_sig.get("entry_name")
+                    if entry_name == entry_ref or entry_ref == "$PREVIOUS":
+                        matching_entry = entry_sig
+                        break
+            
+            # If we found the ENTRY, copy its option contract details to EXIT
+            if matching_entry:
+                # Get option contract from ENTRY
+                entry_legs = matching_entry.get('signal_legs') or matching_entry.get('signal', [])
+                for entry_leg in entry_legs:
+                    if entry_leg.get('instrument_type', '').upper() == 'OPTION':
+                        entry_option_legs = entry_leg.get('legs', [])
+                        if entry_option_legs:
+                            # Found the ENTRY option contract, now update EXIT signals
+                            for exit_sig, exit_source in exit_list:
+                                exit_legs = exit_sig.get('signal_legs') or exit_sig.get('signal', [])
+                                for exit_leg in exit_legs:
+                                    if exit_leg.get('instrument_type', '').upper() == 'OPTION':
+                                        exit_option_legs = exit_leg.get('legs', [])
+                                        if exit_option_legs:
+                                            # Copy strike/expiry from ENTRY to EXIT
+                                            for i, exit_opt in enumerate(exit_option_legs):
+                                                if i < len(entry_option_legs):
+                                                    exit_opt['strike'] = entry_option_legs[i]['strike']
+                                                    exit_opt['expiry'] = entry_option_legs[i]['expiry']
+                                            logger.info(f"   ✅ Copied option contract from ENTRY to EXIT signal")
+        
+        if option_signals_updated > 0:
+            print(f"✅ Updated {option_signals_updated} option signal(s) with realistic contracts")
+        if failed_option_signals:
+            print(f"⚠️  Skipped {len(failed_option_signals)} option signal(s) - could not fetch realistic contracts")
+            print(f"    Failed: {', '.join(failed_option_signals)}")
+        if option_signals_updated == 0 and not failed_option_signals:
+            print(f"✓ No option signals found (or yfinance unavailable)")
+        print()
+    else:
+        print(f"\n✓ Skipping option contract updates (mode={mode} - using hardcoded values)\n")
 
     # Shuffle signals with realistic interleaving
     if seed >= 0:
