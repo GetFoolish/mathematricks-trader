@@ -232,7 +232,7 @@ def update_option_signal_with_realistic_contract(signal: dict):
 
 def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None, mode: str = None, run_id_suffix: str = None):
     """
-    Insert signal directly into MongoDB signal_store collection
+    Send signal via HTTP POST to signal-receiver API
 
     Args:
         payload: Signal JSON matching webhook format
@@ -241,84 +241,88 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
         mode: Trading mode (mock_mock, mock_live, paper_live, live_live)
         run_id_suffix: Optional 6-digit suffix to append to signalID for uniqueness across test runs
     """
-    # Connect to MongoDB
-    # Use MONGODB_URI_LOCAL for Mac scripts, fallback to MONGODB_URI for Docker
-    mongodb_uri = os.getenv('MONGODB_URI_LOCAL') or os.getenv('MONGODB_URI')
-    try:
-        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
-        # Test connection
-        client.server_info()
-    except Exception as e:
-        print(f"❌ Failed to connect to MongoDB: {e}")
-        print(f"   URI: {mongodb_uri}")
-        sys.exit(1)
-
-    db = client['mathematricks_trading']
-
+    import requests
+    
+    # Signal receiver API URL
+    SIGNAL_API_URL = os.getenv('SIGNAL_API_URL', 'http://localhost:3000/api/v1/signals')
+    
     # Inject entry_signal_id if this is an EXIT signal and we have a previous ENTRY
     if signal_type == "exit" and previous_entry_id:
-        # Replace any variable reference (starting with $) with the resolved ID
+        # Replace any variable reference (starting with $) with the resolved ObjectId
         entry_ref = payload.get("entry_signal_id", "")
         if entry_ref.startswith("$"):
             payload["entry_signal_id"] = previous_entry_id
-            print(f"✓ Injected entry_signal_id: {previous_entry_id[:12]}...")
-
-    # Add metadata for local testing
-    # Determine environment (staging by default for local testing)
-    environment = "staging" if payload.get("staging", True) else "production"
+            print(f"✓ Injected entry_signal_id (ObjectId): {previous_entry_id[:12]}...")
 
     # Use timezone-aware UTC datetime
     now_utc = datetime.now(timezone.utc)
 
-    # Normalize signal_legs → signal for MongoDB (mongodb_watcher expects 'signal' field)
-    normalized_payload = payload.copy()
-    if "signal_legs" in normalized_payload and "signal" not in normalized_payload:
-        normalized_payload["signal"] = normalized_payload.pop("signal_legs")
-
-    signal_doc = {
-        **normalized_payload,
-        "created_at": now_utc,
-        "received_at": now_utc,  # Required by signal_ingestion
-        "source": "test_script",
-        "test": True,
-        "staging": payload.get("staging", True),
-        "environment": environment,  # Required by Change Stream filter
-        "mode": mode  # Trading mode (mock_mock, mock_live, paper_live, live_live)
-    }
-
+    # Prepare signal payload
+    signal_payload = payload.copy()
+    
     # Auto-generate fields if missing
     # ALWAYS use current timestamp (override any hardcoded values from JSON)
-    signal_doc["signal_sent_EPOCH"] = int(now_utc.timestamp())
+    signal_payload["signal_sent_EPOCH"] = int(now_utc.timestamp())
 
-    if "signalID" not in signal_doc:
+    if "signalID" not in signal_payload:
         # Simple auto-generated ID: just timestamp_random
-        # User can provide their own signalID in the signal file for custom IDs
-        timestamp = signal_doc["signal_sent_EPOCH"]
+        timestamp = signal_payload["signal_sent_EPOCH"]
         random_id = random.randint(1000, 9999)
-        signal_doc["signalID"] = f"sig_{timestamp}_{random_id}"
+        signal_payload["signalID"] = f"sig_{timestamp}_{random_id}"
     
-    # Append run_id_suffix to signalID for uniqueness across test runs (prevents duplicate blocking)
+    # Append run_id_suffix + EPOCH to signalID for uniqueness across test runs AND within runs
     if run_id_suffix:
         # Extract base signalID without any existing suffix
-        base_signal_id = signal_doc["signalID"]
-        # Append the 6-digit suffix
-        signal_doc["signalID"] = f"{base_signal_id}_{run_id_suffix}"
+        base_signal_id = signal_payload["signalID"]
+        # Append the 6-digit suffix + current EPOCH for guaranteed uniqueness
+        signal_payload["signalID"] = f"{base_signal_id}_{run_id_suffix}_{signal_payload['signal_sent_EPOCH']}"
 
-    # Insert into trading_signals_raw collection
+    # Add passphrase for API authentication
+    if "passphrase" not in signal_payload:
+        signal_payload["passphrase"] = "test_password_123"
+    
+    # Add mode metadata
+    signal_payload["mode"] = mode
+    signal_payload["test"] = True
+    signal_payload["environment"] = "staging"
+
+    # POST to signal receiver API
     try:
-        result = db.trading_signals_raw.insert_one(signal_doc)
+        response = requests.post(
+            SIGNAL_API_URL,
+            json=signal_payload,
+            timeout=10,
+            headers={'Content-Type': 'application/json'}
+        )
+        
+        # Print response details
+        print(f"\n📡 API Response:")
+        print(f"   Status Code: {response.status_code}")
+        if response.text:
+            try:
+                response_json = response.json()
+                print(f"   Response: {json.dumps(response_json, indent=2)}")
+                result_data = response_json
+            except:
+                print(f"   Response (text): {response.text}")
+                result_data = {}
+        else:
+            print(f"   Response: NONE")
+            result_data = {}
+        
+        response.raise_for_status()
 
         print("=" * 80)
         if signal_type != "single":
-            print(f"✅ Test Signal Inserted Successfully ({signal_type.upper()})")
+            print(f"✅ Test Signal Sent Successfully ({signal_type.upper()})")
         else:
-            print("✅ Test Signal Inserted Successfully")
+            print("✅ Test Signal Sent Successfully")
         print("=" * 80)
-        print(f"Signal ID:    {signal_doc['signalID']}")
-        print(f"Strategy:     {signal_doc.get('strategy_name', 'N/A')}")
+        print(f"Signal ID:    {signal_payload['signalID']}")
+        print(f"Strategy:     {signal_payload.get('strategy_name', 'N/A')}")
 
         # Support both signal_legs (new) and signal (legacy)
-        signal_data = signal_doc.get('signal_legs') or signal_doc.get('signal', {})
+        signal_data = signal_payload.get('signal_legs') or signal_payload.get('signal', {})
         # Handle signal_legs/signal as array or dict
         if isinstance(signal_data, list):
             first_leg = signal_data[0] if len(signal_data) > 0 else {}
@@ -334,32 +338,57 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
         print(f"Action:       {action} {quantity} {instrument}{leg_count}")
 
         # Show signal type if present (new array format)
-        if "signal_type" in signal_doc:
-            print(f"Type:         {signal_doc['signal_type']}")
+        if "signal_type" in signal_payload:
+            print(f"Type:         {signal_payload['signal_type']}")
 
-        print(f"Staging:      {'Yes' if signal_doc.get('staging') else 'No'}")
-        print(f"MongoDB ID:   {result.inserted_id}")
+        print(f"Staging:      {'Yes' if signal_payload.get('staging', True) else 'No'}")
+        print(f"Staging:      {'Yes' if signal_payload.get('staging', True) else 'No'}")
+        
+        # Display processing result from API
+        api_status = result_data.get('status', 'unknown')
+        print(f"API Status:   {api_status}")
+        
+        if api_status == 'approved':
+            signal_store_id = result_data.get('signal_store_id')
+            print(f"Signal Store: {signal_store_id}")
+        elif api_status == 'rejected':
+            print(f"Rejection:    {result_data.get('reason', 'Unknown reason')}")
+        elif api_status == 'timeout':
+            print(f"Warning:      {result_data.get('reason', 'Processing timeout')}")
+        
         print(f"Timestamp:    {now_utc.isoformat()}")
         print("=" * 80)
-        print("\n📡 Signal should be picked up by signal_ingestion via Change Stream")
+        
+        if api_status == 'approved':
+            print("\n✅ Signal approved and processed by signal_ingestion")
+        elif api_status == 'rejected':
+            print("\n❌ Signal rejected by signal_ingestion")
+        elif api_status == 'timeout':
+            print("\n⚠️  Signal may still be processing (timeout waiting for signal_store)")
+        
         print("\n💡 Monitor logs:")
         print("   tail -f logs/signal_ingestion.log    # Should show signal received")
         print("   tail -f logs/cerebro_service.log      # Should show position sizing")
         print("   tail -f logs/execution_service.log    # Should show order placement")
         print("")
 
-        # For ENTRY signals, return the signalID for EXIT signals to reference
-        # EXIT signals need to reference the ENTRY's signalID via entry_signal_id field
+        # Extract signal_store_id from API response
+        signal_store_id = result_data.get('signal_store_id')
+        
         return_value = {
-            "raw_id": str(result.inserted_id),
-            "signal_id": signal_doc['signalID']
+            "raw_id": signal_store_id,  # This is now the signal_store ObjectId
+            "signal_id": signal_payload['signalID']
         }
 
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Failed to send signal to API: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"   Response: {e.response.text}")
+        sys.exit(1)
     except Exception as e:
-        print(f"❌ Failed to insert signal: {e}")
+        print(f"❌ Unexpected error: {e}")
         sys.exit(1)
 
-    client.close()
     return return_value
 
 
@@ -716,16 +745,16 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
         result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode, run_id_suffix=run_id_suffix)
         signals_sent += 1
 
-        # Capture ENTRY signalID and register named variable for EXIT signals to reference
-        if signal_type == "ENTRY" and result and result.get("signal_id"):
-            # Use signalID (string ID) not MongoDB _id
-            entry_signal_id = result["signal_id"]
+        # Capture ENTRY MongoDB ObjectId and register named variable for EXIT signals to reference
+        if signal_type == "ENTRY" and result and result.get("raw_id"):
+            # Use MongoDB ObjectId (single source of truth) not signalID string
+            entry_signal_id = result["raw_id"]  # MongoDB _id as string
 
             # Register named variable if provided (e.g., "$COM2_AG_1")
             entry_name = signal_payload.get("entry_name")
             if entry_name:
                 entry_id_registry[entry_name] = entry_signal_id
-                logger.info(f"   ✓ Registered {entry_name} → {entry_signal_id}")
+                logger.info(f"   ✓ Registered {entry_name} → ObjectId({entry_signal_id[:12]}...)")
 
             # Always keep $PREVIOUS for backward compatibility
             entry_id_registry["$PREVIOUS"] = entry_signal_id
@@ -932,6 +961,9 @@ See sample files in services/signal_ingestion/sample_signals/
 
         # Generate unique 6-character suffix for this test run
         run_id_suffix = str(int(time.time()))[-6:]
+        
+        # Mode defaults to None when using --file flag directly
+        mode = None
 
         total_wait_time = 0
         entry_id_registry = {}  # Maps variable names (e.g., "$ENTRY_1") to signal_store IDs

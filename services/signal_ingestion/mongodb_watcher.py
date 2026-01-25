@@ -101,6 +101,7 @@ class MongoDBWatcher:
                 "sent_epoch": raw_signal_doc.get('signal_sent_EPOCH'),
                 "entry_name": raw_signal_doc.get('entry_name'),
                 "exit_name": raw_signal_doc.get('exit_name'),
+                "entry_signal_id": raw_signal_doc.get('entry_signal_id'),  # ObjectId reference to parent ENTRY
                 "account_equity": raw_signal_doc.get('account_equity'),
                 "signal_type": signal_type,
                 "legs": raw_legs
@@ -275,17 +276,25 @@ class MongoDBWatcher:
                             continue
                     else:
                         # ENTRY: Create new signal document
-                        signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
+                        # Check for duplicate signalID to prevent collisions
+                        existing_signal = self.signal_store_collection.find_one({"signal_id": raw_signal_doc['signalID']})
+                        if existing_signal:
+                            logger.warning(f"⚠️ Duplicate signalID detected: {raw_signal_doc['signalID']} already exists in signal_store (ID: {existing_signal['_id']})")
+                            logger.warning(f"   Skipping duplicate ENTRY signal. This may indicate a test data issue.")
+                            # Use existing signal's ID instead of creating a new one
+                            mathematricks_signal_id = existing_signal['_id']
+                        else:
+                            signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
 
-                        # Add first leg (the ENTRY leg)
-                        entry_leg = self._build_leg_data(raw_signal_doc, signal_array, 0)
-                        signal_store_doc['legs'] = [entry_leg]
+                            # Add first leg (the ENTRY leg)
+                            entry_leg = self._build_leg_data(raw_signal_doc, signal_array, 0)
+                            signal_store_doc['legs'] = [entry_leg]
 
-                        # Insert into signal_store
-                        result = self.signal_store_collection.insert_one(signal_store_doc)
-                        mathematricks_signal_id = result.inserted_id
+                            # Insert into signal_store
+                            result = self.signal_store_collection.insert_one(signal_store_doc)
+                            mathematricks_signal_id = result.inserted_id
 
-                        logger.info(f"📝 Created new signal_store document: {mathematricks_signal_id} for ENTRY signal {raw_signal_doc['signalID']}")
+                            logger.info(f"📝 Created new signal_store document: {mathematricks_signal_id} for ENTRY signal {raw_signal_doc['signalID']}")
 
                     # UPDATE trading_signals_raw with link
                     self.mongodb_collection.update_one(
@@ -419,9 +428,32 @@ class MongoDBWatcher:
                         parent_signal_id = raw_signal_doc.get('entry_signal_id') if is_exit_or_scale else None
 
                         if is_exit_or_scale and parent_signal_id:
-                            # EXIT/SCALE: Find parent signal and append leg
-                            # Try to find by entry_name first (matches entry_signal_id), fallback to base_signal_id
-                            parent_doc = self.signal_store_collection.find_one({"entry_name": parent_signal_id})
+                            # EXIT/SCALE: Find parent signal  
+                            # Try multiple lookup methods:
+                            # 1. If it's a 24-char hex ObjectId → lookup by _id
+                            # 2. Otherwise → lookup by signal_id field (string)
+                            # 3. Fallback: entry_name or base_signal_id (for old data)
+                            parent_doc = None
+                            
+                            # Try ObjectId first if it looks like one
+                            if len(parent_signal_id) == 24 and all(c in '0123456789abcdefABCDEF' for c in parent_signal_id):
+                                try:
+                                    from bson import ObjectId
+                                    parent_doc = self.signal_store_collection.find_one({"_id": ObjectId(parent_signal_id)})
+                                    if parent_doc:
+                                        logger.info(f"✅ Found parent signal by ObjectId: {parent_doc.get('signal_id')}")
+                                except:
+                                    pass
+                            
+                            # Try signal_id string lookup
+                            if not parent_doc:
+                                parent_doc = self.signal_store_collection.find_one({"signal_id": parent_signal_id})
+                                if parent_doc:
+                                    logger.info(f"✅ Found parent signal by signal_id: {parent_doc.get('signal_id')}")
+                            
+                            # Fallback: old methods (entry_name, base_signal_id)
+                            if not parent_doc:
+                                parent_doc = self.signal_store_collection.find_one({"entry_name": parent_signal_id})
                             if not parent_doc:
                                 parent_doc = self.signal_store_collection.find_one({"base_signal_id": parent_signal_id})
 
@@ -449,17 +481,25 @@ class MongoDBWatcher:
                                 continue
                         else:
                             # ENTRY: Create new signal document
-                            signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
+                            # Check for duplicate signalID to prevent collisions
+                            existing_signal = self.signal_store_collection.find_one({"signal_id": raw_signal_doc['signalID']})
+                            if existing_signal:
+                                logger.warning(f"⚠️ Duplicate signalID detected: {raw_signal_doc['signalID']} already exists in signal_store (ID: {existing_signal['_id']})")
+                                logger.warning(f"   Skipping duplicate ENTRY signal. This may indicate a test data issue.")
+                                # Use existing signal's ID instead of creating a new one
+                                mathematricks_signal_id = existing_signal['_id']
+                            else:
+                                signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
 
-                            # Add first leg (the ENTRY leg)
-                            entry_leg = self._build_leg_data(raw_signal_doc, signal_array, 0)
-                            signal_store_doc['legs'] = [entry_leg]
+                                # Add first leg (the ENTRY leg)
+                                entry_leg = self._build_leg_data(raw_signal_doc, signal_array, 0)
+                                signal_store_doc['legs'] = [entry_leg]
 
-                            # Insert into signal_store
-                            result = self.signal_store_collection.insert_one(signal_store_doc)
-                            mathematricks_signal_id = result.inserted_id
+                                # Insert into signal_store
+                                result = self.signal_store_collection.insert_one(signal_store_doc)
+                                mathematricks_signal_id = result.inserted_id
 
-                            logger.info(f"📝 Created new signal_store document: {mathematricks_signal_id} for ENTRY signal {raw_signal_doc['signalID']}")
+                                logger.info(f"📝 Created new signal_store document: {mathematricks_signal_id} for ENTRY signal {raw_signal_doc['signalID']}")
 
                         # UPDATE trading_signals_raw with link
                         self.mongodb_collection.update_one(

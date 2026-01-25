@@ -1711,68 +1711,24 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         if signal_type in ['EXIT', 'SCALE_OUT'] and decision_obj.action in ['APPROVED', 'RESIZE']:
             logger.info(f"🔴 EXIT signal detected - querying signal_store for entry quantity")
 
-            # PRIORITY 1: Check if EXIT signal explicitly provides entry_signal_id
+            # PRIORITY 1: Check if EXIT signal explicitly provides entry_signal_id (MongoDB ObjectId)
             entry_signal_id = normalized_signal.get('entry_signal_id')
             entry_signal = None
 
             if entry_signal_id and entry_signal_id != "$PREVIOUS":
-                # Check if it's a symbolic reference starting with $ (e.g., $SPX_1D_OPT_1, $ENTRY_1, etc.)
-                if entry_signal_id.startswith("$"):
-                    # Look up by entry_name (supports both v1 signal_data.entry_name and v2 raw.entry_name)
-                    logger.info(f"✅ EXIT signal has symbolic entry_signal_id: {entry_signal_id}")
-                    strategy_id = normalized_signal.get('strategy_id')
-
-                    # Try v2 schema first: raw.entry_name + decision.status + position.status
-                    entry_signal = signal_store_collection.find_one({
-                        "strategy_id": strategy_id,
-                        "raw.entry_name": entry_signal_id,
-                        "decision.status": {"$in": ["APPROVED", "RESIZE"]},
-                        "execution.status": "FILLED",
-                        "position.status": "OPEN"
-                    })
-
-                    # Fallback to v1 schema
-                    if not entry_signal:
-                        entry_signal = signal_store_collection.find_one({
-                            "strategy_id": strategy_id,
-                            "signal_data.entry_name": entry_signal_id,
-                            "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},
-                            "execution.status": "FILLED",
-                            "position_status": "OPEN"
-                        })
-
+                # Direct lookup by ObjectId - single source of truth
+                logger.info(f"✅ EXIT signal has entry_signal_id (ObjectId): {entry_signal_id[:12]}...")
+                try:
+                    from bson import ObjectId
+                    entry_signal = signal_store_collection.find_one({"_id": ObjectId(entry_signal_id)})
                     if entry_signal:
-                        logger.info(f"✅ Found entry signal by symbolic reference: {entry_signal.get('signal_id')}")
+                        logger.info(f"✅ Found exact entry signal by ObjectId: {entry_signal.get('signal_id')}")
                     else:
-                        # Try without FILLED status (might still be pending) - v2 first
-                        entry_signal = signal_store_collection.find_one({
-                            "strategy_id": strategy_id,
-                            "raw.entry_name": entry_signal_id,
-                            "decision.status": {"$in": ["APPROVED", "RESIZE"]}
-                        })
-                        # Fallback to v1
-                        if not entry_signal:
-                            entry_signal = signal_store_collection.find_one({
-                                "strategy_id": strategy_id,
-                                "signal_data.entry_name": entry_signal_id,
-                                "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]}
-                            })
-                        if entry_signal:
-                            logger.info(f"✅ Found pending entry signal by symbolic reference: {entry_signal.get('signal_id')}")
-                        else:
-                            logger.warning(f"⚠️ No entry signal found for symbolic reference: {entry_signal_id}")
-                else:
-                    # Direct lookup by ObjectId - most reliable method
-                    logger.info(f"✅ EXIT signal has entry_signal_id - using direct lookup: {entry_signal_id[:12]}...")
-                    try:
-                        from bson import ObjectId
-                        entry_signal = signal_store_collection.find_one({"_id": ObjectId(entry_signal_id)})
-                        if entry_signal:
-                            logger.info(f"✅ Found exact entry signal by ID: {entry_signal.get('signal_id')}")
-                        else:
-                            logger.warning(f"⚠️ entry_signal_id provided but signal not found: {entry_signal_id}")
-                    except Exception as e:
-                        logger.error(f"❌ Error looking up entry_signal_id {entry_signal_id}: {e}")
+                        logger.warning(f"⚠️ entry_signal_id provided but signal not found in signal_store: {entry_signal_id}")
+                except Exception as e:
+                    logger.error(f"❌ Invalid ObjectId format for entry_signal_id: {entry_signal_id}")
+                    logger.error(f"   Error: {e}")
+                    logger.warning(f"   Will fall back to fuzzy matching")
 
             # PRIORITY 2: Fallback to fuzzy matching if no entry_signal_id provided or lookup failed
             if not entry_signal:
