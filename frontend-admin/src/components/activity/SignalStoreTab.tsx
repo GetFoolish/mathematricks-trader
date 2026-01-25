@@ -37,14 +37,31 @@ export default function SignalStoreTab() {
   const [showSignalDict, setShowSignalDict] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshCountdown, setRefreshCountdown] = useState(5);
 
   useEffect(() => {
     fetchSignals();
+    
+    // Poll every 5 seconds for updates
+    const interval = setInterval(() => {
+      fetchSignals();
+      setRefreshCountdown(5);
+    }, 5000);
+    
+    // Update countdown every second
+    const countdownInterval = setInterval(() => {
+      setRefreshCountdown(prev => prev > 0 ? prev - 1 : 5);
+    }, 1000);
+    
+    return () => {
+      clearInterval(interval);
+      clearInterval(countdownInterval);
+    };
   }, []);
 
   const fetchSignals = async () => {
     try {
-      setLoading(true);
+      // Don't show loading spinner on refresh, only on initial load
       const data = await api.getSignalStore({ limit: 100 });
       setSignals(data.signals || []);
       setError(null);
@@ -112,9 +129,47 @@ export default function SignalStoreTab() {
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold text-white">Signal Store ({signals.length})</h2>
             <button
-              onClick={fetchSignals}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              onClick={() => {
+                fetchSignals();
+                setRefreshCountdown(5);
+              }}
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2"
             >
+              <svg width="16" height="16" viewBox="0 0 16 16" className="transform -rotate-90">
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="6"
+                  fill="none"
+                  stroke="rgba(255,255,255,0.3)"
+                  strokeWidth="2"
+                />
+                {[0, 1, 2, 3, 4].map((slice) => {
+                  const sliceAngle = 360 / 5;
+                  const startAngle = slice * sliceAngle;
+                  const endAngle = (slice + 1) * sliceAngle;
+                  
+                  const startRad = (startAngle - 90) * Math.PI / 180;
+                  const endRad = (endAngle - 90) * Math.PI / 180;
+                  
+                  const x1 = 8 + 6 * Math.cos(startRad);
+                  const y1 = 8 + 6 * Math.sin(startRad);
+                  const x2 = 8 + 6 * Math.cos(endRad);
+                  const y2 = 8 + 6 * Math.sin(endRad);
+                  
+                  const largeArc = sliceAngle > 180 ? 1 : 0;
+                  
+                  return (
+                    <path
+                      key={slice}
+                      d={`M 8 8 L ${x1} ${y1} A 6 6 0 ${largeArc} 1 ${x2} ${y2} Z`}
+                      fill="white"
+                      opacity={refreshCountdown > slice ? 0.9 : 0.2}
+                      className="transition-opacity duration-200"
+                    />
+                  );
+                })}
+              </svg>
               Refresh
             </button>
           </div>
@@ -398,6 +453,20 @@ export default function SignalStoreTab() {
                                                     </div>
                                                   )}
                                                 </div>
+
+                                                {/* Orders Created Section */}
+                                                {leg.execution?.orders && leg.execution.orders.length > 0 && (
+                                                  <div className="border-t border-gray-700 pt-3">
+                                                    <div className="text-gray-500 font-semibold mb-2">Orders Created:</div>
+                                                    <div className="ml-3 space-y-1">
+                                                      {leg.execution.orders.map((order: any, orderIdx: number) => (
+                                                        <div key={orderIdx} className="text-gray-300">
+                                                          • {order.fund_id}/{order.account_id}: {order.quantity_filled || order.quantity} @ ${(order.avg_fill_price || order.price)?.toFixed(2)}
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  </div>
+                                                )}
 
                                                 {/* Calculation Breakdown */}
                                                 {decision.math && (
