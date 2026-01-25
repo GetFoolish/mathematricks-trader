@@ -179,19 +179,32 @@ export default function SignalStoreTab() {
               <thead className="bg-gray-900/50">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase w-8"></th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Signal ID</th>
+                  <th className="px-2 py-3 text-left text-xs font-medium text-gray-400 uppercase w-24">Signal ID</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Strategy</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Instrument</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Mode</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Position</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase" colSpan={2}>PnL</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Legs</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Created</th>
+                </tr>
+                <tr>
+                  <th className="px-4 py-1 text-left"></th>
+                  <th className="px-2 py-1 text-left"></th>
+                  <th className="px-4 py-1 text-left"></th>
+                  <th className="px-4 py-1 text-left"></th>
+                  <th className="px-4 py-1 text-left"></th>
+                  <th className="px-4 py-1 text-left"></th>
+                  <th className="px-2 py-1 text-left text-xs font-medium text-gray-500 uppercase">Realized</th>
+                  <th className="px-2 py-1 text-left text-xs font-medium text-gray-500 uppercase">Unrealized</th>
+                  <th className="px-4 py-1 text-left"></th>
+                  <th className="px-4 py-1 text-left"></th>
                 </tr>
               </thead>
               <tbody className="bg-gray-800 divide-y divide-gray-700">
                 {signals.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-gray-400">
+                    <td colSpan={10} className="px-4 py-8 text-center text-gray-400">
                       No signals found in signal store
                     </td>
                   </tr>
@@ -226,8 +239,8 @@ export default function SignalStoreTab() {
                               {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-sm font-mono text-gray-300">
-                            {signal.signal_id}
+                          <td className="px-2 py-3 text-sm font-mono text-gray-300" title={signal.signal_id}>
+                            ...{signal.signal_id.slice(-6)}
                           </td>
                           <td className="px-4 py-3 text-sm text-gray-300">{signal.strategy_id}</td>
                           <td className="px-4 py-3 text-sm text-gray-200">{signal.instrument}</td>
@@ -257,6 +270,17 @@ export default function SignalStoreTab() {
                               );
                             })()}
                           </td>
+                          <td className="px-2 py-3 text-sm">
+                            {(() => {
+                              const pnl = signal.position?.pnl?.net;
+                              if (pnl === undefined || pnl === null) return <span className="text-gray-500">-</span>;
+                              const pnlClass = pnl >= 0 ? 'text-green-400' : 'text-red-400';
+                              return <span className={pnlClass}>${pnl.toFixed(2)}</span>;
+                            })()}
+                          </td>
+                          <td className="px-2 py-3 text-xs text-gray-500">
+                            coming soon...
+                          </td>
                           <td className="px-4 py-3 text-xs text-gray-400">
                             {legsCount.entry} ENTRY + {legsCount.exit} EXIT
                           </td>
@@ -266,11 +290,14 @@ export default function SignalStoreTab() {
                         {/* Expanded Legs Section */}
                         {isExpanded && legs.length > 0 && (
                           <tr>
-                            <td colSpan={8} className="p-0 bg-gray-850">
+                            <td colSpan={10} className="p-0 bg-gray-850">
                               <div className="p-4 space-y-2 overflow-visible">
                                 {/* Header with Signal Dict Toggle */}
                                 <div className="flex items-center justify-between mb-3">
-                                  <h4 className="text-sm font-semibold text-gray-300">Signal Legs ({legs.length})</h4>
+                                  <div>
+                                    <h4 className="text-sm font-semibold text-gray-300">Signal Legs ({legs.length})</h4>
+                                    <p className="text-xs font-mono text-gray-400 mt-1">{signal.signal_id}</p>
+                                  </div>
                                   <div className="flex items-center gap-3">
                                     <span className="text-xs font-semibold text-gray-400">Signal Dict</span>
                                     <label className="relative inline-flex items-center cursor-pointer">
@@ -339,6 +366,12 @@ export default function SignalStoreTab() {
                                       {/* Leg Expanded Content */}
                                       {isLegExpanded && (
                                         <div className="p-4 bg-gray-800 space-y-4">
+                                          {/* Leg ID */}
+                                          <div className="text-sm">
+                                            <span className="text-gray-500">Leg ID:</span>{' '}
+                                            <span className="text-white font-mono">{legId}</span>
+                                          </div>
+                                          
                                           {/* Quantities Summary - Top Left */}
                                           <div className="flex gap-6 text-sm">
                                             <div>

@@ -153,7 +153,7 @@ export default function RawSignalsTab() {
             <table className="min-w-full divide-y divide-gray-700">
               <thead className="bg-gray-900/50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Signal ID</th>
+                  <th className="px-2 py-3 text-left text-xs font-medium text-gray-400 uppercase w-24">Signal ID</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Strategy</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Type</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Mode</th>
@@ -178,7 +178,9 @@ export default function RawSignalsTab() {
                         selectedSignal?._id === signal._id ? 'bg-gray-700' : ''
                       }`}
                     >
-                      <td className="px-4 py-3 text-sm font-mono text-gray-300">{signal.signalID}</td>
+                      <td className="px-2 py-3 text-sm font-mono text-gray-300" title={signal.signalID}>
+                        ...{signal.signalID.slice(-6)}
+                      </td>
                       <td className="px-4 py-3 text-sm text-gray-300">{signal.strategy_name || 'N/A'}</td>
                       <td className="px-4 py-3 text-sm">
                         <span
@@ -222,7 +224,10 @@ export default function RawSignalsTab() {
         <div className="w-1/2 border-l border-gray-700 overflow-auto bg-gray-900">
           <div className="p-4">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-bold text-white">Signal Details</h3>
+              <div>
+                <h3 className="text-lg font-bold text-white">Signal Details</h3>
+                <p className="text-xs font-mono text-gray-400 mt-1">{selectedSignal.signalID}</p>
+              </div>
               <button
                 onClick={() => setSelectedSignal(null)}
                 className="text-gray-400 hover:text-gray-200"
