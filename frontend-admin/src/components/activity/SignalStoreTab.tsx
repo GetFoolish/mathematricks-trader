@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronUp, Download } from 'lucide-react';
 import { api } from '../../services/api';
 import { StatusDot, getServiceStatus } from './StatusIndicators';
 
@@ -103,6 +103,117 @@ export default function SignalStoreTab() {
     return { entry: entryCount, exit: exitCount, total: legs.length };
   };
 
+  const exportToCSV = () => {
+    // Convert signals to CSV format
+    const headers = [
+      'Signal ID',
+      'Strategy ID',
+      'Instrument',
+      'Mode',
+      'Environment',
+      'Direction',
+      'Position Status',
+      'Entry Quantity',
+      'Exit Quantity',
+      'Remaining Quantity',
+      'Entry Price',
+      'Exit Price',
+      'Gross PnL',
+      'Net PnL',
+      'PnL %',
+      'Commission',
+      'Holding Time (s)',
+      'Account ID',
+      'Fund ID',
+      'Entry Filled At',
+      'Exit Filled At',
+      'Leg Count',
+      'Entry Legs',
+      'Exit Legs',
+      'Created At',
+      'Updated At'
+    ];
+
+    const rows = signals.map(signal => {
+      const legs = signal.legs || [];
+      const entryLeg = legs.find((leg: any) => leg.leg_type === 'ENTRY');
+      const exitLegs = legs.filter((leg: any) => leg.leg_type === 'EXIT' || leg.leg_type === 'SCALE_OUT');
+      
+      // Get entry data
+      const entryExec = entryLeg?.execution || {};
+      const entryPrice = entryExec.weighted_avg_price || '';
+      const entryFilledAt = entryExec.orders?.[0]?.filled_at || '';
+      
+      // Get exit data (aggregate if multiple exits)
+      const exitPrice = exitLegs.length > 0 
+        ? (exitLegs.reduce((sum: number, leg: any) => sum + (leg.execution?.weighted_avg_price || 0), 0) / exitLegs.length).toFixed(2)
+        : '';
+      const exitFilledAt = exitLegs[0]?.execution?.orders?.[0]?.filled_at || '';
+      
+      // Get account and fund IDs
+      const accountId = entryLeg?.execution?.orders?.[0]?.account_id || '';
+      const fundId = entryLeg?.execution?.orders?.[0]?.fund_id || '';
+      
+      // Get leg counts
+      const legsCount = getLegsCount(signal);
+
+      return [
+        signal.signal_id || '',
+        signal.strategy_id || '',
+        signal.instrument || '',
+        signal.mode || '',
+        signal.environment || '',
+        signal.direction || '',
+        signal.position?.status || '',
+        signal.position?.entry_quantity || '',
+        signal.position?.exit_quantity || '',
+        signal.position?.remaining_quantity || '',
+        entryPrice,
+        exitPrice,
+        signal.position?.pnl?.gross || '',
+        signal.position?.pnl?.net || '',
+        signal.position?.pnl?.percent || '',
+        signal.position?.pnl?.commission || '',
+        signal.position?.pnl?.holding_seconds || '',
+        accountId,
+        fundId,
+        entryFilledAt,
+        exitFilledAt,
+        legsCount.total,
+        legsCount.entry,
+        legsCount.exit,
+        signal.created_at || '',
+        signal.updated_at || ''
+      ];
+    });
+
+    // Build CSV content
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => {
+        // Escape cells containing commas, quotes, or newlines
+        const cellStr = String(cell);
+        if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+          return `"${cellStr.replace(/"/g, '""')}"`;
+        }
+        return cellStr;
+      }).join(','))
+    ].join('\n');
+
+    // Create blob and download
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', `signal_store_export_${timestamp}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   if (loading) {
     return <div className="flex justify-center items-center p-8 text-gray-400">Loading...</div>;
   }
@@ -128,13 +239,22 @@ export default function SignalStoreTab() {
         <div className="p-4">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold text-white">Signal Store ({signals.length})</h2>
-            <button
-              onClick={() => {
-                fetchSignals();
-                setRefreshCountdown(5);
-              }}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2"
-            >
+            <div className="flex gap-2">
+              <button
+                onClick={exportToCSV}
+                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 flex items-center gap-2"
+                disabled={signals.length === 0}
+              >
+                <Download size={16} />
+                Download CSV
+              </button>
+              <button
+                onClick={() => {
+                  fetchSignals();
+                  setRefreshCountdown(5);
+                }}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2"
+              >
               <svg width="16" height="16" viewBox="0 0 16 16" className="transform -rotate-90">
                 <circle
                   cx="8"
@@ -172,6 +292,7 @@ export default function SignalStoreTab() {
               </svg>
               Refresh
             </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto bg-gray-800 rounded-lg shadow">
