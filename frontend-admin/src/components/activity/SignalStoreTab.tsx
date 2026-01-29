@@ -304,6 +304,7 @@ export default function SignalStoreTab() {
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Strategy</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Instrument</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Mode</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Environment</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Position</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase" colSpan={2}>PnL</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">Legs</th>
@@ -312,6 +313,7 @@ export default function SignalStoreTab() {
                 <tr>
                   <th className="px-4 py-1 text-left"></th>
                   <th className="px-2 py-1 text-left"></th>
+                  <th className="px-4 py-1 text-left"></th>
                   <th className="px-4 py-1 text-left"></th>
                   <th className="px-4 py-1 text-left"></th>
                   <th className="px-4 py-1 text-left"></th>
@@ -325,7 +327,7 @@ export default function SignalStoreTab() {
               <tbody className="bg-gray-800 divide-y divide-gray-700">
                 {signals.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-8 text-center text-gray-400">
+                    <td colSpan={11} className="px-4 py-8 text-center text-gray-400">
                       No signals found in signal store
                     </td>
                   </tr>
@@ -366,6 +368,19 @@ export default function SignalStoreTab() {
                           <td className="px-4 py-3 text-sm text-gray-300">{signal.strategy_id}</td>
                           <td className="px-4 py-3 text-sm text-gray-200">{signal.instrument}</td>
                           <td className="px-4 py-3 text-sm font-mono text-gray-300">{signal.mode || 'N/A'}</td>
+                          <td className="px-4 py-3 text-sm">
+                            <span
+                              className={`px-2 py-1 rounded text-xs ${
+                                signal.environment === 'live'
+                                  ? 'bg-green-900/30 text-green-400'
+                                  : signal.environment === 'staging'
+                                  ? 'bg-gray-700 text-gray-300'
+                                  : 'bg-gray-800 text-gray-400'
+                              }`}
+                            >
+                              {signal.environment || 'N/A'}
+                            </span>
+                          </td>
                           <td className="px-4 py-3">
                             {(() => {
                               const filledPercent = entryQty === 0 ? 0 : (exitQty / entryQty) * 100;
@@ -411,7 +426,7 @@ export default function SignalStoreTab() {
                         {/* Expanded Legs Section */}
                         {isExpanded && legs.length > 0 && (
                           <tr>
-                            <td colSpan={10} className="p-0 bg-gray-850">
+                            <td colSpan={11} className="p-0 bg-gray-850">
                               <div className="p-4 space-y-2 overflow-visible">
                                 {/* Header with Signal Dict Toggle */}
                                 <div className="flex items-center justify-between mb-3">

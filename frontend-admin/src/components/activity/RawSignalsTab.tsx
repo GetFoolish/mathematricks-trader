@@ -196,7 +196,19 @@ export default function RawSignalsTab() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-sm font-mono text-gray-300">{signal.mode || 'N/A'}</td>
-                      <td className="px-4 py-3 text-sm text-gray-300">{signal.environment || 'N/A'}</td>
+                      <td className="px-4 py-3 text-sm">
+                        <span
+                          className={`px-2 py-1 rounded text-xs ${
+                            signal.environment === 'live'
+                              ? 'bg-green-900/30 text-green-400'
+                              : signal.environment === 'staging'
+                              ? 'bg-gray-700 text-gray-300'
+                              : 'bg-gray-800 text-gray-400'
+                          }`}
+                        >
+                          {signal.environment || 'N/A'}
+                        </span>
+                      </td>
                       <td className="px-4 py-3">
                         {(() => {
                           const serviceStatus = getServiceStatusForRawSignal(signal, signalStore);
