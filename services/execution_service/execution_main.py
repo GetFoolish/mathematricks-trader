@@ -152,13 +152,67 @@ service_status = {
     'pending_orders_processed': 0
 }
 
-# Create FastAPI app for health checks
+# ========================================================================
+# BROKER POOL INITIALIZATION (Module Level - runs once at startup)
+# ========================================================================
+
+# Global flag to track if broker pool is ready
+broker_pool_ready = False
+
+def initialize_and_connect_brokers():
+    """Initialize broker pool and connect to all brokers at module level (blocking)"""
+    global broker_pool_ready
+    
+    logger.info("🚀 Execution Service Starting - Initializing Broker Pool")
+    logger.info("*" * 80)
+    
+    # Load config: which accounts should we initialize?
+    account_ids_to_start = load_gateway_config()  # From gateway_config.yml
+    logger.info(f"📋 Accounts to initialize from gateway_config.yml: {account_ids_to_start}")
+    
+    if not account_ids_to_start:
+        logger.warning("⚠️  gateway_config.yml has no accounts listed - broker pool will be empty")
+        logger.warning("⚠️  Add accounts to 'always_start_accounts' in gateway_config.yml")
+    else:
+        # Initialize broker pool with specified accounts
+        initialize_broker_pool()
+        
+        # Connect to all brokers in pool (synchronous)
+        if not connect_all_brokers_sync():
+            logger.warning("⚠️  No brokers connected - orders will queue until brokers available")
+        else:
+            logger.info(f"✅ Broker pool: {len(broker_pool)} broker(s) ready")
+            service_status['broker_pool_size'] = len(broker_pool)
+            service_status['brokers_connected'] = len(broker_pool)
+    
+    # Initialize Mock broker if in mock mode
+    if args.use_mock_broker:
+        account_id = "Mock_Paper"
+        trading_accounts_collection.update_one(
+            {'account_id': account_id},
+            {
+                '$set': {
+                    'open_positions': [],
+                    'updated_at': datetime.utcnow()
+                }
+            },
+            upsert=True
+        )
+        logger.info(f"✅ Mock broker account '{account_id}' initialized with empty positions")
+    
+    # Mark broker pool as ready
+    broker_pool_ready = True
+    service_status['ready'] = True
+    logger.info("🎯 Execution Service Ready - Broker Pool Initialized")
+    logger.info("*" * 80)
+    
+# Create FastAPI app (no lifespan - using module-level initialization)
 app = FastAPI(title="Execution Service", version="1.0")
 
 @app.get('/health')
 def health_check():
-    """Health check endpoint"""
-    if service_status['ready']:
+    """Health check endpoint - returns 503 until broker pool is ready"""
+    if broker_pool_ready:
         return {
             'status': 'healthy',
             'ready': True,
@@ -170,6 +224,7 @@ def health_check():
             content={
                 'status': 'starting',
                 'ready': False,
+                'message': 'Broker pool still initializing',
                 **service_status
             }
         )
@@ -181,6 +236,14 @@ def status_check():
         **service_status,
         'broker_pool': list(broker_pool.keys()) if 'broker_pool' in globals() else []
     }
+
+
+# /reload endpoint REMOVED - use 'make restart' instead
+# Runtime reloads caused race conditions where broker_pool was empty during
+# 60+ second initialization window, causing order rejections.
+# The FastAPI lifespan ensures broker pool is ready before accepting requests,
+# but only on service restart, not runtime reload.
+
 
 # Pydantic models for API requests
 class ExecuteOrderRequest(BaseModel):
@@ -808,9 +871,6 @@ def get_broker_for_account(account_id: str) -> Optional['AbstractBroker']:
     return broker_pool[account_id]
 
 
-# Initialize broker pool on startup
-initialize_broker_pool()
-
 # Order queue for threading safety
 # MongoDB Change Stream watcher runs in thread, orders are processed in main thread
 order_queue = queue.Queue()
@@ -823,9 +883,9 @@ processed_signal_ids = set()  # In-memory deduplication
 SIGNAL_ID_EXPIRY_HOURS = 24  # Keep signal IDs for 24 hours
 
 
-def connect_all_brokers():
+def connect_all_brokers_sync():
     """
-    Connect to all brokers in the broker pool.
+    Connect to all brokers in the broker pool (synchronous version).
     In mock mode, only connect to Mock broker (skip real brokers like IBKR).
     """
     logger.info(f"Connecting to {len(broker_pool)} broker(s)...")
@@ -914,15 +974,23 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
         # Get broker instance for this account
         broker = get_broker_for_account(account_id)
         if not broker:
-            logger.error(f"❌ No broker found for account {account_id} - order {order_data.get('order_id')} cannot be executed")
-            return None
+            rejection_reason = f"No broker found for account {account_id}"
+            logger.error(f"❌ {rejection_reason} - order {order_data.get('order_id')} cannot be executed")
+            return {
+                "status": "REJECTED",
+                "rejection_reason": rejection_reason
+            }
 
         # Ensure broker is connected
         if not broker.is_connected():
             logger.debug(f"Connecting to {broker.broker_name} for account {account_id}...")
             if not broker.connect():
-                logger.error(f"❌ Failed to connect to {broker.broker_name} for {account_id}")
-                return None
+                rejection_reason = f"Failed to connect to {broker.broker_name} for {account_id}"
+                logger.error(f"❌ {rejection_reason}")
+                return {
+                    "status": "REJECTED",
+                    "rejection_reason": rejection_reason
+                }
 
         logger.debug(f"Submitting order {order_data.get('order_id')} to {broker.broker_name} (account: {account_id})")
 
@@ -931,8 +999,12 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
         result = broker.place_order(order_data)
 
         if not result:
-            logger.error(f"❌ Broker rejected order {order_data.get('order_id')}")
-            return None
+            rejection_reason = "Broker rejected the order"
+            logger.error(f"❌ {rejection_reason} {order_data.get('order_id')}")
+            return {
+                "status": "REJECTED",
+                "rejection_reason": rejection_reason
+            }
 
         # Track active orders for cancellation
         order_id = order_data['order_id']
@@ -970,7 +1042,8 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
         }
 
     except OrderRejectedError as e:
-        logger.error(f"❌ Order {order_data.get('order_id')} rejected: {e.rejection_reason}")
+        rejection_reason = f"Order rejected: {e.rejection_reason}"
+        logger.error(f"❌ {rejection_reason} for {order_data.get('order_id')}")
         # Send Telegram notification for rejection
         telegram.notify_order_rejected(
             order_id=order_data.get('order_id'),
@@ -980,16 +1053,31 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
             reason=e.rejection_reason,
             account=account_id
         )
-        return None
+        return {
+            "status": "REJECTED",
+            "rejection_reason": rejection_reason
+        }
     except InvalidSymbolError as e:
-        logger.error(f"❌ Invalid symbol in order {order_data.get('order_id')}: {str(e)}")
-        return None
+        rejection_reason = f"Invalid symbol: {str(e)}"
+        logger.error(f"❌ {rejection_reason} for order {order_data.get('order_id')}")
+        return {
+            "status": "REJECTED",
+            "rejection_reason": rejection_reason
+        }
     except BrokerAPIError as e:
-        logger.error(f"❌ Broker API error for order {order_data.get('order_id')}: {e.error_code} - {str(e)}")
-        return None
+        rejection_reason = f"Broker API error: {e.error_code} - {str(e)}"
+        logger.error(f"❌ {rejection_reason} for order {order_data.get('order_id')}")
+        return {
+            "status": "REJECTED",
+            "rejection_reason": rejection_reason
+        }
     except Exception as e:
-        logger.error(f"Error submitting order {order_data.get('order_id')}: {str(e)}", exc_info=True)
-        return None
+        rejection_reason = f"Unexpected error: {str(e)}"
+        logger.error(f"❌ {rejection_reason} for order {order_data.get('order_id')}", exc_info=True)
+        return {
+            "status": "REJECTED",
+            "rejection_reason": rejection_reason
+        }
 
 
 # Pub/Sub removed - execution confirmations stored directly in MongoDB
@@ -1149,6 +1237,96 @@ def update_fund_total_equity(fund_id: str) -> float:
     except Exception as e:
         logger.error(f"❌ Failed to update fund total_equity for {fund_id}: {e}", exc_info=True)
         return 0.0
+
+
+def update_signal_store_with_rejection(order_data: Dict[str, Any], rejection_reason: str):
+    """
+    Update signal_store when order is rejected (before reaching broker or by broker).
+    
+    Args:
+        order_data: Original order data from cerebro
+        rejection_reason: Why the order was rejected
+    """
+    try:
+        from bson import ObjectId
+        import sys
+        import os
+        
+        # Add parent directory to path for imports
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        from common.lag_calculator import calculate_processing_lag
+
+        mathematricks_signal_id = order_data.get('mathematricks_signal_id')
+        if not mathematricks_signal_id:
+            logger.error(f"❌ No mathematricks_signal_id in order_data - cannot update signal_store | OrderID: {order_data.get('order_id')}")
+            return
+
+        signal_type = order_data.get('signal_type') or 'ENTRY'
+        signal_type = signal_type.upper()
+
+        # Get the parent signal document
+        signal_doc = signal_store_collection.find_one({"_id": ObjectId(mathematricks_signal_id)})
+        if not signal_doc:
+            logger.error(f"❌ Signal document {mathematricks_signal_id} not found")
+            return
+
+        # Find the matching leg
+        legs = signal_doc.get('legs', [])
+        leg_index = None
+        current_leg = None
+
+        for idx, leg in enumerate(legs):
+            if leg.get('raw', {}).get('_id') == order_data.get('raw_signal_mongodb_id'):
+                leg_index = idx
+                current_leg = leg
+                break
+            if leg_index is None and leg.get('leg_type') == signal_type:
+                leg_index = idx
+                current_leg = leg
+                break
+
+        if leg_index is None:
+            logger.error(f"❌ Could not find leg for signal_type={signal_type} in signal document")
+            return
+
+        # Build rejection execution data
+        now = datetime.utcnow()
+        leg_execution = {
+            "status": "REJECTED",
+            "rejection_reason": rejection_reason,
+            "rejected_at": now,
+            "orders": []
+        }
+        
+        # Update timestamps
+        updated_timestamps = current_leg.get('processing_timestamps', {})
+        if not updated_timestamps.get('execution_started'):
+            updated_timestamps['execution_started'] = now
+        updated_timestamps['execution_completed'] = now
+        
+        # Calculate processing lag
+        processing_lag = calculate_processing_lag(updated_timestamps)
+
+        # Update the specific leg
+        signal_store_collection.update_one(
+            {
+                "_id": ObjectId(mathematricks_signal_id),
+                f"legs.{leg_index}.leg_id": current_leg['leg_id']
+            },
+            {
+                "$set": {
+                    f"legs.{leg_index}.execution": leg_execution,
+                    f"legs.{leg_index}.processing_timestamps": updated_timestamps,
+                    f"legs.{leg_index}.processing_lag": processing_lag,
+                    "updated_at": now
+                }
+            }
+        )
+
+        logger.info(f"✅ Updated signal_store with rejection: {rejection_reason}")
+
+    except Exception as e:
+        logger.error(f"Failed to update signal_store with rejection: {str(e)}", exc_info=True)
 
 
 def update_signal_store_with_execution(order_data: Dict[str, Any], execution_data: Dict[str, Any]):
@@ -1740,10 +1918,31 @@ def process_order_from_queue(order_item: Dict[str, Any]):
         result = submit_order_to_broker(order_data)
 
         if result:
+            status = result.get('status', '')
+            
+            # Check if order was rejected
+            if status == 'REJECTED':
+                rejection_reason = result.get('rejection_reason', 'Unknown rejection reason')
+                signal_logger.error(f"ORDER: {signal_id} | ORDER_REJECTED | {rejection_reason}")
+                logger.error(f"❌ Order {order_id} rejected: {rejection_reason}")
+                
+                # Update signal_store with rejection
+                update_signal_store_with_rejection(order_data, rejection_reason)
+                
+                # For exit orders, this is critical
+                if order_data.get('action') == 'EXIT':
+                    signal_logger.critical(f"ORDER: {signal_id} | EXIT_ORDER_FAILED | CRITICAL: Exit order rejected - manual intervention required!")
+                    logger.critical(f"🚨 EXIT order {order_id} REJECTED - manual intervention required!")
+                    logger.critical(f"   Symbol: {order_data.get('instrument')}")
+                    logger.critical(f"   Quantity: {order_data.get('quantity')}")
+                    logger.critical(f"   Account: {order_data.get('account')}")
+                    logger.critical(f"   Reason: {rejection_reason}")
+                    logger.critical(f"   ⚠️  POSITION MAY STILL BE OPEN - CHECK MANUALLY ⚠️")
+                return
+            
             # CRITICAL: Only create execution confirmation if order was actually FILLED or PARTIALLY FILLED
             # Do NOT create fake fills for orders that are just submitted/pending
 
-            status = result.get('status', '')
             filled_qty = result.get('filled', 0)
             ib_order_id = result.get('ib_order_id')
             avg_fill_price = result.get('avg_fill_price', 0)
@@ -1814,9 +2013,13 @@ def process_order_from_queue(order_item: Dict[str, Any]):
                 logger.info(f"📋 Order {order_id} submitted to broker, status: {status}")
                 # NOTE: trading_orders collection removed - status tracked in signal_store
         else:
-            # Order failed
-            signal_logger.error(f"ORDER: {signal_id} | ORDER_REJECTED | Broker rejected the order - check execution_service.log for details")
-            logger.error(f"❌ Order {order_id} failed to execute")
+            # Order failed - no result returned (should not happen with updated code, but keep as fallback)
+            rejection_reason = "Broker returned no result"
+            signal_logger.error(f"ORDER: {signal_id} | ORDER_REJECTED | {rejection_reason}")
+            logger.error(f"❌ Order {order_id} failed: {rejection_reason}")
+            
+            # Update signal_store with rejection
+            update_signal_store_with_rejection(order_data, rejection_reason)
 
             # NOTE: trading_orders collection removed - rejection tracked in signal_store
 
@@ -1857,44 +2060,17 @@ def periodic_account_updates():
 
 
 if __name__ == "__main__":
-    logger.info("🚀 Execution Service Starting")
+    logger.info("🚀 Execution Service Main - Starting order processing loop")
     
-    # Start FastAPI health check server in background thread
+    # Initialize broker pool FIRST (blocking - before FastAPI starts)
+    initialize_and_connect_brokers()
+    
+    # Start FastAPI server in background thread (broker pool is already ready)
     fastapi_thread = threading.Thread(target=run_fastapi_server, daemon=True)
     fastapi_thread.start()
-    logger.info("✅ Health check server started on port 8083")
-
-    # Connect to all brokers in pool (continue even if some fail - orders will route to available brokers)
-    if not connect_all_brokers():
-        logger.warning("⚠️  No brokers connected - orders will queue until brokers available")
-    else:
-        logger.info(f"✅ Broker pool: {len(broker_pool)} broker(s) ready")
-        service_status['broker_pool_size'] = len(broker_pool)
-        service_status['brokers_connected'] = len(broker_pool)
-
-    # Initialize Mock broker with empty positions
-    if args.use_mock_broker:
-        account_id = "Mock_Paper"
-        trading_accounts_collection.update_one(
-            {'account_id': account_id},
-            {
-                '$set': {
-                    'open_positions': [],
-                    'updated_at': datetime.utcnow()
-                }
-            },
-            upsert=True
-        )
-        logger.info(f"✅ Mock broker account '{account_id}' initialized with empty positions")
-
-    service_status['pending_orders_processed'] = 0  # No longer checking for pending orders in trading_orders
+    logger.info("✅ FastAPI server started on port 8083")
     
-    # Change Stream watcher removed - orders now received via HTTP API
-    # (Direct API call from cerebro after creating order)
-    
-    # Mark service as ready
-    service_status['ready'] = True
-    logger.info("✅ Execution Service ready - listening for orders via HTTP API")
+    logger.info("✅ Broker pool ready - starting order processing loop")
     logger.info("*" * 50)
     try:
         while True:
@@ -1909,4 +2085,11 @@ if __name__ == "__main__":
             time.sleep(0.1)
     except KeyboardInterrupt:
         logger.info("Shutting down Execution Service")
-        broker.disconnect()
+        # Disconnect all brokers
+        for account_id, broker in broker_pool.items():
+            try:
+                if hasattr(broker, 'disconnect'):
+                    broker.disconnect()
+                    logger.info(f"✅ Disconnected broker: {account_id}")
+            except Exception as e:
+                logger.warning(f"Error disconnecting {account_id}: {e}")

@@ -73,11 +73,14 @@ class IBKRBroker(AbstractBroker):
     # CONNECTION MANAGEMENT
     # ========================================================================
 
-    def connect(self) -> bool:
+    def connect(self, skip_sync: bool = False) -> bool:
         """
         Establish connection to Interactive Brokers TWS/Gateway.
 
         Automatically retries with different client_ids if the initial one is in use.
+
+        Args:
+            skip_sync: If True, skip waiting for positions/orders sync (faster, use for market data only)
 
         Returns:
             True if connection successful, False otherwise
@@ -99,11 +102,19 @@ class IBKRBroker(AbstractBroker):
             current_client_id = original_client_id + attempt
 
             try:
+                # Ensure clean state before attempting connection
+                if attempt > 0:
+                    try:
+                        self.ib.disconnect()
+                    except:
+                        pass
+                
                 logger.info(f"Connecting to IBKR at {self.host}:{self.port} (client_id={current_client_id})")
-                self.ib.connect(self.host, self.port, clientId=current_client_id)
+                self.ib.connect(self.host, self.port, clientId=current_client_id, readonly=skip_sync)
 
                 # Wait briefly to catch Error 326 (client_id already in use)
-                self.ib.sleep(0.5)
+                # Skip longer wait if we're not syncing positions/orders
+                self.ib.sleep(0.2 if skip_sync else 0.5)
 
                 if self.ib.isConnected():
                     self.client_id = current_client_id  # Update to successful client_id

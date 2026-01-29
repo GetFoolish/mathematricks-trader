@@ -523,7 +523,8 @@ def shuffle_signals(entry_signals: list, exit_signals_by_entry: dict, seed: int)
 
 
 def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
-                   signal_count: int = None, pause_and_play: bool = False, mode: str = None):
+                   signal_count: int = None, pause_and_play: bool = False, mode: str = None,
+                   file_filter: str = None):
     """
     Load and send all JSON signal files from a folder
 
@@ -537,6 +538,7 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
         signal_count: Limit total number of signals to send (None = all).
         pause_and_play: If True, pause after each signal and wait for Enter key
         mode: Trading mode (mock_mock, mock_live, paper_live, live_live) - added to signal metadata
+        file_filter: Filter to specific JSON file name (e.g., 'tech_stocks_realistic.json')
     """
     import glob
 
@@ -557,12 +559,21 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
     # Find all .json files in folder
     json_files = sorted(glob.glob(os.path.join(folder_path, "*.json")))
 
+    # Apply file filter if provided
+    if file_filter:
+        json_files = [f for f in json_files if os.path.basename(f) == file_filter]
+        if not json_files:
+            logger.info(f"❌ No files matching filter '{file_filter}' found in: {folder_path}")
+            sys.exit(1)
+
     if not json_files:
         logger.info(f"❌ No .json files found in: {folder_path}")
         sys.exit(1)
 
     logger.info("\n" + "=" * 80)
     logger.info(f"📁 Loading signals from folder: {folder_path}")
+    if file_filter:
+        logger.info(f"   File filter: {file_filter}")
     logger.info(f"   Found {len(json_files)} signal files")
     logger.info("=" * 80)
 

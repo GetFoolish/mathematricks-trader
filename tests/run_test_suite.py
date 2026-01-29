@@ -118,43 +118,21 @@ class TestSuite:
                 )
                 print(f"   ✅ {fund_id}: reset to ${total_equity:,.2f}")
             
-            # Restart execution service
-            print("\n🔄 Restarting execution-service...")
+            # Reload broker pool in execution service (faster than full restart)
+            print("\n🔄 Reloading broker pool in execution-service...")
             try:
-                subprocess.run(
-                    ["docker", "restart", "mathematricks-trader-execution-service-1"],
-                    check=True,
-                    capture_output=True,
-                    timeout=10
-                )
+                response = requests.post('http://localhost:8083/reload', timeout=30)
+                response.raise_for_status()
                 
-                # Wait for service to be healthy
-                print("   ⏳ Waiting for service to be healthy...")
-                max_wait = 60
-                wait_interval = 2
-                elapsed = 0
-                service_ready = False
-                
-                while elapsed < max_wait:
-                    time.sleep(wait_interval)
-                    elapsed += wait_interval
-                    
-                    try:
-                        response = requests.get('http://localhost:8083/health', timeout=2)
-                        if response.status_code == 200:
-                            health_data = response.json()
-                            if health_data.get('ready'):
-                                service_ready = True
-                                print(f"   ✅ execution-service ready ({elapsed}s)")
-                                break
-                    except:
-                        pass
-                
-                if not service_ready:
-                    print(f"   ⚠️  Service not ready after {max_wait}s (continuing anyway)")
+                result = response.json()
+                if result.get('status') == 'success':
+                    print(f"   ✅ {result.get('message')}")
+                else:
+                    print(f"   ⚠️  Reload returned: {result}")
                     
             except Exception as e:
-                print(f"   ⚠️  Could not restart execution-service: {e}")
+                print(f"   ⚠️  Could not reload broker pool: {e}")
+                print(f"   ℹ️  Continuing anyway (may have stale cached data)")
             
             print("\n" + "="*80)
             print("✅ TEST DATA CLEANED")
@@ -394,15 +372,22 @@ class TestSuite:
                 print(f"\n   ❌ UNEXPECTED ERROR in {name}: {e}")
                 self.failed.append(name)
     
-    def run_signal_tests(self, data_source: str = 'mock', signal_count: int = None, signals_folder: str = None) -> bool:
+    def run_signal_tests(self, data_source: str = 'mock', signal_count: int = None, signals_folder: str = None, signal_file: str = None, clean_before_test: bool = False) -> bool:
         """Run signal tests using run_signal_tests_full.py"""
         self.print_header(f"🧪 Signal Testing")
         
         try:
             import subprocess
             
-            # Use provided signals folder or default to tests/sample_signals/mock
-            if signals_folder:
+            # Determine signals folder (from file or folder parameter)
+            if signal_file:
+                # Single file mode - use parent folder
+                signal_file_path = Path(signal_file)
+                if not signal_file_path.exists():
+                    print(f"   ❌ Signal file not found: {signal_file_path}")
+                    return False
+                signals_folder_path = signal_file_path.parent
+            elif signals_folder:
                 signals_folder_path = Path(signals_folder)
             else:
                 signals_folder_path = self.project_root / 'tests' / 'sample_signals' / 'mock'
@@ -415,6 +400,7 @@ class TestSuite:
             folder_name = signals_folder_path.name
             broker_map = {
                 'mock': 'mock',
+                'ibkr': 'mock',  # Generic ibkr folder uses mock broker
                 'ibkr-paper': 'ibkr_paper',
                 'ibkr-live': 'ibkr_live',
                 'binance-paper': 'binance_paper',
@@ -425,15 +411,51 @@ class TestSuite:
             broker = broker_map.get(folder_name, 'mock')
             
             # Build mode from broker and data_source
-            mode = f"{broker}_{data_source}" if broker != 'mock' else 'mock_mock'
+            mode = f"{broker}_{data_source}"
             
-            # Count signal files
-            signal_files = list(signals_folder_path.glob('*.json'))
-            print(f"   Folder: {signals_folder_path}")
+            # Display test info
+            if signal_file:
+                print(f"   File: {Path(signal_file).name}")
+                print(f"   Folder: {signals_folder_path}")
+            else:
+                signal_files = list(signals_folder_path.glob('*.json'))
+                print(f"   Folder: {signals_folder_path}")
+                print(f"   Found {len(signal_files)} signal file(s)")
+            
             print(f"   Broker: {broker}")
             print(f"   Data Source: {data_source}")
-            print(f"   Mode: {mode}")
-            print(f"   Found {len(signal_files)} signal file(s)\n")
+            print(f"   Mode: {mode}\n")
+            
+            # For live data source, validate market data availability (regardless of broker)
+            # Even mock_live mode needs IBKR connection for live market pricing
+            if data_source == 'live':
+                from market_validator import check_market_data_availability, print_market_status_report
+                
+                print(f"\n{'─'*80}")
+                print(f"🔍 Validating Market Data Availability")
+                print('─'*80 + "\n")
+                
+                # For mock broker with live data, check IBKR for data availability
+                # For other brokers, use their own config
+                broker_for_validation = 'ibkr_paper' if broker == 'mock' else broker
+                
+                # Pass file filter if specified (only validate that specific file)
+                file_filter = Path(signal_file).name if signal_file else None
+                validation_result = check_market_data_availability(signals_folder_path, broker_for_validation, file_filter=file_filter)
+                should_proceed = print_market_status_report(validation_result)
+                
+                if not should_proceed:
+                    print("\n⚠️  Test aborted due to market data unavailability")
+                    return False
+            
+            # NOW clean test data if requested (after validation confirms we should proceed)
+            if clean_before_test:
+                print(f"\n{'─'*80}")
+                success = self.clean_test_data()
+                if not success:
+                    print("\n⚠️  Test aborted due to cleanup failure")
+                    return False
+                print()  # Add spacing
             
             print(f"\n{'─'*80}")
             print(f"🚀 Testing: {mode.upper()}")
@@ -448,9 +470,13 @@ class TestSuite:
                 '--folder', str(signals_folder_path),
             ]
             
+            # Add file filter if specified
+            if signal_file:
+                cmd.extend(['--file', Path(signal_file).name])
+            
             # Add signal_count if specified
             if signal_count is not None:
-                cmd.extend(['--signal_count', str(signal_count)])
+                cmd.extend(['--signal-count', str(signal_count)])
             
             # Run the test
             try:
@@ -555,30 +581,24 @@ Examples:
                        help='Data source for testing (mock or live market data)', default='mock')
     parser.add_argument('--clean', action='store_true',
                        help='Clean test data: reset balances, clear signals, restart services')
-    parser.add_argument('--signal_count', type=int,
+    parser.add_argument('--signal-count', type=int,
                        help='Limit total number of signals to send')
     parser.add_argument('--signals-folder', type=str,
                        help='Path to signals folder (e.g., tests/sample_signals/mock, tests/sample_signals/ibkr-paper)')
+    parser.add_argument('--file', type=str,
+                       help='Path to single signal file (e.g., tests/sample_signals/ibkr/tech_stocks_realistic.json)')
     
     args = parser.parse_args()
     
     suite = TestSuite()
     
-    # Handle --clean flag (clean first if requested)
-    if args.clean:
+    # If only --clean was specified (no tests), clean and exit
+    if args.clean and not any([args.all, args.system, args.signal_testing]):
         success = suite.clean_test_data()
-        if not success:
-            return 1
-        
-        # If only --clean was specified, exit after cleaning
-        if not any([args.all, args.system, args.signal_testing]):
-            return 0
-        
-        # Otherwise continue to run tests after cleaning
-        print("\n")  # Add spacing before test output
+        return 0 if success else 1
     
-    # Default to --all if no test args specified (and not just --clean)
-    if not args.clean and not any([args.all, args.system, args.signal_testing]):
+    # Default to --all if no test args specified
+    if not any([args.all, args.system, args.signal_testing]):
         args.all = True
     
     print("="*80)
@@ -598,12 +618,14 @@ Examples:
             print("="*80)
             return suite.print_summary()
     
-    # Run signal tests
+    # Run signal tests (will clean AFTER validation if --clean flag set)
     if args.signal_testing:
         suite.run_signal_tests(
             data_source=args.data_source,
-            signal_count=args.signal_count,
-            signals_folder=args.signals_folder
+            signal_count=getattr(args, 'signal_count'),
+            signals_folder=args.signals_folder,
+            signal_file=args.file,
+            clean_before_test=args.clean  # Pass clean flag to be executed after validation
         )
     
     # Print summary

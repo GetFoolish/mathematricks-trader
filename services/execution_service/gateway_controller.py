@@ -96,14 +96,18 @@ class GatewayController:
             return False
         
         # Use account_type field to determine port
+        # IBKR Gateway uses socat to forward internal IPv6 ports to IPv4:
+        # Paper: :::4002 -> 0.0.0.0:4004
+        # Live: :::4001 -> 0.0.0.0:4003
+        # We need to expose the socat port (4004/4003), not the internal port
         if account_type == 'live':
-            internal_port = 4003  # Live API port
+            socat_port = 4003  # Live API socat forwarding port
         else:  # paper or mock
-            internal_port = 4004  # Paper API port
+            socat_port = 4004  # Paper API socat forwarding port
         
-        logger.info(f"Using account_type='{account_type}' for port: {internal_port}")
+        logger.info(f"Using account_type='{account_type}' for port: {socat_port}")
         
-        logger.info(f"🚀 Creating IB Gateway for {account_id} (port: {internal_port})...")
+        logger.info(f"🚀 Creating IB Gateway for {account_id} (port: {socat_port})...")
         
         # Build environment variables
         # Set TRADING_MODE for IB Gateway based on account_type
@@ -115,9 +119,7 @@ class GatewayController:
             'TRADING_MODE': trading_mode,  # 'live' or 'paper' for IB Gateway
             'TWOFA_TIMEOUT_ACTION': 'restart',  # Auto-handle 2FA by restarting
             'READ_ONLY_API': 'no',
-            'IBC_AcceptIncomingConnectionAction': 'accept',
-            'IBC_ExistingSessionDetectedAction': 'primary',  # Make gateway primary, web becomes read-only
-            'IBC_AcceptNonBrokerageAccountWarning': 'yes',  # Accept paper account warnings
+            'TWS_ACCEPT_INCOMING': 'accept',  # Accept incoming API connections
             'VNC_SERVER_PASSWORD': 'ibgateway'
         }
         
@@ -127,7 +129,7 @@ class GatewayController:
                 image="ghcr.io/gnzsnz/ib-gateway:latest",
                 name=container_name,
                 ports={
-                    f'{internal_port}/tcp': None,  # Auto-assign host port
+                    f'{socat_port}/tcp': None,  # Auto-assign host port (socat forwarding port)
                     '5900/tcp': None  # VNC
                 },
                 environment=env_vars,
@@ -146,7 +148,7 @@ class GatewayController:
             # Update authentication_details with gateway host
             # (This should be saved back to MongoDB by caller)
             auth['host'] = container_name  # Docker service name
-            auth['port'] = internal_port
+            auth['port'] = socat_port
             
             return True
             

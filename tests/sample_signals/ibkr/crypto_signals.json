@@ -1,0 +1,154 @@
+[
+  {
+    "signal_id": "CRYPTO_BTC_ENTRY_001",
+    "strategy_name": "IBKR_Test_Crypto",
+    "timestamp": "2026-01-28T10:00:00Z",
+    "signal_legs": [
+      {
+        "instrument": "BTC",
+        "instrument_type": "CRYPTO",
+        "action": "BUY",
+        "quantity": 0.1,
+        "order_type": "MARKET",
+        "exchange": "PAXOS",
+        "currency": "USD",
+        "time_in_force": "GTC",
+        "signal_type": "ENTRY",
+        "reasoning": "Bitcoin bullish momentum - testing crypto execution"
+      }
+    ]
+  },
+  {
+    "signal_id": "CRYPTO_BTC_EXIT_001",
+    "strategy_name": "IBKR_Test_Crypto",
+    "timestamp": "2026-01-28T15:00:00Z",
+    "signal_legs": [
+      {
+        "instrument": "BTC",
+        "instrument_type": "CRYPTO",
+        "action": "SELL",
+        "quantity": 0.1,
+        "order_type": "MARKET",
+        "exchange": "PAXOS",
+        "currency": "USD",
+        "time_in_force": "GTC",
+        "signal_type": "EXIT",
+        "reasoning": "Bitcoin profit target - close position"
+      }
+    ]
+  },
+  {
+    "signal_id": "CRYPTO_BTC_ENTRY_002",
+    "strategy_name": "IBKR_Test_Crypto",
+    "timestamp": "2026-01-28T10:30:00Z",
+    "signal_legs": [
+      {
+        "instrument": "BTC",
+        "instrument_type": "CRYPTO",
+        "action": "BUY",
+        "quantity": 0.05,
+        "order_type": "MARKET",
+        "exchange": "PAXOS",
+        "currency": "USD",
+        "time_in_force": "GTC",
+        "signal_type": "ENTRY",
+        "reasoning": "Bitcoin dip buy opportunity"
+      }
+    ]
+  },
+  {
+    "signal_id": "CRYPTO_BTC_EXIT_002",
+    "strategy_name": "IBKR_Test_Crypto",
+    "timestamp": "2026-01-28T16:00:00Z",
+    "signal_legs": [
+      {
+        "instrument": "BTC",
+        "instrument_type": "CRYPTO",
+        "action": "SELL",
+        "quantity": 0.05,
+        "order_type": "MARKET",
+        "exchange": "PAXOS",
+        "currency": "USD",
+        "time_in_force": "GTC",
+        "signal_type": "EXIT",
+        "reasoning": "Bitcoin resistance - take profit"
+      }
+    ]
+  },
+  {
+    "signal_id": "CRYPTO_XRP_ENTRY_001",
+    "strategy_name": "IBKR_Test_Crypto",
+    "timestamp": "2026-01-28T11:00:00Z",
+    "signal_legs": [
+      {
+        "instrument": "XRP",
+        "instrument_type": "CRYPTO",
+        "action": "BUY",
+        "quantity": 100,
+        "order_type": "MARKET",
+        "exchange": "PAXOS",
+        "currency": "USD",
+        "time_in_force": "GTC",
+        "signal_type": "ENTRY",
+        "reasoning": "XRP breakout setup - testing altcoin execution"
+      }
+    ]
+  },
+  {
+    "signal_id": "CRYPTO_XRP_EXIT_001",
+    "strategy_name": "IBKR_Test_Crypto",
+    "timestamp": "2026-01-28T17:00:00Z",
+    "signal_legs": [
+      {
+        "instrument": "XRP",
+        "instrument_type": "CRYPTO",
+        "action": "SELL",
+        "quantity": 100,
+        "order_type": "MARKET",
+        "exchange": "PAXOS",
+        "currency": "USD",
+        "time_in_force": "GTC",
+        "signal_type": "EXIT",
+        "reasoning": "XRP profit target reached"
+      }
+    ]
+  },
+  {
+    "signal_id": "CRYPTO_XRP_ENTRY_002",
+    "strategy_name": "IBKR_Test_Crypto",
+    "timestamp": "2026-01-28T11:30:00Z",
+    "signal_legs": [
+      {
+        "instrument": "XRP",
+        "instrument_type": "CRYPTO",
+        "action": "BUY",
+        "quantity": 200,
+        "order_type": "MARKET",
+        "exchange": "PAXOS",
+        "currency": "USD",
+        "time_in_force": "GTC",
+        "signal_type": "ENTRY",
+        "reasoning": "XRP oversold bounce - accumulation"
+      }
+    ]
+  },
+  {
+    "signal_id": "CRYPTO_XRP_EXIT_002",
+    "strategy_name": "IBKR_Test_Crypto",
+    "timestamp": "2026-01-28T18:00:00Z",
+    "signal_legs": [
+      {
+        "instrument": "XRP",
+        "instrument_type": "CRYPTO",
+        "action": "SELL",
+        "quantity": 200,
+        "order_type": "MARKET",
+        "exchange": "PAXOS",
+        "currency": "USD",
+        "time_in_force": "GTC",
+        "signal_type": "EXIT",
+        "reasoning": "XRP resistance - exit position"
+      }
+    ]
+  }
+]

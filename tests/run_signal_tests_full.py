@@ -44,7 +44,8 @@ import send_test_signal
 
 
 def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, delay: int = None,
-             output_dir: str = "./test_results", signal_count: int = None, pause_and_play: bool = False):
+             output_dir: str = "./test_results", signal_count: int = None, pause_and_play: bool = False,
+             file_filter: str = None):
     """
     Run signal test suite from a signal folder for a specific mode
 
@@ -56,6 +57,7 @@ def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, d
         output_dir: Directory to save test results
         signal_count: Limit number of total signals to process (None = all)
         pause_and_play: If True, pause after each signal and wait for Enter key
+        file_filter: Filter to specific JSON file name (e.g., 'tech_stocks_realistic.json')
     """
     # Validate mode
     valid_modes = ["mock_mock", "mock_live", "paper_live", "live_live"]
@@ -77,6 +79,8 @@ def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, d
     print("=" * 80)
     print(f"🔧 Mode:           {mode}")
     print(f"📁 Signal Folder:  {folder_path}")
+    if file_filter:
+        print(f"📄 File Filter:    {file_filter}")
     print(f"🆔 Run ID:         {run_id}")
     print(f"⏰ Started:        {now.isoformat()}")
     
@@ -106,7 +110,7 @@ def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, d
         # Call the function directly instead of subprocess
         signals_sent = send_test_signal.process_folder(folder_path, seed, delay_override=delay,
                                                        signal_count=signal_count, pause_and_play=pause_and_play,
-                                                       mode=mode)
+                                                       mode=mode, file_filter=file_filter)
 
         elapsed = time.time() - start_time
 
@@ -240,7 +244,7 @@ Test Results:
     )
 
     parser.add_argument(
-        "--signal_count",
+        "--signal-count",
         type=int,
         dest="signal_count",
         help="Limit total number of signals to send (ENTRY + EXIT combined)"
@@ -251,6 +255,12 @@ Test Results:
         action="store_true",
         dest="pause_and_play",
         help="Pause after each signal and wait for Enter key before continuing"
+    )
+
+    parser.add_argument(
+        "--file",
+        dest="file_filter",
+        help="Filter to specific JSON file name (e.g., 'tech_stocks_realistic.json')"
     )
 
     args = parser.parse_args()
@@ -271,7 +281,8 @@ Test Results:
         delay=delay,
         output_dir=args.output_dir,
         signal_count=args.signal_count,
-        pause_and_play=args.pause_and_play
+        pause_and_play=args.pause_and_play,
+        file_filter=args.file_filter
     )
     
     sys.exit(exit_code)

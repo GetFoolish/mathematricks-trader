@@ -44,12 +44,32 @@ start-dev:
 	@echo "Signal Receiver API @ http://localhost:3000/api/v1/signals"
 
 stop:
+	@echo "Stopping all services..."
 	docker-compose stop
+	@echo "Stopping and removing IB Gateway containers..."
+	@docker ps -a --filter "name=ib-gateway-" --format "{{.Names}}" | xargs -r docker rm -f 2>/dev/null || true
+	@echo "✅ All services stopped"
 
 restart:
-	@echo "Restarting services (excluding mongodb-init)..."
-	docker-compose restart cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend
-	@echo "Frontend running @ http://localhost:5173/"
+	@echo "Restarting all services..."
+	@echo ""
+	@echo "Stopping services..."
+	@docker-compose stop mongodb cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend signal-receiver
+	@echo ""
+	@echo "Stopping and removing IB Gateway containers..."
+	@docker ps -a --filter "name=ib-gateway-" --format "{{.Names}}" | xargs -r docker stop 2>/dev/null || true
+	@docker ps -a --filter "name=ib-gateway-" --format "{{.Names}}" | xargs -r docker rm 2>/dev/null || true
+	@echo ""
+	@echo "Starting and waiting for all services..."
+	@docker-compose up -d --wait mongodb cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend signal-receiver
+	@echo ""
+	@echo "=== Service Status ==="
+	@docker-compose ps cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend signal-receiver
+	@echo ""
+	@echo "=== IB Gateway Status ==="
+	@docker ps --filter "name=ib-gateway-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "⚠️  No IB Gateway containers running"
+	@echo ""
+	@echo "✅ All services restarted! Frontend: http://localhost:5173/"
 
 status:
 	@echo "=== Docker Compose Services ==="

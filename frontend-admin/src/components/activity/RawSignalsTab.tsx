@@ -224,10 +224,7 @@ export default function RawSignalsTab() {
         <div className="w-1/2 border-l border-gray-700 overflow-auto bg-gray-900">
           <div className="p-4">
             <div className="flex justify-between items-center mb-4">
-              <div>
-                <h3 className="text-lg font-bold text-white">Signal Details</h3>
-                <p className="text-xs font-mono text-gray-400 mt-1">{selectedSignal.signalID}</p>
-              </div>
+              <h3 className="text-lg font-bold text-white">Signal Details</h3>
               <button
                 onClick={() => setSelectedSignal(null)}
                 className="text-gray-400 hover:text-gray-200"

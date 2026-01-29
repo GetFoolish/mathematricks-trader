@@ -416,8 +416,8 @@ export default function SignalStoreTab() {
                                 {/* Header with Signal Dict Toggle */}
                                 <div className="flex items-center justify-between mb-3">
                                   <div>
+                                    <p className="text-xs font-mono text-gray-400 mb-2">Signal ID: {signal.signal_id}</p>
                                     <h4 className="text-sm font-semibold text-gray-300">Signal Legs ({legs.length})</h4>
-                                    <p className="text-xs font-mono text-gray-400 mt-1">{signal.signal_id}</p>
                                   </div>
                                   <div className="flex items-center gap-3">
                                     <span className="text-xs font-semibold text-gray-400">Signal Dict</span>
@@ -640,6 +640,12 @@ export default function SignalStoreTab() {
                                               {leg.execution ? (
                                                 <div className="bg-gray-900 p-3 rounded text-xs font-mono space-y-1 h-full">
                                                   <div><span className="text-gray-500">Status:</span> <span className="text-white">{leg.execution.status || 'N/A'}</span></div>
+                                                  {leg.execution.status === 'REJECTED' && leg.execution.rejection_reason && (
+                                                    <div><span className="text-gray-500">Rejection Reason:</span> <span className="text-red-400">{leg.execution.rejection_reason}</span></div>
+                                                  )}
+                                                  {leg.execution.status === 'REJECTED' && leg.execution.rejected_at && (
+                                                    <div><span className="text-gray-500">Rejected At:</span> <span className="text-white">{new Date(leg.execution.rejected_at).toLocaleString()}</span></div>
+                                                  )}
                                                   <div><span className="text-gray-500">Quantity Filled:</span> <span className="text-white">{leg.execution.total_quantity_filled || leg.execution.filled_quantity || 0}</span></div>
                                                   {leg.execution.weighted_avg_price && (
                                                     <div><span className="text-gray-500">Avg Fill Price:</span> <span className="text-white">${leg.execution.weighted_avg_price.toFixed(2)}</span></div>

@@ -1,0 +1,44 @@
+[
+  {
+    "sent_epoch": 1769704324,
+    "entry_name": "$TECH_STOCKS_SMALL_1",
+    "exit_name": null,
+    "entry_signal_id": null,
+    "account_equity": 150000,
+    "signal_type": "ENTRY",
+    "legs": [
+      {
+        "instrument": "AAPL",
+        "instrument_type": "STOCK",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 10,
+        "order_type": "MARKET",
+        "price": 250,
+        "stop_loss": 245,
+        "take_profit": 260
+      }
+    ]
+  },
+  {
+    "sent_epoch": 1769704330,
+    "entry_name": "$TECH_STOCKS_SMALL_2",
+    "exit_name": null,
+    "entry_signal_id": null,
+    "account_equity": 150000,
+    "signal_type": "ENTRY",
+    "legs": [
+      {
+        "instrument": "MSFT",
+        "instrument_type": "STOCK",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 5,
+        "order_type": "MARKET",
+        "price": 455,
+        "stop_loss": 448,
+        "take_profit": 465
+      }
+    ]
+  }
+]
