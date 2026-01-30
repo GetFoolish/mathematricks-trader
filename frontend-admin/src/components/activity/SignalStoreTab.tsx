@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, ChevronUp, Download } from 'lucide-react';
+import { ChevronDown, ChevronUp, Download, Copy, Check } from 'lucide-react';
 import { api } from '../../services/api';
 import { StatusDot, getServiceStatus } from './StatusIndicators';
 
@@ -35,6 +35,7 @@ export default function SignalStoreTab() {
   const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
   const [expandedLegId, setExpandedLegId] = useState<string | null>(null);
   const [showSignalDict, setShowSignalDict] = useState<string | null>(null);
+  const [copiedBox, setCopiedBox] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshCountdown, setRefreshCountdown] = useState(5);
@@ -58,6 +59,16 @@ export default function SignalStoreTab() {
       clearInterval(countdownInterval);
     };
   }, []);
+
+  const copyToClipboard = async (text: string, boxId: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedBox(boxId);
+      setTimeout(() => setCopiedBox(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
 
   const fetchSignals = async () => {
     try {
@@ -598,9 +609,29 @@ export default function SignalStoreTab() {
                                             {/* Cerebro Decision with Math */}
                                             <div className="space-y-2">
                                               <h5 className="text-xs font-semibold text-gray-400">Cerebro Decision</h5>
-                                              <div className="bg-gray-900 p-3 rounded text-xs font-mono space-y-3 h-full overflow-auto max-h-96">
+                                              <div className="bg-gray-900 p-3 rounded text-xs font-mono space-y-3 h-full overflow-auto max-h-96 relative">
+                                                {/* Copy Button */}
+                                                <button
+                                                  onClick={() => {
+                                                    const boxId = `cerebro-${signal._id}-${legIdx}`;
+                                                    const text = `Signal ID: ${signal.signal_id}\nLeg ID: ${leg.leg_id}\n\nStatus: ${decision.status || 'N/A'}\nReason: ${decision.reason || 'N/A'}\nTimestamp: ${decision.timestamp ? formatDate(decision.timestamp) : 'N/A'}${decision.quantity !== undefined ? `\nQuantity: ${decision.quantity}` : ''}${decision.legs && decision.legs.length > 0 ? '\n\nDecision Legs:\n' + decision.legs.map((dLeg: any) => `• ${dLeg.action} ${dLeg.quantity} ${dLeg.instrument} @ ${dLeg.price}`).join('\n') : ''}${decision.math ? '\n\nCalculation:\n' + decision.math : ''}`;
+                                                    copyToClipboard(text, boxId);
+                                                  }}
+                                                  className="absolute top-2 right-2 p-1.5 bg-gray-800 hover:bg-gray-700 rounded transition-colors"
+                                                  title="Copy to clipboard"
+                                                >
+                                                  {copiedBox === `cerebro-${signal._id}-${legIdx}` ? (
+                                                    <Check className="h-3.5 w-3.5 text-green-400" />
+                                                  ) : (
+                                                    <Copy className="h-3.5 w-3.5 text-gray-400" />
+                                                  )}
+                                                </button>
+
                                                 {/* Decision Details */}
                                                 <div className="space-y-1">
+                                                  <div><span className="text-gray-500">Signal ID:</span> <span className="text-white text-xs">{signal.signal_id}</span></div>
+                                                  <div><span className="text-gray-500">Leg ID:</span> <span className="text-white text-xs">{leg.leg_id}</span></div>
+                                                  <div className="border-t border-gray-800 my-2"></div>
                                                   <div><span className="text-gray-500">Status:</span> <span className="text-white">{decision.status || 'N/A'}</span></div>
                                                   <div><span className="text-gray-500">Reason:</span> <span className="text-white">{decision.reason || 'N/A'}</span></div>
                                                   {decision.timestamp && (
@@ -653,14 +684,47 @@ export default function SignalStoreTab() {
                                             <div className="space-y-2">
                                               <h5 className="text-xs font-semibold text-gray-400">Execution Results</h5>
                                               {leg.execution ? (
-                                                <div className="bg-gray-900 p-3 rounded text-xs font-mono space-y-1 h-full">
+                                                <div className="bg-gray-900 p-3 rounded text-xs font-mono space-y-1 h-full relative">
+                                                  {/* Copy Button */}
+                                                  <button
+                                                    onClick={() => {
+                                                      const boxId = `execution-${signal._id}-${legIdx}`;
+                                                      let text = `Signal ID: ${signal.signal_id}\nLeg ID: ${leg.leg_id}\n\nStatus: ${leg.execution.status || 'N/A'}`;
+                                                      if (leg.execution.status === 'REJECTED') {
+                                                        if (leg.execution.rejection_reason) text += `\nRejection Reason: ${leg.execution.rejection_reason}`;
+                                                        if (leg.execution.rejected_at) text += `\nRejected At: ${new Date(leg.execution.rejected_at).toLocaleString()}`;
+                                                      }
+                                                      text += `\nQuantity Filled: ${leg.execution.total_quantity_filled || leg.execution.filled_quantity || 0}`;
+                                                      if (leg.execution.weighted_avg_price) text += `\nAvg Fill Price: $${leg.execution.weighted_avg_price.toFixed(2)}`;
+                                                      if (leg.execution.total_cost_basis) text += `\nTotal Cost: $${leg.execution.total_cost_basis.toFixed(2)}`;
+                                                      if (leg.execution.total_proceeds) text += `\nTotal Proceeds: $${leg.execution.total_proceeds.toFixed(2)}`;
+                                                      if (leg.execution.completed_at) text += `\nCompleted At: ${new Date(leg.execution.completed_at).toLocaleString()}`;
+                                                      copyToClipboard(text, boxId);
+                                                    }}
+                                                    className="absolute top-2 right-2 p-1.5 bg-gray-800 hover:bg-gray-700 rounded transition-colors z-10"
+                                                    title="Copy to clipboard"
+                                                  >
+                                                    {copiedBox === `execution-${signal._id}-${legIdx}` ? (
+                                                      <Check className="h-3.5 w-3.5 text-green-400" />
+                                                    ) : (
+                                                      <Copy className="h-3.5 w-3.5 text-gray-400" />
+                                                    )}
+                                                  </button>
+
+                                                  <div><span className="text-gray-500">Signal ID:</span> <span className="text-white text-xs">{signal.signal_id}</span></div>
+                                                  <div><span className="text-gray-500">Leg ID:</span> <span className="text-white text-xs">{leg.leg_id}</span></div>
+                                                  <div className="border-t border-gray-800 my-2"></div>
                                                   <div><span className="text-gray-500">Status:</span> <span className="text-white">{leg.execution.status || 'N/A'}</span></div>
+                                                  
+                                                  {/* Rejection Details */}
                                                   {leg.execution.status === 'REJECTED' && leg.execution.rejection_reason && (
                                                     <div><span className="text-gray-500">Rejection Reason:</span> <span className="text-red-400">{leg.execution.rejection_reason}</span></div>
                                                   )}
                                                   {leg.execution.status === 'REJECTED' && leg.execution.rejected_at && (
                                                     <div><span className="text-gray-500">Rejected At:</span> <span className="text-white">{new Date(leg.execution.rejected_at).toLocaleString()}</span></div>
                                                   )}
+                                                  
+                                                  {/* Fill Details */}
                                                   <div><span className="text-gray-500">Quantity Filled:</span> <span className="text-white">{leg.execution.total_quantity_filled || leg.execution.filled_quantity || 0}</span></div>
                                                   {leg.execution.weighted_avg_price && (
                                                     <div><span className="text-gray-500">Avg Fill Price:</span> <span className="text-white">${leg.execution.weighted_avg_price.toFixed(2)}</span></div>
@@ -671,13 +735,83 @@ export default function SignalStoreTab() {
                                                   {leg.execution.total_proceeds && (
                                                     <div><span className="text-gray-500">Total Proceeds:</span> <span className="text-white">${leg.execution.total_proceeds.toFixed(2)}</span></div>
                                                   )}
+                                                  
+                                                  {/* Execution Timestamps */}
+                                                  {leg.execution.completed_at && (
+                                                    <div><span className="text-gray-500">Completed At:</span> <span className="text-white">{new Date(leg.execution.completed_at).toLocaleString()}</span></div>
+                                                  )}
+                                                  
+                                                  {/* Position Information (for EXIT signals) */}
+                                                  {leg.execution.final_position !== undefined && (
+                                                    <div className="mt-2 pt-2 border-t border-gray-800">
+                                                      <div><span className="text-gray-500">Final Position:</span> <span className="text-white">{leg.execution.final_position}</span></div>
+                                                      {leg.execution.target_position !== undefined && (
+                                                        <div><span className="text-gray-500">Target Position:</span> <span className="text-white">{leg.execution.target_position}</span></div>
+                                                      )}
+                                                      {leg.execution.needs_manual_intervention !== undefined && (
+                                                        <div>
+                                                          <span className="text-gray-500">Needs Manual Intervention:</span> 
+                                                          <span className={leg.execution.needs_manual_intervention ? 'text-red-400' : 'text-green-400'}>
+                                                            {' '}{leg.execution.needs_manual_intervention ? 'YES' : 'NO'}
+                                                          </span>
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  )}
+                                                  
+                                                  {/* Reconciliation Attempts (for EXIT signals) */}
+                                                  {leg.execution.reconciliation_attempts && leg.execution.reconciliation_attempts.length > 0 && (
+                                                    <div className="mt-2 pt-2 border-t border-gray-800">
+                                                      <div className="text-gray-400 font-semibold mb-1">Reconciliation Attempts ({leg.execution.reconciliation_attempts.length})</div>
+                                                      {leg.execution.reconciliation_attempts.map((attempt: any, idx: number) => (
+                                                        <div key={idx} className="ml-2 mb-2 p-2 bg-gray-950 rounded">
+                                                          <div><span className="text-gray-500">Attempt:</span> <span className="text-white">{attempt.attempt}</span></div>
+                                                          <div><span className="text-gray-500">Timestamp:</span> <span className="text-white">{new Date(attempt.timestamp).toLocaleString()}</span></div>
+                                                          {attempt.position_before !== undefined && (
+                                                            <div><span className="text-gray-500">Position Before:</span> <span className="text-white">{attempt.position_before}</span></div>
+                                                          )}
+                                                          {attempt.position_after !== undefined && (
+                                                            <div><span className="text-gray-500">Position After:</span> <span className="text-white">{attempt.position_after}</span></div>
+                                                          )}
+                                                          {attempt.exit_results && attempt.exit_results.length > 0 && (
+                                                            <div className="mt-1">
+                                                              <div className="text-gray-500">Exit Results:</div>
+                                                              {attempt.exit_results.map((result: any, ridx: number) => (
+                                                                <div key={ridx} className="ml-2 text-xs">
+                                                                  • {result.success ? '✓' : '✗'} Qty: {result.quantity} @ ${result.avg_price} ({result.status})
+                                                                </div>
+                                                              ))}
+                                                            </div>
+                                                          )}
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  )}
+                                                  
+                                                  {/* Orders (for ENTRY signals) */}
                                                   {leg.execution.orders && leg.execution.orders.length > 0 && (
-                                                    <div className="mt-2">
-                                                      <span className="text-gray-500">Orders ({leg.execution.orders.length}):</span>
-                                                      <div className="ml-3 mt-1 space-y-1">
+                                                    <div className="mt-2 pt-2 border-t border-gray-800">
+                                                      <span className="text-gray-400 font-semibold">Orders ({leg.execution.orders.length}):</span>
+                                                      <div className="ml-2 mt-1 space-y-2">
                                                         {leg.execution.orders.map((order: any, orderIdx: number) => (
-                                                          <div key={orderIdx} className="text-gray-300 text-xs">
-                                                            • {order.fund_id}/{order.account_id}: {order.quantity_filled} @ ${order.avg_fill_price?.toFixed(2)}
+                                                          <div key={orderIdx} className="bg-gray-950 p-2 rounded">
+                                                            <div><span className="text-gray-500">Order ID:</span> <span className="text-white">{order.order_id}</span></div>
+                                                            <div><span className="text-gray-500">Broker Order ID:</span> <span className="text-white">{order.broker_order_id}</span></div>
+                                                            <div><span className="text-gray-500">Fund/Account:</span> <span className="text-white">{order.fund_id}/{order.account_id}</span></div>
+                                                            <div><span className="text-gray-500">Filled:</span> <span className="text-white">{order.quantity_filled}/{order.quantity_requested} @ ${order.avg_fill_price?.toFixed(2)}</span></div>
+                                                            {order.filled_at && (
+                                                              <div><span className="text-gray-500">Filled At:</span> <span className="text-white">{new Date(order.filled_at).toLocaleString()}</span></div>
+                                                            )}
+                                                            {order.fills && order.fills.length > 0 && (
+                                                              <div className="mt-1">
+                                                                <div className="text-gray-500 text-xs">Fills ({order.fills.length}):</div>
+                                                                {order.fills.map((fill: any, fidx: number) => (
+                                                                  <div key={fidx} className="ml-2 text-xs text-gray-400">
+                                                                    • {fill.quantity} @ ${fill.price} on {fill.exchange}
+                                                                  </div>
+                                                                ))}
+                                                              </div>
+                                                            )}
                                                           </div>
                                                         ))}
                                                       </div>
