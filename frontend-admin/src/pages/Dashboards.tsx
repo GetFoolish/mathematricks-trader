@@ -120,103 +120,94 @@ export const Dashboards: React.FC = () => {
   };
 
   return (
-    <div className="h-full flex bg-gray-900">
-      {/* Sidebar - Dashboard List */}
-      <div className="w-64 bg-gray-800 border-r border-gray-700 flex flex-col overflow-hidden">
-        <div className="p-4 border-b border-gray-700">
-          <h1 className="text-xl font-bold text-white mb-4">Dashboards</h1>
-
-          {/* Create Dashboard Button */}
-          {!isCreating ? (
-            <button
-              onClick={() => setIsCreating(true)}
-              className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded flex items-center justify-center space-x-2 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>New Dashboard</span>
-            </button>
-          ) : (
-            <div className="space-y-2">
-              <input
-                type="text"
-                placeholder="Dashboard name"
-                value={newDashboardName}
-                onChange={(e) => setNewDashboardName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleCreateDashboard();
-                  if (e.key === 'Escape') setIsCreating(false);
-                }}
-                className="w-full px-3 py-2 bg-gray-900 text-white text-sm border border-gray-600 rounded focus:outline-none focus:border-blue-500"
-                autoFocus
-              />
-              <div className="flex space-x-2">
-                <button
-                  onClick={handleCreateDashboard}
-                  className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded"
-                >
-                  Create
-                </button>
-                <button
-                  onClick={() => {
-                    setIsCreating(false);
-                    setNewDashboardName('');
-                  }}
-                  className="flex-1 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Dashboard List */}
-        <div className="flex-1 overflow-y-auto">
+    <div className="h-full flex flex-col bg-gray-900">
+      {/* Dashboard Tabs - Chrome Style */}
+      <div className="bg-gray-800 border-b border-gray-700 flex items-end px-4 pt-2 overflow-x-auto">
+        <div className="flex items-end space-x-1 flex-1 min-w-0">
           {isLoadingDashboards ? (
-            <div className="p-4 text-center text-gray-500 text-sm">
-              Loading dashboards...
+            <div className="px-4 py-2 text-gray-500 text-sm">
+              Loading...
             </div>
           ) : dashboards && dashboards.length > 0 ? (
-            <div className="space-y-1 p-2">
-              {dashboards.map((dash) => (
-                <div
-                  key={dash.dashboard_id}
-                  className={`group flex items-center justify-between px-3 py-2 rounded cursor-pointer transition-colors ${
-                    selectedDashboardId === dash.dashboard_id
-                      ? 'bg-blue-600 text-white'
-                      : 'hover:bg-gray-700 text-gray-300'
-                  }`}
-                  onClick={() => setSelectedDashboardId(dash.dashboard_id)}
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{dash.name}</div>
-                    <div className="text-xs text-gray-400">
-                      {dash.widgets.length} widget{dash.widgets.length !== 1 ? 's' : ''}
-                    </div>
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteDashboard(dash.dashboard_id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-600 rounded transition-opacity"
-                    title="Delete dashboard"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+            dashboards.map((dash) => (
+              <div
+                key={dash.dashboard_id}
+                className={`group relative flex items-center px-4 py-2 cursor-pointer transition-all min-w-[140px] max-w-[200px] ${
+                  selectedDashboardId === dash.dashboard_id
+                    ? 'bg-gray-900 text-white border-t-2 border-blue-500'
+                    : 'bg-gray-750 text-gray-400 hover:bg-gray-700 hover:text-gray-200 border-t-2 border-transparent'
+                }`}
+                style={{
+                  borderTopLeftRadius: '8px',
+                  borderTopRightRadius: '8px',
+                }}
+                onClick={() => setSelectedDashboardId(dash.dashboard_id)}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium truncate">{dash.name}</div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="p-4 text-center text-gray-500 text-sm">
-              No dashboards yet. Create one to get started!
-            </div>
-          )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteDashboard(dash.dashboard_id);
+                  }}
+                  className="ml-2 opacity-0 group-hover:opacity-100 p-1 hover:bg-red-600 rounded transition-opacity flex-shrink-0"
+                  title="Delete dashboard"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))
+          ) : null}
         </div>
+
+        {/* Add Dashboard Button */}
+        {!isCreating ? (
+          <button
+            onClick={() => setIsCreating(true)}
+            className="ml-2 mb-2 p-2 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white rounded transition-colors flex-shrink-0"
+            title="New Dashboard"
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+        ) : (
+          <div className="ml-2 mb-2 flex items-center space-x-2 bg-gray-700 px-3 py-1.5 rounded flex-shrink-0">
+            <input
+              type="text"
+              placeholder="Dashboard name"
+              value={newDashboardName}
+              onChange={(e) => setNewDashboardName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateDashboard();
+                if (e.key === 'Escape') {
+                  setIsCreating(false);
+                  setNewDashboardName('');
+                }
+              }}
+              className="w-40 px-2 py-1 bg-gray-900 text-white text-sm border border-gray-600 rounded focus:outline-none focus:border-blue-500"
+              autoFocus
+            />
+            <button
+              onClick={handleCreateDashboard}
+              className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded"
+            >
+              ✓
+            </button>
+            <button
+              onClick={() => {
+                setIsCreating(false);
+                setNewDashboardName('');
+              }}
+              className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-white text-xs rounded"
+            >
+              ✕
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Main Content - Dashboard Canvas */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col overflow-hidden">
         {selectedDashboardId ? (
           isLoadingDashboard ? (
             <div className="flex-1 flex items-center justify-center">
