@@ -44,8 +44,8 @@ import send_test_signal
 
 
 def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, delay: int = None,
-             output_dir: str = "./test_results", signal_count: int = None, pause_and_play: bool = False,
-             file_filter: str = None):
+             output_dir: str = None, signal_count: int = None, pause_and_play: bool = False,
+             file_filter: str = None, environment: str = 'staging', account_type: str = None):
     """
     Run signal test suite from a signal folder for a specific mode
 
@@ -67,7 +67,8 @@ def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, d
         sys.exit(1)
 
     # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     
     # Generate timestamp for this test run
     now = datetime.now(timezone.utc)
@@ -110,7 +111,8 @@ def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, d
         # Call the function directly instead of subprocess
         signals_sent = send_test_signal.process_folder(folder_path, seed, delay_override=delay,
                                                        signal_count=signal_count, pause_and_play=pause_and_play,
-                                                       mode=mode, file_filter=file_filter)
+                                                       mode=mode, file_filter=file_filter,
+                                                       environment=environment, account_type=account_type)
 
         elapsed = time.time() - start_time
 
@@ -155,11 +157,12 @@ def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, d
         traceback.print_exc()
 
     # Save test results JSON
-    results_file = os.path.join(output_dir, f"{run_id}_results.json")
-    with open(results_file, 'w') as f:
-        json.dump(test_results, f, indent=2)
+    if output_dir:
+        results_file = os.path.join(output_dir, f"{run_id}_results.json")
+        with open(results_file, 'w') as f:
+            json.dump(test_results, f, indent=2)
 
-    print(f"\n📄 Results saved to: {results_file}")
+        print(f"\n📄 Results saved to: {results_file}")
 
     # Print summary
     print("\n" + "=" * 80)
@@ -168,7 +171,6 @@ def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, d
     print(f"Status:        {test_results['status'].upper()}")
     print(f"Signals Sent:  {test_results.get('signals_sent', 'N/A')}")
     print(f"Duration:      {test_results['duration_seconds']:.2f}s")
-    print(f"Results File:  {results_file}")
     print("=" * 80 + "\n")
     
     # Return exit code based on test status
@@ -263,6 +265,20 @@ Test Results:
         help="Filter to specific JSON file name (e.g., 'tech_stocks_realistic.json')"
     )
 
+    parser.add_argument(
+        "--environment",
+        choices=["staging", "live"],
+        default="staging",
+        help="Environment for execution (staging=mock/paper, live=real money)"
+    )
+
+    parser.add_argument(
+        "--account-type",
+        dest="account_type",
+        choices=["mock", "paper", "live"],
+        help="Account type for execution (overrides defaults)"
+    )
+
     args = parser.parse_args()
     
     # Validate folder exists
@@ -282,7 +298,9 @@ Test Results:
         output_dir=args.output_dir,
         signal_count=args.signal_count,
         pause_and_play=args.pause_and_play,
-        file_filter=args.file_filter
+        file_filter=args.file_filter,
+        environment=args.environment,
+        account_type=args.account_type
     )
     
     sys.exit(exit_code)

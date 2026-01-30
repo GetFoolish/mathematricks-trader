@@ -156,6 +156,7 @@ class SignalIngestionService:
                 "signal_sent_timestamp": sent_dt,
                 "receive_lag_ms": int(receive_lag_ms * 1000) if receive_lag_ms else 0,
                 "environment": self.environment,
+                "data_source": signal_data.get('data_source', 'mock'),  # Preserve data_source from signal
                 "signal_data": signal_data,
                 "cerebro_decision": None,  # Will be updated by Cerebro
                 "order_id": None,          # Will be updated by Execution Service

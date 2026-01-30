@@ -230,7 +230,7 @@ def update_option_signal_with_realistic_contract(signal: dict):
     return 'updated' if all_updated else 'failed'
 
 
-def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None, mode: str = None, run_id_suffix: str = None):
+def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None, mode: str = None, run_id_suffix: str = None, environment: str = 'staging', account_type: str = None):
     """
     Send signal via HTTP POST to signal-receiver API
 
@@ -284,7 +284,29 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
     # Add mode metadata
     signal_payload["mode"] = mode
     signal_payload["test"] = True
-    signal_payload["environment"] = "staging"
+    signal_payload["environment"] = environment
+    
+    # Extract account_type and data_source from mode if not explicitly provided
+    # Mode format: {account_type}_{data_source} (e.g., paper_live, mock_mock, etc.)
+    if mode:
+        mode_parts = mode.split('_')
+        # Extract data_source from mode (second part): mock_mock → mock, mock_live → live, etc.
+        data_source = mode_parts[1] if len(mode_parts) > 1 else 'mock'
+        # Extract account_type from mode (first part): paper_live → paper, mock_mock → mock, etc.
+        # Only use mode-derived account_type if not explicitly provided
+        if not account_type and len(mode_parts) > 0:
+            account_type = mode_parts[0]
+    else:
+        data_source = 'mock'
+        if not account_type:
+            account_type = 'mock'
+    
+    signal_payload["data_source"] = data_source
+    signal_payload["account_type"] = account_type
+    
+    # Add account_equity if not present (required for position sizing)
+    if "account_equity" not in signal_payload:
+        signal_payload["account_equity"] = 1000000.0  # Default $1M for testing
 
     # POST to signal receiver API
     try:
@@ -436,7 +458,7 @@ def shuffle_signals(entry_signals: list, exit_signals_by_entry: dict, seed: int)
 
     Args:
         entry_signals: List of (signal, source_file) tuples for ENTRY signals
-        exit_signals_by_entry: Dict mapping (source_file, entry_name) -> list of (exit_signal, source_file)
+        exit_signals_by_entry: Dict mapping (source_file, entry_signal_id) -> list of (exit_signal, source_file)
         seed: Random seed (0=random time-based, positive=reproducible, negative=no shuffle)
 
     Returns:
@@ -447,9 +469,9 @@ def shuffle_signals(entry_signals: list, exit_signals_by_entry: dict, seed: int)
         ordered = []
         for entry_sig, entry_source in entry_signals:
             ordered.append((entry_sig, entry_source))
-            entry_name = entry_sig.get("entry_name")
-            key = (entry_source, entry_name)
-            if entry_name and key in exit_signals_by_entry:
+            entry_signal_id = entry_sig.get("entry_signal_id")
+            key = (entry_source, entry_signal_id)
+            if entry_signal_id and key in exit_signals_by_entry:
                 for exit_sig, exit_source in exit_signals_by_entry[key]:
                     ordered.append((exit_sig, exit_source))
         return ordered
@@ -466,9 +488,9 @@ def shuffle_signals(entry_signals: list, exit_signals_by_entry: dict, seed: int)
     exits_with_constraints = []  # List of (exit_sig, exit_source, entry_index)
 
     for entry_idx, (entry_sig, entry_source) in enumerate(shuffled_entries):
-        entry_name = entry_sig.get("entry_name")
-        key = (entry_source, entry_name)
-        if entry_name and key in exit_signals_by_entry:
+        entry_signal_id = entry_sig.get("entry_signal_id")
+        key = (entry_source, entry_signal_id)
+        if entry_signal_id and key in exit_signals_by_entry:
             for exit_sig, exit_source in exit_signals_by_entry[key]:
                 exits_with_constraints.append((exit_sig, exit_source, entry_idx))
 
@@ -524,7 +546,7 @@ def shuffle_signals(entry_signals: list, exit_signals_by_entry: dict, seed: int)
 
 def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
                    signal_count: int = None, pause_and_play: bool = False, mode: str = None,
-                   file_filter: str = None):
+                   file_filter: str = None, environment: str = 'staging', account_type: str = None):
     """
     Load and send all JSON signal files from a folder
 
@@ -665,8 +687,8 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
             matching_entry = None
             for entry_sig, entry_source in entry_signals:
                 if entry_source == source_file:
-                    entry_name = entry_sig.get("entry_name")
-                    if entry_name == entry_ref or entry_ref == "$PREVIOUS":
+                    entry_signal_id = entry_sig.get("entry_signal_id")
+                    if entry_signal_id == entry_ref or entry_ref == "$PREVIOUS":
                         matching_entry = entry_sig
                         break
             
@@ -753,22 +775,22 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
                     logger.info(f"   ⚠️  WARNING: Variable {entry_ref} not found in registry")
 
         # Send signal
-        result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode, run_id_suffix=run_id_suffix)
+        result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode, run_id_suffix=run_id_suffix, environment=environment, account_type=account_type)
         signals_sent += 1
 
         # Capture ENTRY MongoDB ObjectId and register named variable for EXIT signals to reference
         if signal_type == "ENTRY" and result and result.get("raw_id"):
             # Use MongoDB ObjectId (single source of truth) not signalID string
-            entry_signal_id = result["raw_id"]  # MongoDB _id as string
+            entry_signal_id_value = result["raw_id"]  # MongoDB _id as string
 
-            # Register named variable if provided (e.g., "$COM2_AG_1")
-            entry_name = signal_payload.get("entry_name")
-            if entry_name:
-                entry_id_registry[entry_name] = entry_signal_id
-                logger.info(f"   ✓ Registered {entry_name} → ObjectId({entry_signal_id[:12]}...)")
+            # Register variable reference if provided (e.g., "$TECH_STOCKS_1")
+            entry_signal_id_var = signal_payload.get("entry_signal_id")
+            if entry_signal_id_var:
+                entry_id_registry[entry_signal_id_var] = entry_signal_id_value
+                logger.info(f"   ✓ Registered {entry_signal_id_var} → ObjectId({entry_signal_id_value[:12]}...)")
 
             # Always keep $PREVIOUS for backward compatibility
-            entry_id_registry["$PREVIOUS"] = entry_signal_id
+            entry_id_registry["$PREVIOUS"] = entry_signal_id_value
 
         # Pause and play mode: wait for user input after each signal
         if pause_and_play and i < len(ordered_signals):

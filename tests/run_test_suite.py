@@ -372,7 +372,7 @@ class TestSuite:
                 print(f"\n   ❌ UNEXPECTED ERROR in {name}: {e}")
                 self.failed.append(name)
     
-    def run_signal_tests(self, data_source: str = 'mock', signal_count: int = None, signals_folder: str = None, signal_file: str = None, clean_before_test: bool = False) -> bool:
+    def run_signal_tests(self, environment: str = 'staging', account_type: str = None, data_source: str = 'mock', signal_count: int = None, signals_folder: str = None, signal_file: str = None, clean_before_test: bool = False) -> bool:
         """Run signal tests using run_signal_tests_full.py"""
         self.print_header(f"🧪 Signal Testing")
         
@@ -410,8 +410,9 @@ class TestSuite:
             
             broker = broker_map.get(folder_name, 'mock')
             
-            # Build mode from broker and data_source
-            mode = f"{broker}_{data_source}"
+            # Build mode from account_type and data_source
+            # Use account_type if explicitly provided, otherwise fall back to broker inferred from folder
+            mode = f"{account_type if account_type else broker}_{data_source}"
             
             # Display test info
             if signal_file:
@@ -468,7 +469,12 @@ class TestSuite:
                 str(test_script),
                 '--mode', mode,
                 '--folder', str(signals_folder_path),
+                '--environment', environment,
             ]
+            
+            # Add account_type if specified
+            if account_type:
+                cmd.extend(['--account-type', account_type])
             
             # Add file filter if specified
             if signal_file:
@@ -557,16 +563,25 @@ Examples:
   # Run only system validation tests
   python tests/run_test_suite.py --system
   
-  # Test mock broker with mock data
-  python tests/run_test_suite.py --signal-testing --signals-folder tests/sample_signals/mock --data-source mock
+  # Mock execution with live data (your main use case)
+  .venv/bin/python tests/run_test_suite.py \
+    --environment staging \
+    --data-source live \
+    --file tests/sample_signals/ibkr/tech_stocks_realistic.json
+
+  # Paper trading test
+  .venv/bin/python tests/run_test_suite.py \
+    --environment staging \
+    --account-type paper \
+    --file tests/sample_signals/ibkr/tech_stocks_realistic.json
+
+  # Would fail (safety check)
+  .venv/bin/python tests/run_test_suite.py \\
+    --environment live \\
+    --account-type paper  # ❌ ERROR: Paper not allowed in live
+    --file tests/sample_signals/ibkr/tech_stocks_realistic.json
   
-  # Test IBKR paper with mock data
-  python tests/run_test_suite.py --signal-testing --signals-folder tests/sample_signals/ibkr-paper --data-source mock
-  
-  # Test IBKR paper with live data (yfinance updates)
-  python tests/run_test_suite.py --signal-testing --signals-folder tests/sample_signals/ibkr-paper --data-source live
-  
-  # Clean and test
+  # Clean and test mock mode
   python tests/run_test_suite.py --clean --signal-testing --signals-folder tests/sample_signals/mock
         """
     )
@@ -577,6 +592,10 @@ Examples:
                        help='Run system validation tests only')
     parser.add_argument('--signal-testing', action='store_true',
                        help='Run signal tests')
+    parser.add_argument('--environment', type=str, choices=['staging', 'live'],
+                       help='Environment for execution (staging=mock/paper, live=real money)', default='staging')
+    parser.add_argument('--account-type', type=str, choices=['mock', 'paper', 'live'],
+                       help='Account type for execution (overrides default based on environment)', default=None)
     parser.add_argument('--data-source', type=str, choices=['mock', 'live'],
                        help='Data source for testing (mock or live market data)', default='mock')
     parser.add_argument('--clean', action='store_true',
@@ -621,6 +640,8 @@ Examples:
     # Run signal tests (will clean AFTER validation if --clean flag set)
     if args.signal_testing:
         suite.run_signal_tests(
+            environment=args.environment,
+            account_type=args.account_type,
             data_source=args.data_source,
             signal_count=getattr(args, 'signal_count'),
             signals_folder=args.signals_folder,

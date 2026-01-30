@@ -181,11 +181,12 @@ def get_available_accounts_for_strategy(
     fund_id: str,
     asset_class: str,
     strategies_collection,
-    trading_accounts_collection
+    trading_accounts_collection,
+    mode: str = None
 ) -> List[Dict[str, Any]]:
     """
     Get accounts that:
-    1. Strategy is allowed to use (in strategy.accounts)
+    1. Strategy is allowed to use (in strategy.accounts[account_type] for mode-specific accounts)
     2. Belong to this fund (account.fund_id = fund_id)
     3. Support the asset class (asset_class in account.asset_classes)
     
@@ -195,6 +196,7 @@ def get_available_accounts_for_strategy(
         asset_class: Asset class (equity, futures, crypto, forex)
         strategies_collection: MongoDB collection
         trading_accounts_collection: MongoDB collection
+        mode: Signal mode (e.g., 'mock_live', 'paper_live', 'live_live') - optional
         
     Returns:
         List of accounts: [{account_id, available_margin, equity}, ...]
@@ -227,8 +229,38 @@ def get_available_accounts_for_strategy(
             logger.error(f"Strategy {strategy_id} not found")
             return []
         
-        # Get allowed accounts for this strategy
-        allowed_accounts = strategy.get('accounts', [])
+        # Get allowed accounts for this strategy (mode-aware)
+        # If mode provided, extract account_type (mock, paper, live) and lookup strategy.accounts[account_type]
+        # Otherwise use legacy format (flat list)
+        accounts_by_type = strategy.get('accounts', [])
+        
+        if mode:
+            # Extract account_type from mode: mock_live -> mock, paper_live -> paper
+            account_type = mode.split('_')[0]
+            logger.info(f"[MODE-AWARE] Mode: {mode} → Account Type: {account_type}")
+            
+            if isinstance(accounts_by_type, dict):
+                # New format: strategy.accounts = {mock: [...], paper: [...], live: [...]}
+                allowed_accounts = accounts_by_type.get(account_type, [])
+                if not allowed_accounts:
+                    logger.error(
+                        f"Strategy {strategy_id} doesn't support account_type={account_type}. "
+                        f"Available types: {list(accounts_by_type.keys())}"
+                    )
+                    return []
+                logger.info(f"[MODE-AWARE] Using mode-specific accounts for {account_type}: {allowed_accounts}")
+            else:
+                # Legacy format: strategy.accounts = ["IBKR-TESTING-ACCOUNT"]
+                # Treat as 'live' accounts for backward compatibility
+                allowed_accounts = accounts_by_type
+                logger.warning(
+                    f"Strategy {strategy_id} uses legacy account format (flat list). "
+                    f"Using for mode {mode}: {allowed_accounts}"
+                )
+        else:
+            # No mode provided - use legacy behavior (flat list)
+            allowed_accounts = accounts_by_type if isinstance(accounts_by_type, list) else []
+            logger.info(f"[LEGACY] No mode provided, using all accounts: {allowed_accounts}")
         if not allowed_accounts:
             logger.warning(f"Strategy {strategy_id} has no allowed accounts")
             return []

@@ -151,7 +151,9 @@ class MongoDBWatcher:
             "entry_name": raw_signal_doc.get('entry_name'),  # entry_name for linking EXIT signals
             "strategy_id": raw_signal_doc['strategy_name'],
             "environment": raw_signal_doc.get('environment', 'production'),
+            "account_type": raw_signal_doc.get('account_type'),  # Account type (mock, paper, live)
             "mode": raw_signal_doc.get('mode'),  # Trading mode (mock_mock, mock_live, paper_live, live_live)
+            "data_source": raw_signal_doc.get('data_source', 'mock'),  # Data source for broker selection (mock or live)
             "instrument": instrument,
 
             # === LEGS ARRAY (ONE DOCUMENT PER SIGNAL!) ===
@@ -322,6 +324,9 @@ class MongoDBWatcher:
                         'entry_signal_id': raw_signal_doc.get('entry_signal_id'),  # For EXIT signals
                         'account_equity': raw_signal_doc.get('account_equity'),  # For ratio-based position sizing
                         'environment': raw_signal_doc.get('environment', 'production'),
+                        'account_type': raw_signal_doc.get('account_type'),  # For account routing
+                        'data_source': raw_signal_doc.get('data_source', 'mock'),  # For broker selection
+                        'mode': raw_signal_doc.get('mode'),  # For broker selection
                         'mathematricks_signal_id': str(mathematricks_signal_id)
                     }
 
@@ -591,6 +596,9 @@ class MongoDBWatcher:
                             'entry_signal_id': raw_signal_doc.get('entry_signal_id'),  # For EXIT signals
                             'account_equity': raw_signal_doc.get('account_equity'),  # For ratio-based position sizing
                             'environment': raw_signal_doc.get('environment', 'production'),
+                            'account_type': raw_signal_doc.get('account_type'),  # For account routing
+                            'data_source': raw_signal_doc.get('data_source', 'mock'),  # For broker selection
+                            'mode': raw_signal_doc.get('mode'),  # For broker selection
                             'mathematricks_signal_id': str(mathematricks_signal_id)  # Pass to signal_ingestion
                         }
 

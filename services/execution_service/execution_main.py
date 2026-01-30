@@ -35,6 +35,9 @@ from brokers.exceptions import (
     InvalidSymbolError
 )
 
+# Import broker mode adapter for environment-based execution
+from execution_service.broker_mode_adapter import create_broker_adapter
+
 # Import Telegram notifier
 from telegram.notifier import TelegramNotifier
 
@@ -830,8 +833,22 @@ def initialize_broker_pool():
                 logger.error(f"❌ Invalid mode: account_type='{account_type}', data_source='{data_source}' for account {account_id}. Skipping.")
                 continue
 
-            # Add to broker pool
+            # Add to broker pool with BOTH account_id AND generic keys
             broker_pool[account_id] = broker_instance
+            
+            # ALSO add generic keys for broker adapter lookup
+            if account_type == 'mock' and data_source == 'mock':
+                broker_pool['mock'] = broker_instance
+            elif account_type == 'mock' and data_source == 'live':
+                # For mock_live mode, also store the wrapped adapter under 'mock' key
+                broker_pool['mock'] = broker_instance
+                # Store the inner real broker under 'ibkr_paper' for data lookups
+                if hasattr(broker_instance, 'data_broker'):
+                    broker_pool['ibkr_paper'] = broker_instance.data_broker
+            elif account_type == 'paper' and data_source == 'live':
+                broker_pool['ibkr_paper'] = broker_instance
+            elif account_type == 'live' and data_source == 'live':
+                broker_pool['ibkr_live'] = broker_instance
             
             # Track for summary
             broker_display = f"{broker_name}+Mock" if account_type == 'mock' and data_source == 'live' else broker_name
@@ -921,10 +938,13 @@ def connect_all_brokers_sync():
 
 def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Submit order to broker using broker pool (multi-broker routing).
+    Submit order to broker using environment-based broker routing.
 
-    Routes order to correct broker based on order['account'] field.
-    In mock mode (--use-mock-broker), overrides all routing to Mock_Paper.
+    Routes order based on environment field from signal:
+    - environment='staging' → use mock or paper (NEVER live)
+    - environment='live' → ONLY allow live execution
+    
+    The environment field acts as a HIGH-LEVEL OVERRIDE for safety.
     """
     try:
         # Get account from order
@@ -940,13 +960,41 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
             logger.warning(f"⏰ {market_status['message']}")
             logger.warning(f"   Order will be placed but may not execute until market opens")
 
-        # SAFETY CHECK: Get account to check mode (BEFORE any routing overrides)
+        # Get account document from MongoDB to check account_type and mode
         account = trading_accounts_collection.find_one({"account_id": account_id})
-        mode = account.get('mode', 'paper_mock') if account else 'paper_mock'
-
+        if not account:
+            rejection_reason = f"Account {account_id} not found in database"
+            logger.error(f"❌ {rejection_reason}")
+            return {
+                "status": "REJECTED",
+                "rejection_reason": rejection_reason
+            }
+        
+        # Get account_type from account document
+        account_type = account.get('account_type', 'mock')
+        mode = account.get('mode', 'paper_mock')
+        
+        # ========================================================================
+        # ENVIRONMENT-BASED BROKER SELECTION (HIGH-LEVEL OVERRIDE)
+        # ========================================================================
+        
+        # Extract environment and data_source from order (injected by signal ingestion)
+        environment = order_data.get('environment', 'staging')  # Default to staging for safety
+        data_source = order_data.get('data_source', 'mock')
+        
+        logger.info(f"Broker selection: environment={environment}, account_type={account_type}, data_source={data_source}")
+        logger.info(f"Order fields: {list(order_data.keys())}")
+        if 'data_source' in order_data:
+            logger.info(f"✅ data_source found in order: {order_data['data_source']}")
+        else:
+            logger.warning(f"⚠️ data_source NOT in order, defaulting to 'mock'")
+        logger.info(f"  Order data keys: {list(order_data.keys())}")
+        logger.info(f"  Order data.environment: {order_data.get('environment')}")
+        logger.info(f"  Order data.data_source: {order_data.get('data_source')}")
+        
         # CRITICAL SAFETY: Warning on live mode
-        if mode == 'live':
-            logger.critical(f"⚠️⚠️⚠️ LIVE MODE ORDER ⚠️⚠️⚠️")
+        if environment == 'live':
+            logger.critical(f"⚠️⚠️⚠️ LIVE ENVIRONMENT ORDER ⚠️⚠️⚠️")
             logger.critical(f"  Order ID: {order_data.get('order_id')}")
             logger.critical(f"  Instrument: {order_data.get('instrument')}")
             logger.critical(f"  Action: {order_data.get('action')}")
@@ -965,22 +1013,41 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
                     "reason": "Live trading not enabled. Set ALLOW_LIVE_TRADING=true in .env"
                 }
 
-        # MOCK MODE OVERRIDE: Route all orders to Mock_Paper if flag set
+        # MOCK MODE CLI OVERRIDE: If --use-mock-broker flag set, override to staging/mock
         if args.use_mock_broker:
-            original_account = account_id
-            account_id = 'Mock_Paper'
-            logger.debug(f"MOCK MODE: Overriding account {original_account} → Mock_Paper")
-
-        # Get broker instance for this account
-        broker = get_broker_for_account(account_id)
+            original_env = environment
+            original_account_type = account_type
+            environment = 'staging'
+            account_type = 'mock'
+            data_source = 'mock'
+            logger.debug(f"CLI MOCK MODE: Overriding environment={original_env}→staging, account_type={original_account_type}→mock")
+        
+        # Get broker using environment-based adapter factory
+        try:
+            broker = create_broker_adapter(
+                environment=environment,
+                account_type=account_type,
+                data_source=data_source,
+                broker_pool=broker_pool
+            )
+        except ValueError as e:
+            rejection_reason = str(e)
+            logger.error(f"❌ Broker selection failed: {rejection_reason}")
+            return {
+                "status": "REJECTED",
+                "rejection_reason": rejection_reason
+            }
+        
         if not broker:
-            rejection_reason = f"No broker found for account {account_id}"
-            logger.error(f"❌ {rejection_reason} - order {order_data.get('order_id')} cannot be executed")
+            rejection_reason = f"No broker available for environment={environment}, account_type={account_type}, data_source={data_source}"
+            logger.error(f"❌ {rejection_reason}")
             return {
                 "status": "REJECTED",
                 "rejection_reason": rejection_reason
             }
 
+        logger.debug(f"Selected broker: {broker.broker_name}")
+        
         # Ensure broker is connected
         if not broker.is_connected():
             logger.debug(f"Connecting to {broker.broker_name} for account {account_id}...")

@@ -1449,6 +1449,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         'signal_id': signal_id,
         'strategy_id': signal.get('strategy_id'),
         'environment': signal.get('environment'),
+        'data_source': signal.get('data_source', 'mock'),  # Preserve data_source for broker adapter
         'instrument': first_leg.get('instrument'),
         'instrument_type': first_leg.get('instrument_type', 'STOCK'),
         'action': first_leg.get('action'),
@@ -1571,9 +1572,12 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         
         # Get available accounts for this strategy in this fund
         asset_class = strategy_doc.get('asset_class', 'equity')
+        mode = signal.get('mode')  # Extract mode for account routing (mock_live, paper_live, etc.)
+        
         available_accounts = get_available_accounts_for_strategy(
             strategy_id, fund_id, asset_class,
-            strategies_collection, trading_accounts_collection
+            strategies_collection, trading_accounts_collection,
+            mode=mode  # Pass mode for mode-aware account selection
         )
         
         if not available_accounts:
@@ -2437,6 +2441,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                             "risk_metrics": {k: v for k, v in decision_obj.metadata.items() if k != 'leg_results'}  # Exclude leg_results to reduce size
                         },
                         "environment": normalized_signal.get('environment', 'staging'),
+                        "data_source": normalized_signal.get('data_source', 'mock'),  # For broker adapter selection
                         "status": "PENDING",
                         "created_at": datetime.utcnow().isoformat()  # Convert to ISO string for JSON
                     }
