@@ -241,8 +241,8 @@ Test Results:
     parser.add_argument(
         "--output-dir",
         dest="output_dir",
-        default="./test_results",
-        help="Directory to save test results (default: ./test_results)"
+        default="./tests/test_results",
+        help="Directory to save test results (default: ./tests/test_results)"
     )
 
     parser.add_argument(

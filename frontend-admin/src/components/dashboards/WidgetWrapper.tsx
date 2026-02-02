@@ -31,7 +31,7 @@ export const WidgetWrapper: React.FC<WidgetWrapperProps> = ({ widget, fundId }) 
       );
     },
     staleTime: 30000, // Consider data fresh for 30 seconds
-    refetchOnMount: false,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
 

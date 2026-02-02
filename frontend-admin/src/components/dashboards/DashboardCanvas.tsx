@@ -4,7 +4,7 @@
  * Main dashboard canvas with drag-and-drop grid layout.
  * Supports locking/unlocking, widget rearrangement, and "Reload All" functionality.
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import GridLayout from 'react-grid-layout';
 import type { Layout } from 'react-grid-layout';
 import { Lock, Unlock, RefreshCw } from 'lucide-react';
@@ -28,6 +28,31 @@ export const DashboardCanvas: React.FC<DashboardCanvasProps> = ({
   const [isLocked, setIsLocked] = useState(dashboard.is_locked);
   const [isReloading, setIsReloading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [refreshCountdown, setRefreshCountdown] = useState(5);
+
+  // Auto-refresh every 5 seconds
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      setIsReloading(true);
+      try {
+        await onReloadAll();
+      } catch (error) {
+        console.error('Auto-refresh failed:', error);
+      } finally {
+        setIsReloading(false);
+      }
+      setRefreshCountdown(5);
+    }, 5000);
+
+    const countdownInterval = setInterval(() => {
+      setRefreshCountdown(prev => prev > 0 ? prev - 1 : 5);
+    }, 1000);
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(countdownInterval);
+    };
+  }, [onReloadAll]);
 
   // Convert dashboard widgets to react-grid-layout format
   const layout: Layout[] = dashboard.widgets.map((widget) => ({
@@ -108,6 +133,11 @@ export const DashboardCanvas: React.FC<DashboardCanvasProps> = ({
     }
   };
 
+  const handleManualRefresh = () => {
+    handleReloadAll();
+    setRefreshCountdown(5);
+  };
+
   return (
     <div className="h-full flex flex-col">
       {/* Toolbar */}
@@ -126,15 +156,49 @@ export const DashboardCanvas: React.FC<DashboardCanvasProps> = ({
         </div>
 
         <div className="flex items-center space-x-2">
-          {/* Reload All Button */}
+          {/* Reload All Button with Countdown */}
           <button
-            onClick={handleReloadAll}
+            onClick={handleManualRefresh}
             disabled={isReloading}
             className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded flex items-center space-x-2 transition-colors disabled:opacity-50"
             title="Reload all widgets"
           >
-            <RefreshCw className={`w-4 h-4 ${isReloading ? 'animate-spin' : ''}`} />
-            <span>Reload All</span>
+            <svg width="16" height="16" viewBox="0 0 16 16" className="transform -rotate-90">
+              <circle
+                cx="8"
+                cy="8"
+                r="6"
+                fill="none"
+                stroke="rgba(255,255,255,0.3)"
+                strokeWidth="2"
+              />
+              {[0, 1, 2, 3, 4].map((slice) => {
+                const sliceAngle = 360 / 5;
+                const startAngle = slice * sliceAngle;
+                const endAngle = (slice + 1) * sliceAngle;
+                
+                const startRad = (startAngle - 90) * Math.PI / 180;
+                const endRad = (endAngle - 90) * Math.PI / 180;
+                
+                const x1 = 8 + 6 * Math.cos(startRad);
+                const y1 = 8 + 6 * Math.sin(startRad);
+                const x2 = 8 + 6 * Math.cos(endRad);
+                const y2 = 8 + 6 * Math.sin(endRad);
+                
+                const largeArc = sliceAngle > 180 ? 1 : 0;
+                
+                return (
+                  <path
+                    key={slice}
+                    d={`M 8 8 L ${x1} ${y1} A 6 6 0 ${largeArc} 1 ${x2} ${y2} Z`}
+                    fill="white"
+                    opacity={refreshCountdown > slice ? 0.9 : 0.2}
+                    className="transition-opacity duration-200"
+                  />
+                );
+              })}
+            </svg>
+            <span>Refresh</span>
           </button>
 
           {/* Lock/Unlock Button */}
