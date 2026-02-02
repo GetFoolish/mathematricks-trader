@@ -1794,8 +1794,21 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
         cumulative_commission = 0
 
         # Determine if position was LONG or SHORT from entry action
-        entry_action = entry_leg.get('raw', {}).get('action', 'BUY').upper()
+        # The raw.legs array contains the original signal leg data before cerebro scaling
+        entry_raw = entry_leg.get('raw', {})
+        entry_raw_legs = entry_raw.get('legs', [])
+        if entry_raw_legs:
+            # Get action from the first leg in the raw signal
+            entry_action = entry_raw_legs[0].get('action', 'BUY').upper()
+            entry_direction = entry_raw_legs[0].get('direction', 'LONG').upper()
+        else:
+            # Fallback if legs array is empty (shouldn't happen)
+            entry_action = 'BUY'
+            entry_direction = 'LONG'
+        
         is_short_position = entry_action == 'SELL'
+        
+        logger.info(f"🔍 Position Direction Check: entry_action={entry_action}, entry_direction={entry_direction}, is_short={is_short_position}")
 
         exit_legs = [leg for leg in legs if leg.get('leg_type') in ['EXIT', 'SCALE_OUT']]
         for exit_leg in exit_legs:
