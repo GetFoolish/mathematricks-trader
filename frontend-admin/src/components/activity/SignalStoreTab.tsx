@@ -135,6 +135,9 @@ export default function SignalStoreTab() {
       'Commission',
       'Holding Time (s)',
       'Account ID',
+      'Broker Name',
+      'Broker Order ID (Entry)',
+      'Broker Order ID (Exit)',
       'Fund ID',
       'Entry Filled At',
       'Exit Filled At',
@@ -154,15 +157,18 @@ export default function SignalStoreTab() {
       const entryExec = entryLeg?.execution || {};
       const entryPrice = entryExec.weighted_avg_price || '';
       const entryFilledAt = entryExec.orders?.[0]?.filled_at || '';
+      const entryBrokerOrderId = entryExec.orders?.[0]?.broker_order_id || '';
       
       // Get exit data (aggregate if multiple exits)
       const exitPrice = exitLegs.length > 0 
         ? (exitLegs.reduce((sum: number, leg: any) => sum + (leg.execution?.weighted_avg_price || 0), 0) / exitLegs.length).toFixed(2)
         : '';
       const exitFilledAt = exitLegs[0]?.execution?.orders?.[0]?.filled_at || '';
+      const exitBrokerOrderId = exitLegs[0]?.execution?.orders?.[0]?.broker_order_id || '';
       
-      // Get account and fund IDs
+      // Get account, broker, and fund IDs
       const accountId = entryLeg?.execution?.orders?.[0]?.account_id || '';
+      const brokerName = entryLeg?.execution?.orders?.[0]?.broker_name || '';
       const fundId = entryLeg?.execution?.orders?.[0]?.fund_id || '';
       
       // Get leg counts
@@ -187,6 +193,9 @@ export default function SignalStoreTab() {
         signal.position?.pnl?.commission || '',
         signal.position?.pnl?.holding_seconds || '',
         accountId,
+        brokerName,
+        entryBrokerOrderId,
+        exitBrokerOrderId,
         fundId,
         entryFilledAt,
         exitFilledAt,
@@ -657,11 +666,28 @@ export default function SignalStoreTab() {
                                                 {/* Orders Created Section */}
                                                 {leg.execution?.orders && leg.execution.orders.length > 0 && (
                                                   <div className="border-t border-gray-700 pt-3">
-                                                    <div className="text-gray-500 font-semibold mb-2">Orders Created:</div>
-                                                    <div className="ml-3 space-y-1">
+                                                    <div className="text-gray-500 font-semibold mb-2">Orders Created ({leg.execution.orders.length}):</div>
+                                                    <div className="ml-3 space-y-2">
                                                       {leg.execution.orders.map((order: any, orderIdx: number) => (
-                                                        <div key={orderIdx} className="text-gray-300">
-                                                          • {order.fund_id}/{order.account_id}: {order.quantity_filled || order.quantity} @ ${(order.avg_fill_price || order.price)?.toFixed(2)}
+                                                        <div key={orderIdx} className="bg-gray-950 p-2 rounded text-xs">
+                                                          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                                                            <div><span className="text-gray-500">Fund/Account:</span> <span className="text-white">{order.fund_id}/{order.account_id}</span></div>
+                                                            <div><span className="text-gray-500">Broker:</span> <span className="text-white">{order.broker_name || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Qty Filled:</span> <span className="text-white">{order.quantity_filled || order.quantity}</span></div>
+                                                            <div><span className="text-gray-500">Avg Price:</span> <span className="text-white">${(order.avg_fill_price || order.price)?.toFixed(2)}</span></div>
+                                                            {order.broker_order_id && (
+                                                              <div className="col-span-2">
+                                                                <span className="text-gray-500">Broker Order ID:</span>{' '}
+                                                                <span className="text-blue-400 font-mono text-[10px]">{order.broker_order_id}</span>
+                                                              </div>
+                                                            )}
+                                                            {order.filled_at && (
+                                                              <div className="col-span-2">
+                                                                <span className="text-gray-500">Filled At:</span>{' '}
+                                                                <span className="text-white">{formatDate(order.filled_at)}</span>
+                                                              </div>
+                                                            )}
+                                                          </div>
                                                         </div>
                                                       ))}
                                                     </div>

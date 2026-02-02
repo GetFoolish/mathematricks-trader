@@ -233,17 +233,19 @@ class BrokerModeAdapter(AbstractBroker):
             symbol = order.get('instrument')
             instrument_type = order.get('instrument_type', 'STOCK')
             order_side = order.get('side', 'BUY')
+            direction = order.get('direction', 'OPEN')
 
             # Get live market price from real broker
             real_price = self.get_market_price(symbol, instrument_type)
 
             # Add price to order (mock broker will use this)
+            # IMPORTANT: Replace signal price with live price for ALL orders (ENTRY and EXIT)
             enriched_order = order.copy()
             enriched_order['price'] = real_price
             enriched_order['_price_source'] = 'real_broker'
 
             logger.info(
-                f"📈 [{self.mode}] Enriched {order_side} {symbol} order: "
+                f"📈 [{self.mode}] Enriched {order_side} {symbol} order ({direction}): "
                 f"price=${real_price:.2f} (from real broker), "
                 f"quantity={order.get('quantity', 'N/A')}"
             )

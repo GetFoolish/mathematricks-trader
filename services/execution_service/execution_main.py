@@ -35,9 +35,6 @@ from brokers.exceptions import (
     InvalidSymbolError
 )
 
-# Import broker mode adapter for environment-based execution
-from execution_service.broker_mode_adapter import create_broker_adapter
-
 # Import Telegram notifier
 from telegram.notifier import TelegramNotifier
 
@@ -240,6 +237,72 @@ def status_check():
         'broker_pool': list(broker_pool.keys()) if 'broker_pool' in globals() else []
     }
 
+@app.get('/market_status')
+def market_status_check():
+    """
+    Check if markets are open and broker connections are healthy.
+    Used by test suite for market validation instead of creating competing connections.
+    
+    Returns:
+    - markets: Dict of asset type -> is_open status
+    - brokers: Dict of broker -> connection status
+    - canary_prices: Dict of symbol -> current price (for market data validation)
+    """
+    try:
+        result = {
+            'markets': {},
+            'brokers': {},
+            'canary_prices': {},
+            'ready': broker_pool_ready
+        }
+        
+        # Check broker connections from pool
+        for broker_key, broker in broker_pool.items():
+            broker_connected = broker.ib.isConnected() if hasattr(broker, 'ib') else False
+            result['brokers'][broker_key] = {
+                'connected': broker_connected,
+                'broker_name': getattr(broker, 'broker_name', 'Unknown')
+            }
+            
+            # Get market hours and canary price from first IBKR broker
+            if broker_connected and 'IBKR' in broker_key and not result['markets']:
+                try:
+                    from brokers.ibkr.market_hours import is_market_open
+                    
+                    # Check common market types
+                    for market_type in ['STOCK', 'OPTION', 'CRYPTO', 'FUTURE']:
+                        try:
+                            is_open = is_market_open(market_type)
+                            result['markets'][market_type] = is_open
+                        except:
+                            pass
+                    
+                    # Get canary price for SPY (STOCK market data check)
+                    if result['markets'].get('STOCK'):
+                        try:
+                            from ib_insync import Stock
+                            contract = Stock('SPY', 'SMART', 'USD')
+                            broker.ib.qualifyContracts(contract)
+                            ticker = broker.ib.reqMktData(contract, snapshot=True)
+                            broker.ib.sleep(2)
+                            price = ticker.marketPrice()
+                            if price == price and price > 0:  # Not NaN
+                                result['canary_prices']['SPY'] = price
+                        except Exception as e:
+                            logger.warning(f"Failed to get SPY canary price: {e}")
+                
+                except Exception as e:
+                    logger.warning(f"Failed to check market hours: {e}")
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error in market_status_check: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={'error': str(e), 'ready': False}
+        )
+
 
 # /reload endpoint REMOVED - use 'make restart' instead
 # Runtime reloads caused race conditions where broker_pool was empty during
@@ -328,6 +391,110 @@ def execute_order_endpoint(request: ExecuteOrderRequest):
     except Exception as e:
         logger.error(f"🚨 ERROR queuing order {request.order_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error queuing order: {str(e)}")
+
+@app.post('/api/v1/sync-account-balance')
+async def sync_account_balance(account_id: str, max_age_seconds: int = 60):
+    """
+    Sync account balance from broker to MongoDB if stale.
+    
+    This endpoint is called by cerebro-service BEFORE position sizing to ensure
+    it has fresh account balances for margin validation.
+    
+    Args:
+        account_id: Account ID to sync (e.g., 'IBKR-TESTING-ACCOUNT')
+        max_age_seconds: Max age in seconds before forcing refresh (default: 60)
+    
+    Returns:
+        Fresh account balances from broker (and updates MongoDB)
+    """
+    try:
+        logger.info(f"📊 Balance sync request for {account_id} (max_age={max_age_seconds}s)")
+        
+        # Get account document from MongoDB
+        account_doc = trading_accounts_collection.find_one({"account_id": account_id})
+        if not account_doc:
+            raise HTTPException(status_code=404, detail=f"Account {account_id} not found")
+        
+        # Check if balances are stale
+        balances = account_doc.get('balances', {})
+        last_updated = balances.get('last_updated')
+        
+        needs_refresh = True
+        if last_updated:
+            if isinstance(last_updated, str):
+                last_updated = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
+            age_seconds = (datetime.utcnow() - last_updated).total_seconds()
+            needs_refresh = age_seconds > max_age_seconds
+            logger.info(f"   Balance age: {age_seconds:.1f}s (needs_refresh={needs_refresh})")
+        else:
+            logger.info(f"   No last_updated timestamp - forcing refresh")
+        
+        # If fresh enough, return cached balances
+        if not needs_refresh:
+            logger.info(f"✅ Using cached balances (age < {max_age_seconds}s)")
+            return {
+                "account_id": account_id,
+                "balances": balances,
+                "source": "cache",
+                "age_seconds": age_seconds
+            }
+        
+        # Fetch fresh balances from broker
+        logger.info(f"🔄 Fetching fresh balances from broker...")
+        
+        # Try to find the right broker - for paper_live mode, use IBKR-TESTING-ACCOUNT_paper_live
+        # For live accounts, use the account_id directly
+        broker = broker_pool.get(account_id)
+        if not broker:
+            # Try with _paper_live suffix for IBKR paper accounts
+            broker = broker_pool.get(f"{account_id}_paper_live")
+        
+        logger.info(f"   Looking up broker: account_id={account_id}, found={broker is not None}")
+        if broker:
+            logger.info(f"   Broker type: {type(broker).__name__}, is_connected: {broker.is_connected()}")
+        
+        if not broker:
+            available_keys = list(broker_pool.keys())
+            logger.error(f"   Available broker keys: {available_keys}")
+            raise HTTPException(status_code=404, detail=f"No broker found for {account_id}")
+        
+        if not broker.is_connected():
+            raise HTTPException(status_code=503, detail=f"Broker not connected for {account_id}")
+        
+        # Get fresh balance from broker (run in thread pool to avoid blocking)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        fresh_balance = await loop.run_in_executor(None, broker.get_account_balance, account_id)
+        
+        # Ensure last_updated field is set
+        if 'last_updated' not in fresh_balance:
+            fresh_balance['last_updated'] = datetime.utcnow()
+        
+        # Update MongoDB with fresh balances
+        trading_accounts_collection.update_one(
+            {"account_id": account_id},
+            {"$set": {
+                "balances": fresh_balance,
+                "updated_at": datetime.utcnow()
+            }}
+        )
+        
+        logger.info(f"✅ Synced fresh balances to MongoDB")
+        logger.info(f"   Equity: ${fresh_balance.get('equity', 0):,.2f}")
+        logger.info(f"   Margin Available: ${fresh_balance.get('margin_available', 0):,.2f}")
+        
+        return {
+            "account_id": account_id,
+            "balances": fresh_balance,
+            "source": "broker",
+            "age_seconds": 0
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error syncing balance for {account_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error syncing balance: {str(e)}")
 
 def run_fastapi_server():
     """Run FastAPI server in background thread"""
@@ -485,14 +652,16 @@ def _build_broker_config(broker_name: str, account_id: str, auth_details: Dict) 
     
     if broker_name == 'IBKR':
         # IBKR: host, port, client_id, market_data_type (optional) from auth_details
+        # Support both direct fields and ibkr_* prefixed fields (for mock_live mode)
         config.update({
-            "host": auth_details.get('host', 'host.docker.internal'),
-            "port": auth_details.get('port', 4002),
-            "client_id": auth_details.get('client_id', 1)
+            "host": auth_details.get('ibkr_host') or auth_details.get('host', 'host.docker.internal'),
+            "port": auth_details.get('ibkr_port') or auth_details.get('port', 4002),
+            "client_id": auth_details.get('ibkr_client_id') or auth_details.get('client_id', 1)
         })
         # Add market_data_type if specified
-        if 'market_data_type' in auth_details:
-            config['market_data_type'] = auth_details['market_data_type']
+        market_data_type = auth_details.get('ibkr_market_data_type') or auth_details.get('market_data_type')
+        if market_data_type is not None:
+            config['market_data_type'] = market_data_type
     
     elif broker_name == 'Binance':
         # Binance: api_key, api_secret, testnet
@@ -775,91 +944,126 @@ def initialize_broker_pool():
             logger.error(f"Account {account_id} has invalid mode field: {mode}. Skipping.")
             continue
         
-        # Compute data_source from broker field (Mock = mock data, others = live data)
+        # Get account_type
         account_type = account.get('account_type')
         if not account_type:
             logger.error(f"Account {account_id} missing account_type field")
             continue
         
-        # Data source is determined by broker: Mock broker = mock data, real brokers = live data
-        data_source = "mock" if broker_name == "Mock" else "live"
-        computed_mode = f"{account_type}_{data_source}"
-
-        try:
-            # Build broker-specific config
-            real_config = _build_broker_config(broker_name, account_id, auth_details)
-            
-            if account_type == 'mock' and data_source == 'mock':
-                # mock_mock: Create only Mock broker
-                broker_config = {
-                    "broker": "Mock",
-                    "account_id": account_id,
-                    **auth_details
-                }
-                broker_instance = BrokerFactory.create_broker(broker_config)
-
-            elif account_type == 'mock' and data_source == 'live':
-                # mock_live: Create BOTH real broker + Mock, wrap in BrokerModeAdapter
-                # Create real broker
-                real_broker = BrokerFactory.create_broker(real_config)
-
-                # Create mock broker in read-only mode (prevents MongoDB config overwrites)
-                mock_config = {
-                    "broker": "Mock",
-                    "account_id": account_id,
-                    "read_only": True,
-                    **auth_details
-                }
-                mock_broker = BrokerFactory.create_broker(mock_config)
-
-                # Wrap in BrokerModeAdapter
-                from services.brokers.adapters import BrokerModeAdapter
-                broker_instance = BrokerModeAdapter(
-                    real_broker, 
-                    mock_broker, 
-                    account_type='mock',
-                    data_source='live'
-                )
-
-            elif account_type == 'paper' and data_source == 'live':
-                # paper_live: Create only real broker (IBKR paper account on port 4004)
-                broker_instance = BrokerFactory.create_broker(real_config)
-
-            elif account_type == 'live' and data_source == 'live':
-                # live_live: Create only real broker (production)
-                broker_instance = BrokerFactory.create_broker(real_config)
-
+        # ITERATE OVER EACH MODE - accounts can support multiple modes
+        # For example, IBKR-MOCK might support ['mock_mock', 'mock_live']
+        # We need to create the appropriate broker instance for EACH mode
+        for mode_str in modes:
+            # Parse mode string to extract data_source
+            # Mode format: {account_type}_{data_source}
+            # Examples: mock_mock, mock_live, paper_live, live_live
+            if '_' in mode_str:
+                parts = mode_str.split('_')
+                if len(parts) == 2:
+                    mode_account_type, data_source = parts
+                    # Validate that mode_account_type matches account_type
+                    if mode_account_type != account_type:
+                        logger.warning(f"Account {account_id}: mode {mode_str} doesn't match account_type={account_type}. Skipping this mode.")
+                        continue
+                else:
+                    logger.error(f"Account {account_id}: invalid mode format '{mode_str}'. Expected format: {{account_type}}_{{data_source}}")
+                    continue
             else:
-                logger.error(f"❌ Invalid mode: account_type='{account_type}', data_source='{data_source}' for account {account_id}. Skipping.")
+                # Legacy format: mode doesn't contain underscore
+                # Default data_source based on broker name
+                data_source = "mock" if broker_name == "Mock" else "live"
+                logger.warning(f"Account {account_id}: mode '{mode_str}' doesn't follow {{account_type}}_{{data_source}} format. Defaulting data_source to '{data_source}'")
+            
+            computed_mode = f"{account_type}_{data_source}"
+
+            try:
+                if account_type == 'mock' and data_source == 'mock':
+                    # mock_mock: Create only Mock broker
+                    broker_config = {
+                        "broker": "Mock",
+                        "account_id": account_id,
+                        **auth_details
+                    }
+                    broker_instance = BrokerFactory.create_broker(broker_config)
+
+                elif account_type == 'mock' and data_source == 'live':
+                    # mock_live: Create BOTH real broker + Mock, wrap in BrokerModeAdapter
+                    # For mock_live mode, always use IBKR as the real broker for market data
+                    # regardless of what broker_name is in the account document
+                    real_config = _build_broker_config("IBKR", account_id, auth_details)
+                    real_broker = BrokerFactory.create_broker(real_config)
+
+                    # Create mock broker in read-only mode (prevents MongoDB config overwrites)
+                    mock_config = {
+                        "broker": "Mock",
+                        "account_id": account_id,
+                        "read_only": True,
+                        **auth_details
+                    }
+                    mock_broker = BrokerFactory.create_broker(mock_config)
+
+                    # Wrap in BrokerModeAdapter
+                    from services.brokers.adapters import BrokerModeAdapter
+                    broker_instance = BrokerModeAdapter(
+                        real_broker, 
+                        mock_broker, 
+                        account_type='mock',
+                        data_source='live'
+                    )
+
+                elif account_type == 'paper' and data_source == 'live':
+                    # paper_live: Create only real broker (IBKR paper account on port 4004)
+                    real_config = _build_broker_config(broker_name, account_id, auth_details)
+                    broker_instance = BrokerFactory.create_broker(real_config)
+
+                elif account_type == 'live' and data_source == 'live':
+                    # live_live: Create only real broker (production)
+                    real_config = _build_broker_config(broker_name, account_id, auth_details)
+                    broker_instance = BrokerFactory.create_broker(real_config)
+
+                else:
+                    logger.error(f"❌ Invalid mode: account_type='{account_type}', data_source='{data_source}' for account {account_id}. Skipping this mode.")
+                    continue
+
+                # CRITICAL: Store each mode separately in broker_pool to avoid overwrites
+                # Use mode-specific key: {account_id}_{mode}
+                # Example: IBKR-MOCK_mock_mock, IBKR-MOCK_mock_live
+                mode_key = f"{account_id}_{computed_mode}"
+                broker_pool[mode_key] = broker_instance
+                logger.info(f"✅ Stored broker in pool: {mode_key} -> {broker_instance.broker_name}")
+                
+                # ALSO store under account_id (for backward compatibility)
+                # Use the FIRST mode processed as the default for broker_pool[account_id]
+                if account_id not in broker_pool:
+                    broker_pool[account_id] = broker_instance
+                    logger.info(f"✅ Set default broker for {account_id}: {computed_mode}")
+                else:
+                    logger.debug(f"⏭️  Skipping default - {account_id} already has broker: {broker_pool[account_id].broker_name}")
+                
+                # Legacy keys for backward compatibility
+                if account_type == 'mock' and data_source == 'mock':
+                    broker_pool['mock'] = broker_instance
+                elif account_type == 'mock' and data_source == 'live':
+                    # For mock_live mode, only set 'mock' if not already set
+                    if 'mock' not in broker_pool:
+                        broker_pool['mock'] = broker_instance
+                    if hasattr(broker_instance, 'real_broker'):
+                        broker_pool['ibkr_paper'] = broker_instance.real_broker
+                elif account_type == 'paper' and data_source == 'live':
+                    broker_pool['ibkr_paper'] = broker_instance
+                elif account_type == 'live' and data_source == 'live':
+                    broker_pool['ibkr_live'] = broker_instance
+                
+                # Track for summary log
+                broker_display = f"{broker_name}+Mock" if account_type == 'mock' and data_source == 'live' else broker_name
+                initialized_brokers.append(f"{account_id} ({broker_display}, mode: {computed_mode})")
+
+            except Exception as e:
+                logger.error(f"❌ Failed to create broker for account {account_id}, mode {mode_str}: {str(e)}")
+                logger.error(f"   broker={broker_name}, account_type={account_type}, data_source={data_source}")
+                import traceback
+                logger.error(traceback.format_exc())
                 continue
-
-            # Add to broker pool with BOTH account_id AND generic keys
-            broker_pool[account_id] = broker_instance
-            
-            # ALSO add generic keys for broker adapter lookup
-            if account_type == 'mock' and data_source == 'mock':
-                broker_pool['mock'] = broker_instance
-            elif account_type == 'mock' and data_source == 'live':
-                # For mock_live mode, also store the wrapped adapter under 'mock' key
-                broker_pool['mock'] = broker_instance
-                # Store the inner real broker under 'ibkr_paper' for data lookups
-                if hasattr(broker_instance, 'data_broker'):
-                    broker_pool['ibkr_paper'] = broker_instance.data_broker
-            elif account_type == 'paper' and data_source == 'live':
-                broker_pool['ibkr_paper'] = broker_instance
-            elif account_type == 'live' and data_source == 'live':
-                broker_pool['ibkr_live'] = broker_instance
-            
-            # Track for summary
-            broker_display = f"{broker_name}+Mock" if account_type == 'mock' and data_source == 'live' else broker_name
-            initialized_brokers.append(f"{account_id} ({broker_display}, modes: {','.join(modes)})")
-
-        except Exception as e:
-            logger.error(f"❌ Failed to create broker for account {account_id}: {str(e)}")
-            logger.error(f"   broker={broker_name}, account_type={account_type}, data_source={data_source}")
-            import traceback
-            logger.error(traceback.format_exc())
-            continue
 
     # Summary log
     if initialized_brokers:
@@ -1022,25 +1226,24 @@ def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any
             data_source = 'mock'
             logger.debug(f"CLI MOCK MODE: Overriding environment={original_env}→staging, account_type={original_account_type}→mock")
         
-        # Get broker using environment-based adapter factory
-        try:
-            broker = create_broker_adapter(
-                environment=environment,
-                account_type=account_type,
-                data_source=data_source,
-                broker_pool=broker_pool
-            )
-        except ValueError as e:
-            rejection_reason = str(e)
-            logger.error(f"❌ Broker selection failed: {rejection_reason}")
-            return {
-                "status": "REJECTED",
-                "rejection_reason": rejection_reason
-            }
+        # Compute mode for broker lookup
+        computed_mode = f"{account_type}_{data_source}"
+        mode_key = f"{account_id}_{computed_mode}"
+        
+        # Get broker from pool using mode-specific key
+        # Primary lookup: {account_id}_{mode} (e.g., IBKR-MOCK_mock_mock)
+        # Fallback: {account_id} (for backward compatibility)
+        broker = broker_pool.get(mode_key)
+        if not broker:
+            broker = broker_pool.get(account_id)
+            logger.debug(f"Mode-specific key {mode_key} not found, using fallback broker for {account_id}")
+        else:
+            logger.debug(f"Using mode-specific broker: {mode_key} -> {broker.broker_name}")
         
         if not broker:
-            rejection_reason = f"No broker available for environment={environment}, account_type={account_type}, data_source={data_source}"
+            rejection_reason = f"No broker found in pool for account {account_id}"
             logger.error(f"❌ {rejection_reason}")
+            logger.error(f"   Available accounts in broker pool: {list(broker_pool.keys())}")
             return {
                 "status": "REJECTED",
                 "rejection_reason": rejection_reason
@@ -1470,10 +1673,33 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
                 logger.error(f"   Leg {idx}: type={leg.get('leg_type')}, leg_id={leg.get('leg_id')}")
             return
 
-        # Build order document
+        # Build order document with broker information
         now = datetime.utcnow()
+        
+        # Get broker_name from account_id by looking up the broker in the pool
+        account_id = order_data.get('account_id')
+        broker_name = None
+        if account_id:
+            # Try to find broker in pool to get broker_name
+            account_type = order_data.get('account_type', 'mock')
+            data_source = order_data.get('data_source', 'mock')
+            computed_mode = f"{account_type}_{data_source}"
+            mode_key = f"{account_id}_{computed_mode}"
+            
+            broker = broker_pool.get(mode_key) or broker_pool.get(account_id)
+            if broker:
+                broker_name = broker.broker_name
+            else:
+                logger.warning(f"⚠️  Could not find broker for account {account_id} to get broker_name")
+                # Fallback: try to infer from account_id (e.g., "IBKR-MOCK" -> "IBKR")
+                if '-' in account_id:
+                    broker_name = account_id.split('-')[0]
+                else:
+                    broker_name = 'UNKNOWN'
+        
         order_doc = {
             "order_id": order_data.get('order_id'),
+            "broker_name": broker_name,
             "broker_order_id": execution_data.get('broker_order_id'),
             "fund_id": order_data.get('fund_id'),
             "account_id": order_data.get('account_id'),
@@ -1567,6 +1793,10 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
         cumulative_net_pnl = 0
         cumulative_commission = 0
 
+        # Determine if position was LONG or SHORT from entry action
+        entry_action = entry_leg.get('raw', {}).get('action', 'BUY').upper()
+        is_short_position = entry_action == 'SELL'
+
         exit_legs = [leg for leg in legs if leg.get('leg_type') in ['EXIT', 'SCALE_OUT']]
         for exit_leg in exit_legs:
             if exit_leg.get('execution'):
@@ -1577,7 +1807,13 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
                 total_exit_quantity += exit_qty
 
                 # Calculate P&L for this exit leg
-                gross_pnl = (exit_price_leg - entry_price) * exit_qty
+                # SHORT: Profit when exit_price < entry_price (sell high, buy low)
+                # LONG: Profit when exit_price > entry_price (buy low, sell high)
+                if is_short_position:
+                    gross_pnl = (entry_price - exit_price_leg) * exit_qty
+                else:
+                    gross_pnl = (exit_price_leg - entry_price) * exit_qty
+                
                 commission = sum(o.get('commission', 0) for o in exit_exec.get('orders', []))
                 net_pnl = gross_pnl - commission
 
@@ -1698,11 +1934,220 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
                                     account_entry_price = entry_order.get('avg_fill_price', entry_price)
                                     break
 
-                        this_exit_pnl = (this_exit_price - account_entry_price) * this_exit_qty
+                        # Calculate PnL correctly based on position direction
+                        # SHORT: Profit when exit_price < entry_price (sell high, buy low)
+                        # LONG: Profit when exit_price > entry_price (buy low, sell high)
+                        logger.info(f"🔍 Mock PnL Calc: is_short={is_short_position}, entry_price=${account_entry_price:.2f}, exit_price=${this_exit_price:.2f}, qty={this_exit_qty}")
+                        if is_short_position:
+                            this_exit_pnl = (account_entry_price - this_exit_price) * this_exit_qty
+                            logger.info(f"🔍 SHORT PnL: ({account_entry_price} - {this_exit_price}) * {this_exit_qty} = ${this_exit_pnl:.2f}")
+                        else:
+                            this_exit_pnl = (this_exit_price - account_entry_price) * this_exit_qty
+                            logger.info(f"🔍 LONG PnL: ({this_exit_price} - {account_entry_price}) * {this_exit_qty} = ${this_exit_pnl:.2f}")
+                        
                         update_mock_broker_balance(account_id, this_exit_pnl, this_exit_qty, this_exit_price)
 
     except Exception as e:
         logger.error(f"❌ Error updating signal_store with execution: {e}", exc_info=True)
+
+
+def update_signal_store_with_reconciliation(
+    mathematricks_signal_id: str,
+    reconciliation_result,
+    order_data: Dict[str, Any]
+):
+    """
+    Update signal_store with reconciliation results.
+    
+    Args:
+        mathematricks_signal_id: MongoDB ObjectId of signal
+        reconciliation_result: ReconciliationResult object
+        order_data: Original order data
+    """
+    try:
+        from bson import ObjectId
+        from common.lag_calculator import calculate_processing_lag
+        
+        signal_type = order_data.get('signal_type', 'EXIT')
+        
+        # Find signal document
+        signal_doc = signal_store_collection.find_one({"_id": ObjectId(mathematricks_signal_id)})
+        if not signal_doc:
+            logger.error(f"❌ Signal document not found: {mathematricks_signal_id}")
+            return
+        
+        # Find the EXIT leg
+        legs = signal_doc.get('legs', [])
+        leg_index = None
+        for idx, leg in enumerate(legs):
+            if leg.get('leg_type') == signal_type:
+                leg_index = idx
+                break
+        
+        if leg_index is None:
+            logger.error(f"❌ Could not find {signal_type} leg in signal document")
+            return
+        
+        # Build execution data with reconciliation details
+        now = datetime.utcnow()
+        status = "FILLED" if reconciliation_result.success else "RECONCILIATION_FAILED"
+        
+        # Extract broker information
+        account_id = order_data.get('account_id')
+        broker_name = None
+        if account_id:
+            account_type = order_data.get('account_type', 'mock')
+            data_source = order_data.get('data_source', 'mock')
+            computed_mode = f"{account_type}_{data_source}"
+            mode_key = f"{account_id}_{computed_mode}"
+            
+            broker = broker_pool.get(mode_key) or broker_pool.get(account_id)
+            if broker:
+                broker_name = broker.broker_name
+            else:
+                if '-' in account_id:
+                    broker_name = account_id.split('-')[0]
+                else:
+                    broker_name = 'UNKNOWN'
+        
+        # Extract orders from reconciliation attempts
+        orders = []
+        total_qty_exited = 0
+        for attempt in reconciliation_result.attempts:
+            for exit_res in attempt.get('exit_results', []):
+                if exit_res.get('success'):
+                    total_qty_exited += exit_res.get('quantity', 0)
+                    # Create order document for each successful exit
+                    order_doc = {
+                        "order_id": order_data.get('order_id', f"{order_data.get('signal_id')}_reconcile_{len(orders)}"),
+                        "broker_name": broker_name,
+                        "broker_order_id": exit_res.get('broker_order_id'),
+                        "fund_id": order_data.get('fund_id'),
+                        "account_id": account_id,
+                        "quantity_requested": exit_res.get('quantity', 0),
+                        "quantity_filled": exit_res.get('quantity', 0),
+                        "avg_fill_price": exit_res.get('avg_price', 0),
+                        "filled_at": now,
+                        "fills": exit_res.get('fills', [])
+                    }
+                    orders.append(order_doc)
+        
+        leg_execution = {
+            "status": status,
+            "reconciliation_attempts": reconciliation_result.attempts,
+            "final_position": reconciliation_result.final_position,
+            "target_position": reconciliation_result.target_position,
+            "needs_manual_intervention": reconciliation_result.needs_manual_intervention,
+            "completed_at": now,
+            "orders": orders  # Now populated with actual order data
+        }
+        
+        if not reconciliation_result.success:
+            leg_execution["error_message"] = reconciliation_result.error_message
+        
+        if total_qty_exited > 0:
+            leg_execution["total_quantity_filled"] = total_qty_exited
+        
+        # Update timestamps
+        current_leg = legs[leg_index]
+        updated_timestamps = current_leg.get('processing_timestamps', {})
+        if not updated_timestamps.get('execution_started'):
+            updated_timestamps['execution_started'] = now
+        updated_timestamps['execution_completed'] = now
+        
+        # Calculate processing lag
+        processing_lag = calculate_processing_lag(updated_timestamps)
+        
+        # Update the leg
+        signal_store_collection.update_one(
+            {"_id": ObjectId(mathematricks_signal_id)},
+            {
+                "$set": {
+                    f"legs.{leg_index}.execution": leg_execution,
+                    f"legs.{leg_index}.processing_timestamps": updated_timestamps,
+                    f"legs.{leg_index}.processing_lag": processing_lag,
+                    "updated_at": now
+                }
+            }
+        )
+        
+        if reconciliation_result.success:
+            logger.info(f"✅ Updated signal_store with successful reconciliation ({len(reconciliation_result.attempts)} attempts)")
+        else:
+            logger.error(f"❌ Updated signal_store with failed reconciliation (needs manual intervention)")
+    
+    except Exception as e:
+        logger.error(f"Failed to update signal_store with reconciliation: {str(e)}", exc_info=True)
+
+
+def update_signal_store_with_reconciliation_error(
+    mathematricks_signal_id: str,
+    error_type: str,
+    error_message: str
+):
+    """
+    Update signal_store when reconciliation cannot even be attempted.
+    
+    Args:
+        mathematricks_signal_id: MongoDB ObjectId of signal
+        error_type: Error type code
+        error_message: Human-readable error message
+    """
+    try:
+        from bson import ObjectId
+        from common.lag_calculator import calculate_processing_lag
+        
+        # Find signal document
+        signal_doc = signal_store_collection.find_one({"_id": ObjectId(mathematricks_signal_id)})
+        if not signal_doc:
+            logger.error(f"❌ Signal document not found: {mathematricks_signal_id}")
+            return
+        
+        # Find EXIT leg (assume first leg if not found)
+        legs = signal_doc.get('legs', [])
+        leg_index = 0
+        for idx, leg in enumerate(legs):
+            if leg.get('leg_type') in ['EXIT', 'SCALE_OUT']:
+                leg_index = idx
+                break
+        
+        # Build error execution data
+        now = datetime.utcnow()
+        leg_execution = {
+            "status": "REJECTED",
+            "rejection_reason": error_message,
+            "error_type": error_type,
+            "rejected_at": now,
+            "orders": []
+        }
+        
+        # Update timestamps
+        current_leg = legs[leg_index]
+        updated_timestamps = current_leg.get('processing_timestamps', {})
+        if not updated_timestamps.get('execution_started'):
+            updated_timestamps['execution_started'] = now
+        updated_timestamps['execution_completed'] = now
+        
+        # Calculate processing lag
+        processing_lag = calculate_processing_lag(updated_timestamps)
+        
+        # Update the leg
+        signal_store_collection.update_one(
+            {"_id": ObjectId(mathematricks_signal_id)},
+            {
+                "$set": {
+                    f"legs.{leg_index}.execution": leg_execution,
+                    f"legs.{leg_index}.processing_timestamps": updated_timestamps,
+                    f"legs.{leg_index}.processing_lag": processing_lag,
+                    "updated_at": now
+                }
+            }
+        )
+        
+        logger.error(f"❌ Updated signal_store with reconciliation error: {error_type} - {error_message}")
+    
+    except Exception as e:
+        logger.error(f"Failed to update signal_store with reconciliation error: {str(e)}", exc_info=True)
 
 
 def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg_fill_price: float):
@@ -1718,9 +2163,13 @@ def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg
         signal_type = (order_data.get('signal_type') or '').upper()
         order_id = order_data.get('order_id')
 
-        # Get account_id from order_data, with fallback based on broker mode
-        default_account = "Mock_Paper" if args.use_mock_broker else "IBKR_Main"
-        account_id = order_data.get('account_id', default_account)
+        # CRITICAL: account_id MUST be in order_data - NO FALLBACK
+        account_id = order_data.get('account_id')
+        if not account_id:
+            logger.error(f"❌ CRITICAL: account_id missing from order_data for {order_id}")
+            logger.error(f"   Order data keys: {list(order_data.keys())}")
+            logger.error(f"   Cannot create/update position without account_id - FAILING")
+            return
 
         # Find account document
         account_doc = trading_accounts_collection.find_one({"account_id": account_id})
@@ -1945,6 +2394,124 @@ def cancel_order(order_id: str) -> bool:
 # (Direct API call from cerebro after creating order)
 
 
+def process_exit_with_reconciliation(order_data: Dict[str, Any], broker_pool: Dict[str, Any]):
+    """
+    Process EXIT signal using position reconciliation engine.
+    
+    This function:
+    1. Queries broker for current position
+    2. Cancels pending ENTRY orders
+    3. Exits filled position shares
+    4. Retries up to 6 times
+    5. Updates signal_store with detailed reconciliation history
+    6. Starts Telegram alert loop if reconciliation fails
+    
+    Args:
+        order_data: Order data from Cerebro
+        broker_pool: Dict of broker instances by account ID
+    """
+    from execution_service.position_reconciliation import (
+        reconcile_exit_position,
+        start_telegram_alert_loop
+    )
+    
+    signal_id = order_data.get('signal_id')
+    instrument = order_data.get('instrument')
+    account_id = order_data.get('account_id')
+    cerebro_decision = order_data.get('cerebro_decision', {})
+    mathematricks_signal_id = order_data.get('mathematricks_signal_id')
+    
+    logger.info("=" * 80)
+    logger.info(f"🔄 POSITION RECONCILIATION START")
+    logger.info(f"Signal: {signal_id}")
+    logger.info(f"Instrument: {instrument}")
+    logger.info(f"Account: {account_id}")
+    logger.info("=" * 80)
+    
+    try:
+        # Get broker instance using mode-specific lookup (same as ENTRY orders)
+        account_type = order_data.get('account_type', 'mock')
+        data_source = order_data.get('data_source', 'mock')
+        computed_mode = f"{account_type}_{data_source}"
+        mode_key = f"{account_id}_{computed_mode}"
+        
+        # Try mode-specific key first, fallback to account_id only
+        broker = broker_pool.get(mode_key)
+        if not broker:
+            broker = broker_pool.get(account_id)
+            logger.debug(f"Mode-specific key {mode_key} not found, using fallback broker for {account_id}")
+        else:
+            logger.debug(f"Using mode-specific broker for EXIT: {mode_key} -> {broker.broker_name}")
+        
+        if not broker:
+            logger.error(f"❌ Broker not found for account {account_id} (tried {mode_key} and {account_id})")
+            update_signal_store_with_reconciliation_error(
+                mathematricks_signal_id,
+                "BROKER_NOT_FOUND",
+                f"No broker instance found for account {account_id}"
+            )
+            return
+        
+        # Run reconciliation engine
+        result = reconcile_exit_position(
+            broker=broker,
+            order_data=order_data,
+            cerebro_decision=cerebro_decision,
+            max_retries=6,
+            retry_delay=3.0
+        )
+        
+        # Update signal_store with reconciliation result
+        update_signal_store_with_reconciliation(mathematricks_signal_id, result, order_data)
+        
+        if result.success:
+            logger.info("=" * 80)
+            logger.info(f"✅ RECONCILIATION SUCCESS")
+            logger.info(f"Signal: {signal_id}")
+            logger.info(f"Final Position: {result.final_position}")
+            logger.info(f"Target Position: {result.target_position}")
+            logger.info(f"Attempts: {len(result.attempts)}")
+            logger.info("=" * 80)
+        else:
+            logger.critical("=" * 80)
+            logger.critical(f"🚨 RECONCILIATION FAILED - MANUAL INTERVENTION REQUIRED")
+            logger.critical(f"Signal: {signal_id}")
+            logger.critical(f"Instrument: {instrument}")
+            logger.critical(f"Current Position: {result.final_position}")
+            logger.critical(f"Target Position: {result.target_position}")
+            logger.critical(f"Attempts: {len(result.attempts)}")
+            logger.critical("=" * 80)
+            
+            # Start Telegram alert loop
+            telegram_config = {
+                'enabled': os.getenv('TELEGRAM_ALERTS_ENABLED', 'false').lower() == 'true',
+                'bot_token': os.getenv('TELEGRAM_BOT_TOKEN'),
+                'chat_id': os.getenv('TELEGRAM_CHAT_ID')
+            }
+            
+            if telegram_config['enabled']:
+                start_telegram_alert_loop(
+                    signal_id=signal_id,
+                    instrument=instrument,
+                    account_id=account_id,
+                    current_position=result.final_position,
+                    target_position=result.target_position,
+                    reconciliation_result=result,
+                    broker=broker,
+                    telegram_config=telegram_config
+                )
+            else:
+                logger.warning("📱 Telegram alerts disabled - no notifications will be sent")
+    
+    except Exception as e:
+        logger.error(f"🚨 Exception during reconciliation: {e}", exc_info=True)
+        update_signal_store_with_reconciliation_error(
+            mathematricks_signal_id,
+            "RECONCILIATION_EXCEPTION",
+            f"Exception during reconciliation: {str(e)}"
+        )
+
+
 def process_order_from_queue(order_item: Dict[str, Any]):
     """
     Process a single order from the queue in the main thread
@@ -1975,10 +2542,29 @@ def process_order_from_queue(order_item: Dict[str, Any]):
         logger.info(f"📥 ORDER RECEIVED: {order_data.get('instrument')} | {order_data.get('direction')} | Qty: {order_data.get('quantity')} | OrderID: {order_id}")
         signal_logger.info(f"ORDER: {signal_id} | ORDER_RECEIVED | OrderID={order_id} | Instrument={order_data.get('instrument')} | Direction={order_data.get('direction')} | Quantity={order_data.get('quantity')}")
 
+        # CRITICAL: account_id MUST be in order_data - NO FALLBACK
+        account_id = order_data.get('account_id')
+        if not account_id:
+            logger.critical(f"🚨 CRITICAL: account_id missing from order_data for {order_id}")
+            logger.critical(f"   Order data keys: {list(order_data.keys())}")
+            logger.critical(f"   Signal: {signal_id}")
+            logger.critical(f"   Instrument: {order_data.get('instrument')}")
+            signal_logger.critical(f"ORDER: {signal_id} | MISSING_ACCOUNT_ID | Order rejected - account_id missing from order_data")
+            return
+
         # Log open positions BEFORE order execution
-        default_account = "Mock_Paper" if args.use_mock_broker else "IBKR_Main"
-        account_id = order_data.get('account_id', default_account)
         log_open_positions(account_id, "BEFORE ORDER")
+
+        # CHECK IF THIS IS AN EXIT SIGNAL REQUIRING RECONCILIATION
+        cerebro_decision = order_data.get('cerebro_decision', {})
+        requires_reconciliation = cerebro_decision.get('risk_metrics', {}).get('requires_reconciliation', False)
+        signal_type = order_data.get('signal_type', 'ENTRY')
+        
+        if signal_type in ['EXIT', 'SCALE_OUT'] or requires_reconciliation:
+            # Route to position reconciliation engine
+            logger.info(f"🔄 EXIT signal detected - routing to position reconciliation engine")
+            process_exit_with_reconciliation(order_data, broker_pool)
+            return  # Skip normal order processing
 
         # Submit order to broker (now safe - we're in main thread)
         logger.debug(f"Submitting order {order_id} to broker...")

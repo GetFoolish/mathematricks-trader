@@ -332,10 +332,12 @@ def get_broker_config(broker_name: str) -> Optional[Dict[str, Any]]:
 
 def check_market_data_availability(signals_folder: Path, broker_name: str, file_filter: str = None) -> Dict[str, Any]:
     """
-    Check market data availability for signals using simple canary checks.
+    Check market data availability for signals by querying the execution service.
     
-    Simplified version: Only validates STOCK and BOND via canaries.
-    Other asset types are validated individually (no canary).
+    This validates:
+    1. Markets are open
+    2. Broker connections in execution service are healthy
+    3. Market data is available (via canary check)
     
     Args:
         signals_folder: Path to folder containing signal JSON files
@@ -382,284 +384,152 @@ def check_market_data_availability(signals_folder: Path, broker_name: str, file_
             'summary': {'tradeable': 0, 'queued': 0, 'skipped': 0, 'total': 0}
         }
     
-    # Get broker config
-    broker_config = get_broker_config(broker_name)
-    if not broker_config:
-        print(f"\n❌ BROKER CONFIG NOT FOUND: {broker_name}")
-        print(f"   Cannot validate market data without broker configuration.")
-        return {
-            'asset_classes': {},
-            'signals': [],
-            'summary': {'tradeable': 0, 'queued': 0, 'skipped': len(all_signals), 'total': len(all_signals)}
-        }
-    
-    # Check if gateway is running first
-    if not check_ibkr_gateway_running():
-        print(f"\n❌ IBKR Gateway not running")
-        print(f"   Check: docker ps | grep ib-gateway")
-        return {
-            'asset_classes': {},
-            'signals': [],
-            'summary': {'tradeable': 0, 'queued': 0, 'skipped': len(all_signals), 'total': len(all_signals)}
-        }
-    
-    # Initialize broker
-    print(f"\n🔌 Connecting to {broker_config['broker']} at {broker_config['host']}:{broker_config['port']}...")
+    # Query execution service for market status instead of creating our own connection
+    print(f"\n🔌 Checking execution service market status...")
     
     try:
-        sys.path.insert(0, str(Path(__file__).parent.parent / 'services'))
-        from brokers.ibkr.ibkr_broker import IBKRBroker
+        import requests
+        response = requests.get('http://localhost:8083/market_status', timeout=10)
         
-        broker = IBKRBroker(broker_config)
-        
-        # Set shorter timeout for market validation
-        broker.ib.RequestTimeout = 10  # 10 seconds instead of default
-        
-        # Try to connect (single attempt, 10s timeout)
-        # Use skip_sync=True for faster market data validation (no positions/orders)
-        try:
-            print(f"   Attempting connection (market data only, skip positions/orders sync)...")
-            connected = broker.connect(skip_sync=True)
-            if connected:
-                print(f"   ✅ Connected successfully")
-            else:
-                raise Exception("Connection failed")
-        except Exception as e:
-            print(f"   ❌ Connection failed: {e}")
-            print(f"   Check: docker ps | grep ib-gateway")
+        if response.status_code != 200:
+            print(f"   ❌ Execution service returned {response.status_code}")
             return {
                 'asset_classes': {},
                 'signals': [],
                 'summary': {'tradeable': 0, 'queued': 0, 'skipped': len(all_signals), 'total': len(all_signals)}
             }
         
-        # Get canaries
-        canaries = get_canary_instruments()
+        market_data = response.json()
         
-        # Group signals by instrument_type
-        signals_by_type = {}
-        for sig in all_signals:
-            inst_type = sig.get('signal_legs', [{}])[0].get('instrument_type', 'UNKNOWN')
-            if inst_type not in signals_by_type:
-                signals_by_type[inst_type] = []
-            signals_by_type[inst_type].append(sig)
-        
-        # Check market hours FIRST
-        print(f"\n   Checking market hours...")
-        market_hours_by_type = {}
-        for inst_type in signals_by_type.keys():
-            market_info = check_market_hours(inst_type)
-            market_hours_by_type[inst_type] = market_info
-            
-            if market_info['is_open']:
-                print(f"   • {inst_type}: ✅ {market_info['market_status']}")
-            else:
-                print(f"   • {inst_type}: ⏰ {market_info['market_status']}")
-                if 'opens_at' in market_info:
-                    opens_in = market_info['opens_at'] - market_info['current_time']
-                    hours = int(opens_in.total_seconds() // 3600)
-                    minutes = int((opens_in.total_seconds() % 3600) // 60)
-                    print(f"      Opens in {hours}h {minutes}m at {market_info['opens_at'].strftime('%I:%M %p %Z')}")
-        
-        # Check canaries for all asset classes
-        asset_class_status = {}
-        
-        print(f"\n   Running canary checks (for open markets only)...")
-        for inst_type in ['STOCK', 'BOND', 'OPTION', 'FUTURE', 'FOREX', 'CRYPTO']:
-            if inst_type not in signals_by_type:
-                continue  # Skip if no signals of this type
-            
-            # Check if market is closed - skip canary check if so
-            market_info = market_hours_by_type.get(inst_type)
-            if market_info and not market_info.get('is_open'):
-                # Market is closed - skip canary check, mark as STALE
-                asset_class_status[inst_type] = {
-                    'status': 'STALE',
-                    'reason': market_info.get('market_status', 'Market closed'),
-                    'canary': None
-                }
-                print(f"   • {inst_type}: ⏰ SKIPPED (market closed)")
-                continue
-            
-            canary = canaries.get(inst_type)
-            if not canary:
-                # No canary defined for this asset class
-                asset_class_status[inst_type] = {
-                    'status': 'NO_CANARY',
-                    'canary': None
-                }
-                continue
-            
-            try:
-                # Build display name based on instrument type
-                if inst_type == 'OPTION':
-                    display_name = f"{canary['instrument']} {canary['strike']}{canary['right'][0]} {canary['expiry']}"
-                elif inst_type == 'FUTURE':
-                    # Will be updated with actual contract month below
-                    display_name = f"{canary['instrument']}"
-                else:
-                    display_name = canary['instrument']
-                
-                print(f"   • {inst_type} ({display_name})...", end='', flush=True)
-                
-                # Build contract based on instrument type
-                if inst_type == 'OPTION':
-                    # For options, need to qualify contract
-                    from ib_insync import Stock, Option
-                    underlying = Stock(canary['instrument'], 'SMART', 'USD')
-                    broker.ib.qualifyContracts(underlying)
-                    
-                    contract = Option(
-                        symbol=canary['instrument'],
-                        lastTradeDateOrContractMonth=canary['expiry'],
-                        strike=canary['strike'],
-                        right=canary['right'],
-                        exchange='SMART',
-                        multiplier=str(canary.get('multiplier', 100))
-                    )
-                    broker.ib.qualifyContracts(contract)
-                    
-                elif inst_type == 'FUTURE':
-                    from ib_insync import Future
-                    # Get front month contract
-                    import datetime
-                    today = datetime.datetime.now()
-                    # ES uses quarterly expirations (Mar, Jun, Sep, Dec)
-                    quarters = [3, 6, 9, 12]
-                    next_quarter = next(q for q in quarters if q >= today.month)
-                    if next_quarter == today.month and today.day > 15:  # Roll if close to expiry
-                        next_quarter = quarters[(quarters.index(next_quarter) + 1) % 4]
-                    expiry_year = today.year if next_quarter >= today.month else today.year + 1
-                    expiry = f"{expiry_year}{next_quarter:02d}"
-                    
-                    # Update display name with actual contract month
-                    month_names = {3: 'Mar', 6: 'Jun', 9: 'Sep', 12: 'Dec'}
-                    display_name = f"{canary['instrument']} {month_names[next_quarter]}{str(expiry_year)[-2:]}"
-                    print(f"\r   • {inst_type} ({display_name})...", end='', flush=True)
-                    
-                    contract = Future(
-                        symbol=canary['instrument'],
-                        exchange=canary['exchange'],
-                        lastTradeDateOrContractMonth=expiry,
-                        multiplier=str(canary.get('multiplier', 50)),
-                        currency=canary.get('currency', 'USD')
-                    )
-                    broker.ib.qualifyContracts(contract)
-                    
-                elif inst_type == 'FOREX':
-                    from ib_insync import Forex
-                    # EUR.USD -> EUR/USD pair
-                    pair = canary['instrument'].split('.') 
-                    contract = Forex(pair[0] + pair[1])  # EURUSD
-                    broker.ib.qualifyContracts(contract)
-                    
-                else:  # STOCK, BOND
-                    from ib_insync import Stock
-                    contract = Stock(canary['instrument'], 'SMART', 'USD')
-                    broker.ib.qualifyContracts(contract)
-                
-                # Request market data with retries
-                max_attempts = 10
-                for attempt in range(1, max_attempts + 1):
-                    ticker = broker.ib.reqMktData(contract, snapshot=True)
-                    broker.ib.sleep(2)  # Wait for snapshot data
-                    
-                    # Check if we got valid price
-                    price = ticker.marketPrice()
-                    if price == price and price > 0:  # Not NaN and positive
-                        # Don't call cancelMktData for snapshots - they auto-cancel!
-                        # (Calling cancel on an already-canceled snapshot causes Error 300)
-                        
-                        asset_class_status[inst_type] = {
-                            'status': 'AVAILABLE',
-                            'price': price,
-                            'canary': canary['instrument']
-                        }
-                        print(f" ✅ ${price:.2f}")
-                        break
-                    
-                    # If no data yet, retry with exponential backoff
-                    if attempt < max_attempts:
-                        wait_time = min(attempt, 5)  # Max 5 seconds
-                        print(f"⚠️  No market data for {canary['instrument']} on attempt {attempt}/{max_attempts}. Retrying in {wait_time}s... (bid={ticker.bid}, ask={ticker.ask}, last={ticker.last})")
-                        broker.ib.sleep(wait_time)
-                    else:
-                        # Final attempt failed
-                        # No need to cancel - snapshots auto-cancel
-                        raise Exception(f"No market data after {max_attempts} attempts")
-                
-            except Exception as e:
-                asset_class_status[inst_type] = {
-                    'status': 'STALE',
-                    'reason': str(e)[:100],  # Truncate error
-                    'canary': canary['instrument']
-                }
-                print(f" ⚠️  STALE ({str(e)[:50]})")
-        
-        # Build validated signals list
-        print(f"\n   Processing {len(all_signals)} signal(s)...")
-        validated_signals = []
-        
-        for sig in all_signals:
-            leg = sig.get('signal_legs', [{}])[0]
-            instrument = leg.get('instrument')
-            inst_type = leg.get('instrument_type', 'UNKNOWN')
-            tif = leg.get('time_in_force', 'DAY')
-            
-            # Warn if TIF was defaulted
-            if 'time_in_force' not in leg:
-                leg['time_in_force'] = 'DAY'
-            
-            # Check asset class status
-            asset_status = asset_class_status.get(inst_type, {}).get('status')
-            
-            if asset_status == 'AVAILABLE':
-                # Market is open for this asset class
-                sig['_validation'] = {'status': 'AVAILABLE'}
-                sig['_tif'] = tif
-                validated_signals.append(sig)
-            
-            elif asset_status == 'STALE':
-                # Market closed - respect TIF
-                sig['_validation'] = {'status': 'STALE', 'tif': tif}
-                sig['_tif'] = tif
-                validated_signals.append(sig)
-            
-            else:
-                # NO_CANARY - mark as AVAILABLE (will fail later if truly unavailable)
-                sig['_validation'] = {'status': 'AVAILABLE', 'note': 'No canary check'}
-                sig['_tif'] = tif
-                validated_signals.append(sig)
-        
-        # Close broker connection
-        broker.disconnect()
-        print(f"   🔌 Disconnected from broker")
-        
-        # Calculate summary
-        tradeable = sum(1 for s in validated_signals if s['_validation'].get('status') == 'AVAILABLE')
-        queued = sum(1 for s in validated_signals if s['_validation'].get('status') == 'STALE' and s['_tif'] in ['GTC', 'GTD'])
-        skipped = len(validated_signals) - tradeable - queued
-        
-        return {
-            'asset_classes': asset_class_status,
-            'signals': validated_signals,
-            'summary': {
-                'tradeable': tradeable,
-                'queued': queued,
-                'skipped': skipped,
-                'total': len(all_signals)
+        if not market_data.get('ready'):
+            print(f"   ❌ Execution service not ready (broker pool initializing)")
+            return {
+                'asset_classes': {},
+                'signals': [],
+                'summary': {'tradeable': 0, 'queued': 0, 'skipped': len(all_signals), 'total': len(all_signals)}
             }
-        }
-    
-    except Exception as e:
-        logger.error(f"Market data validation failed: {e}")
-        import traceback
-        traceback.print_exc()
+        
+        print(f"   ✅ Execution service ready")
+        
+        # Check broker connections
+        brokers = market_data.get('brokers', {})
+        connected_brokers = [k for k, v in brokers.items() if v.get('connected')]
+        if not connected_brokers:
+            print(f"   ❌ No broker connections available")
+            return {
+                'asset_classes': {},
+                'signals': [],
+                'summary': {'tradeable': 0, 'queued': 0, 'skipped': len(all_signals), 'total': len(all_signals)}
+            }
+        
+        print(f"   ✅ {len(connected_brokers)} broker connection(s) ready")
+        
+        # Check market hours
+        markets = market_data.get('markets', {})
+        print(f"\n   Checking market hours...")
+        for market_type, is_open in markets.items():
+            status_icon = "✅" if is_open else "⏰"
+            status_text = "open" if is_open else "CLOSED"
+            print(f"   • {market_type}: {status_icon} US {market_type.title()} Market is {status_text}")
+        
+        # Check canary prices (validates market data is flowing)
+        canary_prices = market_data.get('canary_prices', {})
+        if canary_prices:
+            print(f"\n   Running canary checks (for open markets only)...")
+            for symbol, price in canary_prices.items():
+                print(f"   • STOCK ({symbol})... ✅ ${price:.2f}")
+        
+    except requests.exceptions.ConnectionError:
+        print(f"   ❌ Cannot connect to execution service at http://localhost:8083")
+        print(f"   Make sure execution service is running: docker ps")
         return {
             'asset_classes': {},
             'signals': [],
             'summary': {'tradeable': 0, 'queued': 0, 'skipped': len(all_signals), 'total': len(all_signals)}
         }
+    except Exception as e:
+        print(f"   ❌ Error checking market status: {e}")
+        return {
+            'asset_classes': {},
+            'signals': [],
+            'summary': {'tradeable': 0, 'queued': 0, 'skipped': len(all_signals), 'total': len(all_signals)}
+        }
+    
+    # Group signals by instrument_type
+    signals_by_type = {}
+    for sig in all_signals:
+        inst_type = sig.get('signal_legs', [{}])[0].get('instrument_type', 'UNKNOWN')
+        if inst_type not in signals_by_type:
+            signals_by_type[inst_type] = []
+        signals_by_type[inst_type].append(sig)
+    
+    # Build asset_class_status from market data
+    asset_class_status = {}
+    for inst_type in signals_by_type.keys():
+        is_open = markets.get(inst_type, False)
+        
+        if is_open:
+            asset_class_status[inst_type] = {
+                'status': 'AVAILABLE',
+                'market': 'OPEN'
+            }
+        else:
+            asset_class_status[inst_type] = {
+                'status': 'QUEUED',
+                'market': 'CLOSED',
+                'reason': f'{inst_type} market is closed'
+            }
+    
+    # Build validated signals list
+    print(f"\n   Processing {len(all_signals)} signal(s)...")
+    validated_signals = []
+    
+    for sig in all_signals:
+        leg = sig.get('signal_legs', [{}])[0]
+        instrument = leg.get('instrument')
+        inst_type = leg.get('instrument_type', 'UNKNOWN')
+        tif = leg.get('time_in_force', 'DAY')
+        
+        # Warn if TIF was defaulted
+        if 'time_in_force' not in leg:
+            leg['time_in_force'] = 'DAY'
+        
+        # Check asset class status
+        asset_status = asset_class_status.get(inst_type, {}).get('status')
+        
+        if asset_status == 'AVAILABLE':
+            # Market is open for this asset class
+            sig['_validation'] = {'status': 'AVAILABLE'}
+            sig['_tif'] = tif
+            validated_signals.append(sig)
+        
+        elif asset_status == 'QUEUED':
+            # Market closed - respect TIF
+            sig['_validation'] = {'status': 'QUEUED', 'tif': tif}
+            sig['_tif'] = tif
+            validated_signals.append(sig)
+        
+        else:
+            # Unknown status - mark as AVAILABLE (will fail later if truly unavailable)
+            sig['_validation'] = {'status': 'AVAILABLE', 'note': 'No market check'}
+            sig['_tif'] = tif
+            validated_signals.append(sig)
+    
+    # Calculate summary
+    tradeable = sum(1 for s in validated_signals if s['_validation'].get('status') == 'AVAILABLE')
+    queued = sum(1 for s in validated_signals if s['_validation'].get('status') == 'QUEUED')
+    skipped = len(validated_signals) - tradeable - queued
+    
+    return {
+        'asset_classes': asset_class_status,
+        'signals': validated_signals,
+        'summary': {
+            'tradeable': tradeable,
+            'queued': queued,
+            'skipped': skipped,
+            'total': len(all_signals)
+        }
+    }
 
 
 def print_market_status_report(validation_result: Dict[str, Any]) -> bool:

@@ -98,9 +98,10 @@
   execution: {
     status: "FILLED",               // PENDING | PARTIAL | FILLED | FAILED
 
-    orders: [                       // One per fund/account combo
+    orders: [                       // One or more orders per signal (can be split across brokers/funds)
       {
         order_id: "sig_com1_met_009_mock-fund-1_VANTAGE_MOCK_ORD",
+        broker_name: "MockBroker",  // NEW: Name of broker used (MockBroker, IBKRBroker, etc.)
         broker_order_id: "MOCK_1767888631_6835",
         fund_id: "mock-fund-1",
         account_id: "VANTAGE_MOCK",
@@ -251,6 +252,7 @@
     status: "FILLED",
     orders: [{
       order_id: "sig_com1_met_009_mock-fund-1_VANTAGE_MOCK_ORD",
+      broker_name: "MockBroker",
       broker_order_id: "MOCK_1767888631_6835",
       fund_id: "mock-fund-1",
       account_id: "VANTAGE_MOCK",

@@ -10,13 +10,17 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
-def get_account_state(account_name: str, account_data_service_url: str) -> Optional[Dict[str, Any]]:
+def get_account_state(account_name: str, account_data_service_url: str = None, execution_service_url: str = None) -> Optional[Dict[str, Any]]:
     """
     Query AccountDataService for current account state.
+    
+    IMPORTANT: For paper/live modes, this will first sync fresh balances from the broker
+    via execution-service to ensure margin validation uses real-time data.
 
     Args:
         account_name: Name of the trading account (e.g., "IBKR_Main")
         account_data_service_url: URL of the AccountDataService (e.g., "http://localhost:8002")
+        execution_service_url: URL of the ExecutionService (e.g., "http://localhost:8083")
 
     Returns:
         Dict with account state:
@@ -33,6 +37,30 @@ def get_account_state(account_name: str, account_data_service_url: str) -> Optio
         Returns None if service is unavailable or error occurs.
         Returns MVP defaults if account not found (404).
     """
+    # Step 1: Sync fresh balances from broker (if execution-service available)
+    if execution_service_url:
+        try:
+            logger.info(f"🔄 Syncing fresh balances for {account_name} from broker...")
+            sync_response = requests.post(
+                f"{execution_service_url}/api/v1/sync-account-balance",
+                params={"account_id": account_name, "max_age_seconds": 5},  # Use 5s cache for performance while ensuring fresh data
+                timeout=5
+            )
+            if sync_response.status_code == 200:
+                sync_data = sync_response.json()
+                logger.info(f"✅ Balance sync: source={sync_data.get('source')}, age={sync_data.get('age_seconds', 0):.1f}s")
+                # MongoDB now has fresh balances - proceed to query account-data-service
+            else:
+                logger.warning(f"⚠️ Balance sync failed ({sync_response.status_code}) - using cached data")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not sync balances from execution-service: {e}")
+            logger.warning(f"   Proceeding with cached balances from account-data-service")
+    
+    # Step 2: Query account-data-service for state (now with fresh balances from Step 1)
+    if not account_data_service_url:
+        logger.error("account_data_service_url not provided - cannot get account state")
+        return None
+    
     try:
         response = requests.get(f"{account_data_service_url}/api/v1/account/{account_name}/state")
         response.raise_for_status()

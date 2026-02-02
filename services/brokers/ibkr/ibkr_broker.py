@@ -471,18 +471,28 @@ class IBKRBroker(AbstractBroker):
 
             # Check if any legs were rejected
             rejected_count = 0
+            rejection_messages = []
             for i, trade in enumerate(trades, 1):
                 status = trade.orderStatus.status
                 if status in ['Cancelled', 'ApiCancelled', 'PendingCancel', 'Inactive']:
                     logger.error(f"❌ Leg {i} rejected by IBKR: {status}")
                     logger.error(f"   Trade log: {trade.log}")
                     rejected_count += 1
+                    
+                    # Extract error messages from trade log
+                    for log_entry in trade.log:
+                        if log_entry.message and ('Error' in log_entry.message or 'rejected' in log_entry.message.lower()):
+                            # Clean up HTML tags from IBKR error messages
+                            clean_msg = log_entry.message.replace('<br>', ' ').replace('  ', ' ').strip()
+                            rejection_messages.append(clean_msg)
 
             if rejected_count > 0:
+                # Use the actual IBKR error message if available, otherwise fallback
+                rejection_detail = "; ".join(rejection_messages) if rejection_messages else "Order rejected by IBKR (check logs for details)"
                 raise OrderRejectedError(
                     f"{rejected_count}/{len(trades)} order legs rejected by IBKR",
                     broker_name="IBKR",
-                    rejection_reason=f"Check logs for details"
+                    rejection_reason=rejection_detail
                 )
 
             # Determine overall status
@@ -709,26 +719,63 @@ class IBKRBroker(AbstractBroker):
             if not self.is_connected():
                 raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
 
-            account_values = self.ib.accountSummary()
+            # Create a temporary connection to query account data
+            # This avoids event loop issues with the existing connection
+            from ib_insync import IB, util
+            import asyncio
+            
+            # Ensure we have an event loop in this thread
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    raise RuntimeError("Loop is closed")
+            except RuntimeError:
+                # No event loop in this thread, start one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            temp_ib = IB()
+            
+            try:
+                # Connect with a unique client ID
+                import random
+                temp_client_id = random.randint(900, 999)
+                temp_ib.connect(self.host, self.port, clientId=temp_client_id)
+                
+                # Get account summary
+                account_summary = temp_ib.accountSummary()
+                
+                logger.info(f"Account summary items: {len(account_summary)}")
 
-            # Extract metrics
-            equity = 0.0
-            cash_balance = 0.0
-            margin_used = 0.0
-            margin_available = 0.0
-            buying_power = 0.0
+                # Extract metrics - IBKR returns values in account's base currency
+                equity = 0.0
+                cash_balance = 0.0
+                margin_used = 0.0
+                margin_available = 0.0
+                buying_power = 0.0
+                unrealized_pnl = 0.0
+                realized_pnl = 0.0
 
-            for value in account_values:
-                if value.tag == 'NetLiquidation':
-                    equity = float(value.value)
-                elif value.tag == 'TotalCashValue':
-                    cash_balance = float(value.value)
-                elif value.tag == 'MaintMarginReq':
-                    margin_used = float(value.value)
-                elif value.tag == 'AvailableFunds':
-                    margin_available = float(value.value)
-                elif value.tag == 'BuyingPower':
-                    buying_power = float(value.value)
+                for item in account_summary:
+                    if item.tag == 'NetLiquidation':
+                        equity = float(item.value)
+                        logger.info(f"NetLiquidation: {item.value} {item.currency}")
+                    elif item.tag == 'TotalCashValue':
+                        cash_balance = float(item.value)
+                    elif item.tag == 'MaintMarginReq':
+                        margin_used = float(item.value)
+                    elif item.tag == 'AvailableFunds':
+                        margin_available = float(item.value)
+                    elif item.tag == 'BuyingPower':
+                        buying_power = float(item.value)
+                    elif item.tag == 'UnrealizedPnL':
+                        unrealized_pnl = float(item.value)
+                    elif item.tag == 'RealizedPnL':
+                        realized_pnl = float(item.value)
+                        
+            finally:
+                # Always disconnect the temporary connection
+                temp_ib.disconnect()
 
             return {
                 "account_id": account_id or self.account_id,
@@ -737,6 +784,8 @@ class IBKRBroker(AbstractBroker):
                 "margin_used": margin_used,
                 "margin_available": margin_available,
                 "buying_power": buying_power,
+                "unrealized_pnl": unrealized_pnl,
+                "realized_pnl": realized_pnl,
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
@@ -805,7 +854,7 @@ class IBKRBroker(AbstractBroker):
                     market_value = avg_price * quantity
 
                 open_positions.append({
-                    "symbol": pos.contract.symbol,
+                    "instrument": pos.contract.symbol,
                     "quantity": quantity,
                     "side": side,
                     "avg_price": avg_price,

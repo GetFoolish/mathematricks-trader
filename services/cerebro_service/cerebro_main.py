@@ -243,7 +243,13 @@ def build_decision_v2(
         leg_results = decision_obj.metadata['leg_results']
     elif legs:
         # Build from raw signal legs
+        # For EXIT signals, use decision_obj.quantity (actual filled from ENTRY) instead of raw leg quantity
+        is_exit_signal = decision_obj and decision_obj.metadata.get('signal_type_info', {}).get('signal_type') in ['EXIT', 'SCALE_OUT']
+        
         for i, leg in enumerate(legs):
+            # For EXIT signals, override quantity with decision_obj.quantity (the actual filled amount from ENTRY)
+            leg_quantity = decision_obj.quantity if (is_exit_signal and decision_obj) else leg.get('quantity', 0)
+            
             leg_results.append({
                 'leg_index': i,
                 'instrument': leg.get('instrument') or leg.get('ticker'),
@@ -251,7 +257,7 @@ def build_decision_v2(
                 'action': leg.get('action'),
                 'direction': leg.get('direction'),
                 'order_type': leg.get('order_type', 'MARKET'),
-                'quantity': leg.get('quantity', 0),
+                'quantity': leg_quantity,  # Use actual filled quantity for EXIT, raw for ENTRY
                 'price_used': leg.get('price', 0),
                 # Preserve nested option legs (e.g., strike/expiry/right) if present
                 'legs': leg.get('legs') if leg.get('legs') and isinstance(leg.get('legs'), list) else None
@@ -478,8 +484,9 @@ signals_subscription = None
 trading_orders_topic = None
 order_commands_topic = None
 
-# AccountDataService URL
+# Service URLs
 ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:8082')
+EXECUTION_SERVICE_URL = os.getenv('EXECUTION_SERVICE_URL', 'http://localhost:8083')
 
 
 # ============================================================================
@@ -815,21 +822,15 @@ def get_deployed_capital(strategy_id: str) -> Dict[str, Any]:
 
 def get_account_state(account_name: str) -> Optional[Dict[str, Any]]:
     """
-    Query AccountDataService for current account state
+    Query AccountDataService for current account state.
+    This now syncs fresh balances from broker first (if execution-service available).
     """
-    try:
-        response = requests.get(f"{ACCOUNT_DATA_SERVICE_URL}/api/v1/account/{account_name}/state")
-        response.raise_for_status()
-        return response.json().get('state')
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            logger.error(f"No account state found for {account_name} - signals will be rejected")
-            return None
-        logger.error(f"Failed to get account state for {account_name}: {str(e)}")
-        return None
-    except Exception as e:
-        logger.error(f"Failed to get account state for {account_name}: {str(e)}")
-        return None
+    from account_queries import get_account_state as _get_account_state
+    return _get_account_state(
+        account_name=account_name,
+        account_data_service_url=ACCOUNT_DATA_SERVICE_URL,
+        execution_service_url=EXECUTION_SERVICE_URL
+    )
 
 
 # ============================================================================
@@ -1707,17 +1708,14 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             logger.info(f"✅ CANCEL signal processed - cancelled {cancelled_count} order(s)")
             return  # Don't process CANCEL signal as a new order
 
-        # Step 4a.2: Check for pending ENTRY orders if this is an EXIT signal
-        # DISABLED: We now use retry logic to wait for entry fills instead of canceling
-        # check_and_cancel_pending_entry(signal, signal_type_info)
-
-        # Step 4a.3: EXIT SIGNAL HANDLING - Query signal_store for exact entry quantity
+        # Step 4a.2: EXIT SIGNAL HANDLING - Approve for position reconciliation by Execution Service
         if signal_type in ['EXIT', 'SCALE_OUT'] and decision_obj.action in ['APPROVED', 'RESIZE']:
-            logger.info(f"🔴 EXIT signal detected - querying signal_store for entry quantity")
+            logger.info(f"🔴 EXIT signal detected - preparing for position reconciliation")
 
-            # PRIORITY 1: Check if EXIT signal explicitly provides entry_signal_id (MongoDB ObjectId)
+            # Find entry signal for context (but don't crash if missing - Execution will handle it)
             entry_signal_id = normalized_signal.get('entry_signal_id')
             entry_signal = None
+            entry_order_ids = []
 
             if entry_signal_id and entry_signal_id != "$PREVIOUS":
                 # Direct lookup by ObjectId - single source of truth
@@ -1726,201 +1724,144 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     from bson import ObjectId
                     entry_signal = signal_store_collection.find_one({"_id": ObjectId(entry_signal_id)})
                     if entry_signal:
-                        logger.info(f"✅ Found exact entry signal by ObjectId: {entry_signal.get('signal_id')}")
+                        logger.info(f"✅ Found entry signal by ObjectId: {entry_signal.get('signal_id')}")
+                        # Extract order IDs from entry signal for cancellation reference
+                        for leg in entry_signal.get('legs', []):
+                            execution = leg.get('execution', {})
+                            for order in execution.get('orders', []):
+                                entry_order_ids.append(order.get('order_id'))
                     else:
-                        logger.warning(f"⚠️ entry_signal_id provided but signal not found in signal_store: {entry_signal_id}")
+                        logger.warning(f"⚠️ entry_signal_id provided but signal not found: {entry_signal_id}")
                 except Exception as e:
-                    logger.error(f"❌ Invalid ObjectId format for entry_signal_id: {entry_signal_id}")
-                    logger.error(f"   Error: {e}")
-                    logger.warning(f"   Will fall back to fuzzy matching")
+                    logger.error(f"❌ Error looking up entry signal: {e}")
 
-            # PRIORITY 2: Fallback to fuzzy matching if no entry_signal_id provided or lookup failed
+            # Fallback to fuzzy matching if no entry_signal_id provided or lookup failed
             if not entry_signal:
                 logger.info("Using fuzzy matching to find ENTRY signal (strategy/instrument/direction)")
                 entry_signal = find_open_entry_signal(
                     strategy_id=normalized_signal.get('strategy_id'),
                     instrument=normalized_signal.get('instrument'),
-                    direction=normalized_signal.get('direction')  # EXIT direction (we'll find opposite)
+                    direction=normalized_signal.get('direction')
                 )
+                if entry_signal:
+                    logger.info(f"✅ Found entry signal by fuzzy match: {entry_signal.get('signal_id')}")
+                    # Extract order IDs
+                    for leg in entry_signal.get('legs', []):
+                        execution = leg.get('execution', {})
+                        for order in execution.get('orders', []):
+                            entry_order_ids.append(order.get('order_id'))
 
-                # If entry not found (not filled), check if there's a pending entry to cancel
-                if not entry_signal:
-                    logger.warning(f"⚠️ No filled entry found - checking for pending entry to cancel")
-                    cancelled_entry = find_and_cancel_pending_entry(
-                        strategy_id=normalized_signal.get('strategy_id'),
-                        instrument=normalized_signal.get('instrument'),
-                        direction=normalized_signal.get('direction')
-                    )
+            # Calculate target position based on scale_out_percentage (if provided)
+            scale_out_percentage = normalized_signal.get('scale_out_percentage', 100.0)
+            if scale_out_percentage <= 0 or scale_out_percentage > 100:
+                logger.warning(f"⚠️ Invalid scale_out_percentage {scale_out_percentage}%, using 100%")
+                scale_out_percentage = 100.0
 
-                    if cancelled_entry:
-                        # Entry was pending and has been cancelled - reject this EXIT
-                        logger.info(f"🚫 Pending entry {cancelled_entry.get('signal_id')} cancelled - rejecting EXIT signal")
-                        decision = build_decision_v2(
-                            status="REJECTED",
-                            reason=f"ENTRY_CANCELLED: Entry signal {cancelled_entry.get('signal_id')} was pending (not filled) - cancelled entry and rejected exit",
-                            signal=signal
-                        )
-                        update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
-                        return
-                    # If no pending entry found either, entry_signal remains None and will be rejected below
-
-            # Check for execution data - CONSOLIDATED SCHEMA v3: execution is in legs[].execution
-            if entry_signal:
-                # Find the ENTRY leg
-                entry_leg = None
-                for leg in entry_signal.get('legs', []):
-                    if leg.get('leg_type') == 'ENTRY':
-                        entry_leg = leg
-                        break
-
-                execution = entry_leg.get('execution', {}) if entry_leg else {}
-                entry_quantity_filled = execution.get('total_quantity_filled') or execution.get('quantity_filled')
+            # For partial exits, target_position is non-zero
+            # For full exits, target_position is 0
+            # Execution service will query broker for current position and work toward target
+            if scale_out_percentage >= 100:
+                target_position = 0  # Full exit
+                exit_type = 'FULL_EXIT'
+                logger.info(f"🎯 Target position: 0 (FULL EXIT)")
             else:
-                entry_quantity_filled = None
+                # We don't know current position yet - Execution will calculate it
+                # Just pass the percentage to close
+                target_position = None  # Will be calculated by Execution based on broker position
+                exit_type = 'PARTIAL_EXIT'
+                logger.info(f"🎯 Target: Close {scale_out_percentage}% of position (PARTIAL EXIT)")
 
-            if entry_signal and entry_quantity_filled:
+            # Build EXIT approval with entry context for Execution Service
+            # Execution will handle: cancel pending entries, exit filled positions, retry logic
+            exit_metadata = {
+                **decision_obj.metadata,
+                'signal_type_info': signal_type_info,
+                'entry_signal_id': str(entry_signal['_id']) if entry_signal else None,
+                'entry_signal_ref': entry_signal['signal_id'] if entry_signal else None,
+                'entry_order_ids': entry_order_ids,  # For cancellation reference
+                'exit_type': exit_type,
+                'scale_out_percentage': scale_out_percentage,
+                'target_position': target_position,  # 0 for full exit, None for partial
+                'is_multi_leg': is_multi_leg,
+                'leg_count': len(legs) if is_multi_leg else 1,
+                'requires_reconciliation': True  # Flag for Execution Service to use reconciliation engine
+            }
 
-                logger.info(f"✅ Found entry signal: {entry_signal['signal_id']}")
-                logger.info(f"✅ Entry quantity filled: {entry_quantity_filled}")
-
-                # Calculate proportional exit based on raw quantities
-                # If ENTRY raw qty = 4 and EXIT raw qty = 2, we close 50% of the position
-                raw_exit_qty = None
-                raw_entry_qty = None
-                exit_ratio = 1.0  # Default to 100% (full exit)
-
-                # Get raw EXIT quantity from current signal
-                if legs and len(legs) > 0:
-                    raw_exit_qty = legs[0].get('quantity')
-                
-                # Get raw ENTRY quantity from entry signal
-                if entry_leg:
-                    entry_raw = entry_leg.get('raw', {})
-                    entry_raw_legs = entry_raw.get('legs', [])
-                    if entry_raw_legs and len(entry_raw_legs) > 0:
-                        raw_entry_qty = entry_raw_legs[0].get('quantity')
-                
-                # Calculate exit ratio for proportional exits
-                if raw_entry_qty and raw_exit_qty and raw_entry_qty > 0:
-                    exit_ratio = raw_exit_qty / raw_entry_qty
-                    logger.info(f"📊 Proportional exit: raw_exit={raw_exit_qty}, raw_entry={raw_entry_qty}, ratio={exit_ratio:.2%}")
-                    if exit_ratio > 1.0:
-                        logger.warning(f"⚠️ Exit ratio > 100% ({exit_ratio:.2%}) - capping at 100%")
-                        exit_ratio = 1.0
-                else:
-                    logger.info(f"📊 Full exit (100%): raw quantities not available or invalid")
-
-                # For multi-leg EXIT signals, query entry's leg_results for exact quantities
+            # For multi-leg EXIT signals, include leg details
+            if is_multi_leg and legs:
+                logger.info(f"🔀 Multi-leg EXIT signal: Processing {len(legs)} legs")
                 exit_leg_results = []
-                if is_multi_leg and legs:
-                    logger.info(f"🔀 Multi-leg EXIT signal: Processing {len(legs)} legs")
+                for leg_index, leg in enumerate(legs):
+                    instrument = leg.get('instrument')
+                    exit_leg_results.append({
+                        'leg_index': leg_index,
+                        'instrument': instrument,
+                        'instrument_type': leg.get('instrument_type', 'STOCK'),
+                        'direction': leg.get('direction'),
+                        'action': leg.get('action'),
+                        'order_type': leg.get('order_type', 'MARKET'),
+                        'price_used': leg.get('price', 0)
+                    })
+                exit_metadata['leg_results'] = exit_leg_results
 
-                    # Get leg_results from entry signal - CONSOLIDATED SCHEMA v3: decision is in legs[].decision
-                    # Find the ENTRY leg and get its decision
-                    entry_decision = entry_leg.get('decision', {}) if entry_leg else {}
-                    # Legs are directly on decision
-                    entry_leg_results = entry_decision.get('legs', [])
-
-                    if entry_leg_results:
-                        logger.info(f"✅ Found entry leg_results with {len(entry_leg_results)} legs")
-                    else:
-                        logger.warning(f"⚠️ Entry signal missing leg_results - will use EXIT signal quantities")
-
-                    for leg_index, leg in enumerate(legs):
-                        instrument = leg.get('instrument')
-                        leg_instrument_type = leg.get('instrument_type', 'STOCK')
-
-                        # Find matching entry leg by instrument to get the actual filled quantity
-                        if entry_leg_results:
-                            entry_leg = next((el for el in entry_leg_results if el.get('instrument') == instrument), None)
-                            if entry_leg:
-                                leg_quantity = entry_leg.get('quantity', 0)
-                                logger.info(f"   Leg {leg_index+1}: {instrument} - using entry qty={leg_quantity}")
-                            else:
-                                # Instrument not found in entry - use EXIT signal quantity as fallback
-                                leg_quantity = leg.get('quantity', 0)
-                                logger.warning(f"   Leg {leg_index+1}: {instrument} - no entry match, using EXIT qty={leg_quantity}")
+            # CRITICAL: Get actual filled quantity from ENTRY execution in MongoDB
+            # This is MANDATORY - we cannot use raw signal quantity for EXIT
+            actual_filled_quantity = None
+            
+            if entry_signal:
+                entry_legs = entry_signal.get('legs', [])
+                if entry_legs:
+                    # Find the ENTRY leg (should be first leg)
+                    entry_leg = None
+                    for leg in entry_legs:
+                        if leg.get('leg_type') == 'ENTRY':
+                            entry_leg = leg
+                            break
+                    
+                    if not entry_leg:
+                        entry_leg = entry_legs[0]  # Fallback to first leg
+                    
+                    entry_execution = entry_leg.get('execution', {})
+                    if entry_execution:
+                        # Get total_quantity_filled from entry execution (this is the actual filled amount)
+                        filled_qty = entry_execution.get('total_quantity_filled', 0)
+                        if filled_qty and filled_qty > 0:
+                            actual_filled_quantity = filled_qty
+                            logger.info(f"✅ Retrieved actual filled quantity from ENTRY execution: {filled_qty}")
                         else:
-                            # No entry leg_results - use EXIT signal quantity
-                            leg_quantity = leg.get('quantity', 0)
-                            logger.info(f"   Leg {leg_index+1}: {instrument} - using EXIT qty={leg_quantity}")
-
-                        # Normalize to broker precision
-                        precision = precision_service.get_precision(
-                            broker=broker_adapter,
-                            broker_id=account_name,
-                            symbol=instrument,
-                            instrument_type=leg_instrument_type
-                        )
-                        normalized_quantity = precision_service.normalize_quantity(leg_quantity, precision)
-
-                        exit_leg_results.append({
-                            'leg_index': leg_index,
-                            'instrument': instrument,
-                            'instrument_type': leg_instrument_type,
-                            'direction': leg.get('direction'),
-                            'action': leg.get('action'),
-                            'order_type': leg.get('order_type', 'MARKET'),
-                            'quantity': normalized_quantity,
-                            'price_used': leg.get('price', 0)
-                        })
-                        logger.info(f"   EXIT Leg {leg_index+1}: {instrument} {leg.get('action')} qty={normalized_quantity}")
-
-                    # Use primary leg quantity for decision (backward compatibility)
-                    exact_quantity = exit_leg_results[0]['quantity'] if exit_leg_results else entry_quantity_filled
+                            logger.error(f"❌ ENTRY execution exists but total_quantity_filled is {filled_qty}")
+                    else:
+                        logger.error(f"❌ ENTRY leg found but no execution data")
                 else:
-                    # Single-leg EXIT - apply proportional exit ratio to entry's filled quantity
-                    exact_quantity = int(entry_quantity_filled * exit_ratio)
-                    logger.info(f"📊 Exit quantity: {entry_quantity_filled} × {exit_ratio:.2%} = {exact_quantity}")
-
-                # Create new decision with exact quantity (no margin calculator)
-                exit_metadata = {
-                    **decision_obj.metadata,
-                    'signal_type_info': signal_type_info,
-                    'entry_signal_id': str(entry_signal['_id']),
-                    'entry_signal_ref': entry_signal['signal_id'],
-                    'entry_quantity': entry_quantity_filled,
-                    'exit_type': 'FULL_EXIT' if signal_type == 'EXIT' else 'PARTIAL_EXIT',
-                    'is_multi_leg': is_multi_leg,
-                    'leg_count': len(legs) if is_multi_leg else 1
-                }
-
-                # Add leg_results for multi-leg EXIT
-                if exit_leg_results:
-                    exit_metadata['leg_results'] = exit_leg_results
-
-                decision_obj = SignalDecision(
-                    action="APPROVED",
-                    quantity=exact_quantity,
-                    reason=f"EXIT: Closing position from entry signal {entry_signal['signal_id']}" + (f" ({len(legs)} legs)" if is_multi_leg else ""),
-                    allocated_capital=0,
-                    margin_required=0,
-                    metadata=exit_metadata
-                )
-
-                # Skip margin calculator - jump to decision logging
-                logger.info(f"⏭️ Skipping margin calculator for EXIT signal")
-
+                    logger.error(f"❌ Entry signal found but no legs data")
             else:
-                # Timeout or no entry found after retry - reject with critical error
-                logger.critical(f"🚨 CRITICAL: EXIT signal REJECTED - No filled entry found after retry")
-                logger.critical(f"   Strategy: {normalized_signal.get('strategy_id')}")
-                logger.critical(f"   Instrument: {normalized_signal.get('instrument')}")
-                logger.critical(f"   This indicates a serious issue - manual intervention required")
+                logger.error(f"❌ No entry signal found - cannot determine actual filled quantity")
+            
+            # Use actual filled quantity or fallback to raw (with warning)
+            if actual_filled_quantity:
+                exit_quantity = actual_filled_quantity
+                logger.info(f"📊 EXIT quantity: {exit_quantity} (from ENTRY execution)")
+            else:
+                exit_quantity = normalized_signal.get('quantity', 0)
+                logger.warning(f"⚠️ Using raw signal quantity {exit_quantity} - ENTRY execution data not available!")
+            
+            decision_obj = SignalDecision(
+                action="APPROVED",
+                quantity=exit_quantity,
+                reason=f"EXIT: Target position {target_position if target_position is not None else f'{scale_out_percentage}% close'}" +
+                       (f" (entry: {entry_signal['signal_id']})" if entry_signal else " (entry lookup will be done by Execution)"),
+                allocated_capital=0,
+                margin_required=0,
+                metadata=exit_metadata
+            )
 
-                decision_obj = SignalDecision(
-                    action="REJECTED",
-                    quantity=0,
-                    reason=f"No open position found in signal_store for {normalized_signal.get('strategy_id')}/{normalized_signal.get('instrument')} after 30s retry",
-                    allocated_capital=0,
-                    margin_required=0,
-                    metadata={
-                        **decision_obj.metadata,
-                        'signal_type_info': signal_type_info,
-                        'rejection_reason': 'no_open_position_found_after_retry',
-                        'retry_attempted': True
-                    }
-                )
+            # Log approval details
+            logger.info(f"✅ EXIT signal APPROVED for position reconciliation")
+            logger.info(f"   Entry Reference: {entry_signal['signal_id'] if entry_signal else 'Will be looked up by Execution'}")
+            logger.info(f"   Entry Order IDs for cancel: {entry_order_ids if entry_order_ids else 'None'}")
+            logger.info(f"   Scale Out: {scale_out_percentage}%")
+            logger.info(f"   Target Position: {target_position if target_position is not None else 'TBD by Execution'}")
+            logger.info(f"⏭️ Execution Service will handle: cancel pending entries, exit filled positions, retry up to 6 times")
 
         # Step 4b: Smart Position Sizing - Adjust for capital distribution (ENTRY signals only)
         elif decision_obj.action in ['APPROVED', 'RESIZE']:
@@ -2013,11 +1954,14 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             # Calculate available capital
             allocated_capital_available = allocated_capital - deployed_capital
 
-            # Calculate scaling ratio for quantity
-            scaling_ratio = allocated_capital_available / signal_account_equity
+            # Calculate scaling ratio for quantity using BROKER's account equity
+            # This ensures proper scaling: if signal uses 10% of 10K account (25 shares),
+            # and broker has 154K equity, we scale 154K/10K = 15.4x → 385 shares
+            broker_account_equity = account_state.get('equity', 0)
+            scaling_ratio = broker_account_equity / signal_account_equity
 
             logger.info(f"📊 Allocation: ${allocated_capital:,.2f} - ${deployed_capital:,.2f} deployed = ${allocated_capital_available:,.2f} available")
-            logger.info(f"📊 Scaling ratio: ${allocated_capital_available:,.2f} / ${signal_account_equity:,.2f} = {scaling_ratio:.5f}")
+            logger.info(f"📊 Scaling ratio: ${broker_account_equity:,.2f} (broker equity) / ${signal_account_equity:,.2f} (signal equity) = {scaling_ratio:.5f}")
 
             # Check if we have capital available
             if allocated_capital_available <= 0:
