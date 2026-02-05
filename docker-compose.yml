@@ -50,6 +50,7 @@ services:
       - TZ=${TZ}
       - MONGODB_URI=${MONGODB_URI}
       - ACCOUNT_DATA_SERVICE_URL=${ACCOUNT_DATA_SERVICE_URL}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/health').read()"]
       interval: 5s

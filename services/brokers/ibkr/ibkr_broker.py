@@ -5,7 +5,10 @@ Uses ib_insync for connection and order management
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
-from ib_insync import IB, Stock, Option, Forex, Future, Crypto, MarketOrder, LimitOrder
+import threading
+import asyncio
+from concurrent.futures import Future
+from ib_insync import IB, Stock, Option, Forex, Future as IBFuture, Crypto, MarketOrder, LimitOrder
 
 # Import base classes and exceptions
 import sys
@@ -67,6 +70,10 @@ class IBKRBroker(AbstractBroker):
         # Track active trades for order status queries
         self.active_trades = {}  # {order_id: ib_insync.Trade}
 
+        # Event loop for IB operations (runs in dedicated thread)
+        self._ib_loop = None
+        self._ib_thread = None
+
         logger.info(f"Initialized IBKR broker: {self.host}:{self.port} (client_id={self.client_id})")
 
     # ========================================================================
@@ -77,10 +84,10 @@ class IBKRBroker(AbstractBroker):
         """
         Establish connection to Interactive Brokers TWS/Gateway.
 
-        Automatically retries with different client_ids if the initial one is in use.
+        Connection happens in a dedicated thread with its own event loop.
 
         Args:
-            skip_sync: If True, skip waiting for positions/orders sync (faster, use for market data only)
+            skip_sync: If True, skip waiting for positions/orders sync
 
         Returns:
             True if connection successful, False otherwise
@@ -88,74 +95,128 @@ class IBKRBroker(AbstractBroker):
         Raises:
             BrokerConnectionError: If connection fails after all retries
         """
-        import time
-
         if self.is_connected():
             logger.info("Already connected to IBKR")
             return True
 
-        # Try multiple client_ids if the first one fails (Error 326)
-        max_retries = 5
-        original_client_id = self.client_id
+        # Start IB thread first, then connect within it
+        self._start_ib_thread_and_connect(skip_sync)
+        
+        return self.is_connected()
 
-        for attempt in range(max_retries):
-            current_client_id = original_client_id + attempt
-
+    def _start_ib_thread_and_connect(self, skip_sync: bool):
+        """Start dedicated thread, create event loop, and connect to IBKR within that thread"""
+        import time
+        from ib_insync import util
+        
+        connection_result = {'success': False, 'error': None}
+        
+        def ib_thread_main():
+            """Main function for IB thread - creates loop and connects"""
             try:
-                # Ensure clean state before attempting connection
-                if attempt > 0:
-                    try:
-                        self.ib.disconnect()
-                    except:
-                        pass
+                # Create event loop for this thread
+                self._ib_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._ib_loop)
                 
-                logger.info(f"Connecting to IBKR at {self.host}:{self.port} (client_id={current_client_id})")
-                self.ib.connect(self.host, self.port, clientId=current_client_id, readonly=skip_sync)
-
-                # Wait briefly to catch Error 326 (client_id already in use)
-                # Skip longer wait if we're not syncing positions/orders
-                self.ib.sleep(0.2 if skip_sync else 0.5)
-
-                if self.ib.isConnected():
-                    self.client_id = current_client_id  # Update to successful client_id
-                    logger.info(f"✅ Successfully connected to IBKR (client_id={current_client_id})")
+                logger.info("IB thread started, attempting connection...")
+                
+                # Connection retry logic (same as before but in this thread)
+                max_retries = 5
+                original_client_id = self.client_id
+                
+                for attempt in range(max_retries):
+                    current_client_id = original_client_id + attempt
                     
-                    # Set market data type with smart defaults and fallback
-                    self._configure_market_data_type()
-                    
-                    return True
-                else:
-                    # Connection was rejected (likely Error 326)
-                    if attempt < max_retries - 1:
-                        logger.warning(f"⚠️ client_id={current_client_id} may be in use, trying next...")
-                        self.ib.disconnect()
-                        self.ib.sleep(0.5)
-                    continue
-
-            except Exception as e:
-                error_str = str(e).lower()
-                # Check if it's a client_id conflict error or timeout (which often follows Error 326)
-                is_client_id_error = "326" in str(e) or "client id" in error_str or "already in use" in error_str
-                is_timeout = isinstance(e, TimeoutError) or "timeout" in error_str
-
-                if (is_client_id_error or is_timeout) and attempt < max_retries - 1:
-                    logger.warning(f"⚠️ client_id={current_client_id} may be in use (Error: {type(e).__name__}), trying {current_client_id + 1}...")
                     try:
-                        self.ib.disconnect()
-                    except:
-                        pass
-                    self.ib.sleep(0.5)
-                    continue
-
-                # Final failure
-                error_msg = f"Failed to connect to IBKR at {self.host}:{self.port}: {str(e)}"
-                logger.error(error_msg)
-                raise BrokerConnectionError(error_msg, broker_name="IBKR", details={"host": self.host, "port": self.port})
-
-        # All retries exhausted
-        error_msg = f"Failed to connect to IBKR after {max_retries} client_id attempts (tried {original_client_id}-{original_client_id + max_retries - 1})"
-        logger.error(error_msg)
-        raise BrokerConnectionError(error_msg, broker_name="IBKR", details={"host": self.host, "port": self.port})
+                        if attempt > 0:
+                            try:
+                                self.ib.disconnect()
+                            except:
+                                pass
+                        
+                        logger.info(f"Connecting to IBKR at {self.host}:{self.port} (client_id={current_client_id})")
+                        self.ib.connect(self.host, self.port, clientId=current_client_id, readonly=skip_sync)
+                        
+                        # Use util.sleep to wait in IB's loop
+                        util.sleep(0.2 if skip_sync else 0.5)
+                        
+                        if self.ib.isConnected():
+                            self.client_id = current_client_id
+                            logger.info(f"✅ Successfully connected to IBKR (client_id={current_client_id})")
+                            
+                            # Configure market data
+                            self._configure_market_data_type()
+                            
+                            connection_result['success'] = True
+                            break
+                        else:
+                            if attempt < max_retries - 1:
+                                logger.warning(f"⚠️ client_id={current_client_id} may be in use, trying next...")
+                                try:
+                                    self.ib.disconnect()
+                                except:
+                                    pass
+                                util.sleep(0.5)
+                            continue
+                            
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        is_client_id_error = "326" in str(e) or "client id" in error_str
+                        is_timeout = isinstance(e, TimeoutError) or "timeout" in error_str
+                        
+                        if (is_client_id_error or is_timeout) and attempt < max_retries - 1:
+                            logger.warning(f"⚠️ client_id={current_client_id} may be in use, trying {current_client_id + 1}...")
+                            try:
+                                self.ib.disconnect()
+                            except:
+                                pass
+                            util.sleep(0.5)
+                            continue
+                        
+                        connection_result['error'] = str(e)
+                        logger.error(f"Connection failed: {e}")
+                        break
+                
+                if not connection_result['success'] and not connection_result['error']:
+                    connection_result['error'] = f"Failed after {max_retries} attempts"
+                
+                if connection_result['success']:
+                    # Keep loop running to process async tasks
+                    logger.info("IB event loop running...")
+                    self._ib_loop.run_forever()
+                    logger.info("IB event loop stopped")
+                else:
+                    logger.error(f"Connection failed: {connection_result['error']}")
+                    
+            except Exception as e:
+                logger.error(f"Fatal error in IB thread: {e}", exc_info=True)
+                connection_result['error'] = str(e)
+        
+        # Start thread
+        self._ib_thread = threading.Thread(target=ib_thread_main, daemon=True, name="IBThread")
+        self._ib_thread.start()
+        
+        # Wait for connection to complete (max 15s)
+        for i in range(150):  # 150 * 0.1s = 15s
+            time.sleep(0.1)
+            if connection_result['success'] or connection_result['error']:
+                break
+        
+        if connection_result['error']:
+            raise BrokerConnectionError(
+                f"Failed to connect: {connection_result['error']}",
+                broker_name="IBKR",
+                details={"host": self.host, "port": self.port}
+            )
+        
+        if not connection_result['success']:
+            raise BrokerConnectionError(
+                "Connection timeout",
+                broker_name="IBKR",
+                details={"host": self.host, "port": self.port}
+            )
+        
+        logger.info("IB thread connected and running")
 
     def _configure_market_data_type(self):
         """
@@ -178,9 +239,10 @@ class IBKRBroker(AbstractBroker):
             preferred_type = int(self.market_data_type_preference)
             logger.info(f"📊 Using configured market_data_type: {preferred_type}")
         elif self.port in [4002, 4004, 7497]:  # Paper trading ports
-            # Paper accounts: prefer delayed frozen (type 4) for compatibility
-            preferred_type = 1  # Try live first (may work with subscription sharing)
-            logger.info("📊 Paper account detected - trying live market data (type 1) with fallback")
+            # Paper accounts: use delayed frozen (type 4) for compatibility
+            # Live data (type 1) usually fails with Error 10197
+            preferred_type = 4
+            logger.info("📊 Paper account detected - using delayed/frozen market data (type 4)")
         else:  # Live ports (4001, 4003, 7496)
             # Live accounts: prefer live data
             preferred_type = 1
@@ -213,6 +275,9 @@ class IBKRBroker(AbstractBroker):
             True if disconnection successful
         """
         try:
+            if self._ib_loop and self._ib_loop.is_running():
+                self._ib_loop.stop()
+            
             if self.is_connected():
                 self.ib.disconnect()
                 logger.info("Disconnected from IBKR")
@@ -969,8 +1034,7 @@ class IBKRBroker(AbstractBroker):
         """
         Get current market price for an instrument.
 
-        Used by BrokerModeAdapter in paper_live mode to fetch live prices
-        while sending orders to mock broker.
+        Thread-safe: Submits async task to IB's dedicated event loop thread.
 
         Args:
             symbol: Asset symbol (e.g., "AAPL", "EURUSD", "BTC")
@@ -983,101 +1047,73 @@ class IBKRBroker(AbstractBroker):
             BrokerConnectionError: If not connected
             BrokerAPIError: If no market data available
         """
-        max_retries = 10
-        base_delay = 1.0  # Start with 1 second
+        if not self.is_connected():
+            raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
         
-        for attempt in range(max_retries):
-            try:
-                if not self.is_connected():
-                    raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+        if not self._ib_loop:
+            raise BrokerAPIError("IB event loop not started", broker_name="IBKR")
+        
+        # Submit async task to IB's event loop from any thread
+        future = asyncio.run_coroutine_threadsafe(
+            self._fetch_price_async(symbol, instrument_type),
+            self._ib_loop
+        )
+        
+        # Wait for result with timeout
+        try:
+            return future.result(timeout=10.0)
+        except Exception as e:
+            logger.error(f"Error fetching price for {symbol}: {e}", exc_info=True)
+            raise BrokerAPIError(f"Failed to get market price: {str(e)}", broker_name="IBKR")
 
-                # Create contract for the instrument
-                contract = self._create_contract_for_pricing(symbol, instrument_type)
+    async def _fetch_price_async(self, symbol: str, instrument_type: str) -> float:
+        """
+        Async coroutine to fetch price - runs in IB's event loop thread.
+        """
+        try:
+            # Create contract
+            contract = self._create_contract_for_pricing(symbol, instrument_type)
 
-                # Request market data
-                ticker = self.ib.reqMktData(contract, '', False, False)
+            # Request market data 
+            ticker = self.ib.reqMktData(contract, '', False, False)
 
-                # Wait for data to populate (max 5 seconds with logging)
-                if attempt > 0:
-                    logger.info(f"⏳ Waiting for market data for {symbol}... (retry {attempt}/{max_retries-1})")
-                else:
-                    logger.info(f"⏳ Waiting for market data for {symbol}...")
-                    
-                for i in range(50):  # 50 iterations * 0.1s = 5s max
-                    self.ib.sleep(0.1)  # Use ib.sleep() for event loop processing
-                    if ticker.bid or ticker.ask or ticker.last:
-                        logger.info(f"✅ Market data received after {(i+1)*0.1:.1f}s: bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}")
-                        break
-                    if i % 10 == 9:  # Log every second
-                        logger.info(f"  [{i+1}/50] Still waiting... bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}")
-
-                # Cancel market data subscription
-                self.ib.cancelMktData(contract)
+            # Wait for data using asyncio.sleep() - we're in the right loop now
+            logger.info(f"⏳ Waiting for market data for {symbol}...")
+            
+            import math
+            for i in range(100):  # 100 * 0.1s = 10s max
+                await asyncio.sleep(0.1)
                 
-                # Small delay to ensure IB processes the cancellation before next request
-                self.ib.sleep(0.1)
+                # Check if we have valid (not nan) data
+                has_bid = ticker.bid and not math.isnan(ticker.bid) and ticker.bid > 0
+                has_ask = ticker.ask and not math.isnan(ticker.ask) and ticker.ask > 0
+                has_last = ticker.last and not math.isnan(ticker.last) and ticker.last > 0
+                
+                if has_bid or has_ask or has_last:
+                    logger.info(f"✅ Market data received after {(i+1)*0.1:.1f}s: bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}")
+                    break
 
-                # Enhanced logging with data quality metrics
-                spread = None
-                spread_pct = None
-                if ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
-                    spread = ticker.ask - ticker.bid
-                    spread_pct = (spread / ticker.bid) * 100 if ticker.bid > 0 else 0
+            # Cancel market data subscription
+            self.ib.cancelMktData(contract)
 
-                # Check if data is stale (ticker.time is the timestamp)
-                data_age_ms = None
-                if ticker.time:
-                    data_age_ms = (datetime.now(timezone.utc) - ticker.time).total_seconds() * 1000
-
-                # Return mid-price if available, otherwise last price
-                if ticker.bid and ticker.ask and ticker.bid > 0 and ticker.ask > 0:
-                    price = (ticker.bid + ticker.ask) / 2
-                    logger.info(
-                        f"📊 Market data for {symbol}: "
-                        f"mid=${price:.2f}, bid=${ticker.bid:.2f}, ask=${ticker.ask:.2f}, "
-                        f"last=${ticker.last if ticker.last else 'N/A'}, "
-                        f"spread=${spread:.4f} ({spread_pct:.3f}%), "
-                        f"age={data_age_ms:.0f}ms" if data_age_ms else f"age=N/A"
-                    )
-                    return price
-                elif ticker.last and ticker.last > 0:
-                    logger.warning(
-                        f"⚠️  Using last price for {symbol} (no bid/ask): "
-                        f"last=${ticker.last:.2f}, "
-                        f"age={data_age_ms:.0f}ms" if data_age_ms else f"age=N/A"
-                    )
-                    return ticker.last
-                else:
-                    # No data received - retry if we have attempts left
-                    if attempt < max_retries - 1:
-                        retry_delay = base_delay * (2 ** attempt)  # Exponential backoff: 1s, 2s, 4s, 8s...
-                        logger.warning(
-                            f"⚠️  No market data for {symbol} on attempt {attempt + 1}/{max_retries}. "
-                            f"Retrying in {retry_delay:.0f}s... (bid={ticker.bid}, ask={ticker.ask}, last={ticker.last})"
-                        )
-                        self.ib.sleep(retry_delay)
-                        continue
-                    else:
-                        raise BrokerAPIError(
-                            f"No market data available for {symbol} ({instrument_type}) after {max_retries} attempts. "
-                            f"bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}",
-                            broker_name="IBKR"
-                        )
-
-            except BrokerConnectionError:
+            # Return mid-price if available, otherwise last price
+            if ticker.bid and ticker.ask and not math.isnan(ticker.bid) and not math.isnan(ticker.ask) and ticker.bid > 0 and ticker.ask > 0:
+                price = (ticker.bid + ticker.ask) / 2
+                logger.info(f"📊 Market price for {symbol}: ${price:.2f} (bid=${ticker.bid:.2f}, ask=${ticker.ask:.2f})")
+                return price
+            elif ticker.last and not math.isnan(ticker.last) and ticker.last > 0:
+                logger.warning(f"⚠️ Using last price for {symbol}: ${ticker.last:.2f}")
+                return ticker.last
+            else:
+                raise BrokerAPIError(
+                    f"No market data available for {symbol} ({instrument_type})",
+                    broker_name="IBKR"
+                )
+        except Exception as e:
+            if "BrokerAPIError" in str(type(e)):
                 raise
-            except BrokerAPIError as e:
-                # If it's the final retry, raise the error
-                if attempt >= max_retries - 1:
-                    raise
-                # Otherwise, log and retry with exponential backoff
-                retry_delay = base_delay * (2 ** attempt)
-                logger.warning(f"⚠️  Market data error on attempt {attempt + 1}/{max_retries}: {e}. Retrying in {retry_delay:.0f}s...")
-                self.ib.sleep(retry_delay)
-                continue
-            except Exception as e:
-                logger.error(f"Error getting market price for {symbol}: {e}", exc_info=True)
-                raise BrokerAPIError(f"Failed to get market price: {str(e)}", broker_name="IBKR")
+            logger.error(f"Error in _fetch_price_async for {symbol}: {e}", exc_info=True)
+            raise BrokerAPIError(f"Failed to fetch price: {str(e)}", broker_name="IBKR")
 
     def _create_contract_for_pricing(self, symbol: str, instrument_type: str):
         """
@@ -1085,7 +1121,7 @@ class IBKRBroker(AbstractBroker):
 
         This is a simplified version that creates contracts suitable for pricing queries.
         """
-        from ib_insync import Stock, Forex, Crypto, Future
+        from ib_insync import Stock, Forex, Crypto, Future as IBFuture
 
         instrument_type = instrument_type.upper()
 
@@ -1110,7 +1146,7 @@ class IBKRBroker(AbstractBroker):
             # For futures, we need more info, but try a basic contract
             # In production, this should be enhanced with expiry/exchange from order data
             logger.warning(f"Creating basic future contract for {symbol} - may need enhancement")
-            return Future(symbol, exchange='SMART')
+            return IBFuture(symbol, exchange='SMART')
 
         elif instrument_type == "OPTION":
             # Options require strike/expiry - should not be called for options

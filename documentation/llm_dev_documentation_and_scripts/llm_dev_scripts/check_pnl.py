@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 import json
 import sys
+import os
+
+# Change to project root directory
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.join(script_dir, '..', '..')
+os.chdir(project_root)
 
 # Read all signals from test results and analyze PnL calculations
 with open('test_results/signal_test_mock_mock_20260202_172852_results.json') as f:

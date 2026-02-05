@@ -1,6 +1,6 @@
 [
   {
-    "strategy_name": "IBKR_Test_Stock",
+    "strategy_name": "mock-strategy",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735982000,
     "signalID": "sig_tech_stocks_001",
@@ -24,7 +24,7 @@
     "wait": 6
   },
   {
-    "strategy_name": "IBKR_Test_Stock",
+    "strategy_name": "mock-strategy",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735982060,
     "signalID": "sig_tech_stocks_002",
@@ -46,7 +46,7 @@
     "wait": 6
   },
   {
-    "strategy_name": "IBKR_Test_Stock",
+    "strategy_name": "mock-strategy",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735982120,
     "signalID": "sig_tech_stocks_003",
@@ -70,7 +70,7 @@
     "wait": 6
   },
   {
-    "strategy_name": "IBKR_Test_Stock",
+    "strategy_name": "mock-strategy",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735982180,
     "signalID": "sig_tech_stocks_004",
@@ -92,7 +92,7 @@
     "wait": 6
   },
   {
-    "strategy_name": "IBKR_Test_Stock",
+    "strategy_name": "mock-strategy",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735982240,
     "signalID": "sig_tech_stocks_005",
@@ -116,7 +116,7 @@
     "wait": 6
   },
   {
-    "strategy_name": "IBKR_Test_Stock",
+    "strategy_name": "mock-strategy",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735982300,
     "signalID": "sig_tech_stocks_006",
@@ -138,7 +138,7 @@
     "wait": 6
   },
   {
-    "strategy_name": "IBKR_Test_Stock",
+    "strategy_name": "mock-strategy",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735982360,
     "signalID": "sig_tech_stocks_007",
@@ -162,7 +162,7 @@
     "wait": 6
   },
   {
-    "strategy_name": "IBKR_Test_Stock",
+    "strategy_name": "mock-strategy",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735982420,
     "signalID": "sig_tech_stocks_008",
@@ -184,7 +184,7 @@
     "wait": 6
   },
   {
-    "strategy_name": "IBKR_Test_Stock",
+    "strategy_name": "mock-strategy",
     "signal_type": "ENTRY",
     "signal_sent_EPOCH": 1735982480,
     "signalID": "sig_tech_stocks_009",
@@ -208,7 +208,7 @@
     "wait": 6
   },
   {
-    "strategy_name": "IBKR_Test_Stock",
+    "strategy_name": "mock-strategy",
     "signal_type": "EXIT",
     "signal_sent_EPOCH": 1735982540,
     "signalID": "sig_tech_stocks_010",
