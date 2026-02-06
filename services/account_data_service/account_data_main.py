@@ -351,11 +351,13 @@ def get_account_state_legacy(account_name: str):
             )
 
         # Transform to old format expected by CerebroService
+        # Use .get() for last_updated to handle MOCK accounts that may not have it
+        from datetime import datetime
         state = {
             "account_id": account['account_id'],
             "account": account['account_id'],
             "broker_id": account['broker'],
-            "timestamp": account['balances']['last_updated'],
+            "timestamp": account['balances'].get('last_updated', datetime.utcnow()),
             "equity": account['balances']['equity'],
             "cash_balance": account['balances']['cash_balance'],
             "margin_used": account['balances']['margin_used'],
