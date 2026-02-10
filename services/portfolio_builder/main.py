@@ -192,7 +192,7 @@ async def create_strategy(strategy_data: Dict[str, Any]):
     """
     try:
         # Validate required fields
-        required_fields = ['strategy_id', 'name', 'asset_class', 'instruments']
+        required_fields = ['strategy_id', 'name']
         for field in required_fields:
             if field not in strategy_data:
                 raise HTTPException(status_code=400, detail=f"Missing required field: {field}")

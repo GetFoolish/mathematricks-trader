@@ -67,6 +67,8 @@ services:
         SERVICE_NAME: account_data_service
     volumes:
       - ./services:/app/services
+    ports:
+      - "8085:8082" # HTTP API endpoint (external:internal)
     depends_on:
       mongodb:
         condition: service_healthy

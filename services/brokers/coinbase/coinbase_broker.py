@@ -6,14 +6,28 @@ import logging
 import time
 import jwt
 import json
+import importlib
+import sys
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-try:
-    from coinbase.rest import RESTClient
-except ImportError:
-    RESTClient = None
+def _load_coinbase_rest_client():
+    try:
+        # Ensure site-packages is searched before local project paths
+        site_paths = [p for p in sys.path if 'site-packages' in p]
+        for p in reversed(site_paths):
+            try:
+                sys.path.remove(p)
+            except ValueError:
+                continue
+            sys.path.insert(0, p)
+        module = importlib.import_module('coinbase.rest')
+        return getattr(module, 'RESTClient', None)
+    except Exception:
+        return None
+
+RESTClient = _load_coinbase_rest_client()
 
 from services.brokers.base import AbstractBroker, OrderSide, OrderType, OrderStatus
 from services.brokers.exceptions import (
@@ -84,8 +98,9 @@ class CoinbaseBroker(AbstractBroker):
         
         # Coinbase-specific workaround: Sandbox lacks price/data endpoints
         # Always use production for data reads, sandbox only for orders
-        self.data_api_url = "https://api.coinbase.com"  # Always production for prices/data
-        self.order_api_url = "https://api-sandbox.coinbase.com" if self.sandbox else "https://api.coinbase.com"
+        # RESTClient expects host without scheme
+        self.data_api_url = "api.coinbase.com"  # Always production for prices/data
+        self.order_api_url = "api-sandbox.coinbase.com" if self.sandbox else "api.coinbase.com"
         
         try:
             # Data client: Always production (sandbox lacks market data endpoints)
@@ -143,6 +158,46 @@ class CoinbaseBroker(AbstractBroker):
             symbol=symbol,
             broker_name="Coinbase"
         )
+
+    def _extract_accounts(self, accounts_response) -> Optional[List[Any]]:
+        """Extract accounts list from Coinbase response objects or dicts."""
+        if accounts_response is None:
+            return None
+        if hasattr(accounts_response, 'accounts'):
+            return accounts_response.accounts
+        if isinstance(accounts_response, dict):
+            return accounts_response.get('accounts')
+        return None
+
+    def _get_currency_and_available(self, account: Any) -> (Optional[str], float):
+        """Handle account objects or dicts from Coinbase responses."""
+        currency = None
+        available = 0.0
+
+        if isinstance(account, dict):
+            currency = account.get('currency')
+            available_balance = account.get('available_balance', 0)
+            if isinstance(available_balance, dict):
+                available = float(available_balance.get('value', 0) or 0)
+            else:
+                try:
+                    available = float(available_balance or 0)
+                except Exception:
+                    available = 0.0
+        else:
+            currency = getattr(account, 'currency', None)
+            available_balance = getattr(account, 'available_balance', 0)
+            if hasattr(available_balance, 'value'):
+                available = float(available_balance.value or 0)
+            elif isinstance(available_balance, dict):
+                available = float(available_balance.get('value', 0) or 0)
+            else:
+                try:
+                    available = float(available_balance or 0)
+                except Exception:
+                    available = 0.0
+
+        return currency, available
     
     def connect(self) -> bool:
         """
@@ -158,14 +213,20 @@ class CoinbaseBroker(AbstractBroker):
         try:
             logger.info("Testing Coinbase API connection...")
             
-            # Test connection by getting accounts (use data_client for reads)
-            accounts = self.data_client.get_accounts()
-            
-            if not accounts or not hasattr(accounts, 'accounts'):
-                logger.error("Failed to retrieve accounts from Coinbase")
+            # Test connection by getting accounts
+            # Use sandbox order client when sandbox is enabled
+            accounts_client = self.order_client if self.sandbox else self.data_client
+            accounts = accounts_client.get_accounts()
+            accounts_list = self._extract_accounts(accounts)
+
+            if not accounts_list:
+                if isinstance(accounts, dict):
+                    logger.error(f"Failed to retrieve accounts from Coinbase (dict keys: {list(accounts.keys())})")
+                else:
+                    logger.error(f"Failed to retrieve accounts from Coinbase (type: {type(accounts)})")
                 return False
             
-            logger.info(f"✅ Connected to Coinbase API - {len(accounts.accounts)} accounts found")
+            logger.info(f"✅ Connected to Coinbase API - {len(accounts_list)} accounts found")
             self._connected = True
             return True
             
@@ -224,9 +285,13 @@ class CoinbaseBroker(AbstractBroker):
             side = 'BUY' if action == 'BUY' else 'SELL'
             
             # Use order_client for placing orders (respects sandbox flag)
+            # Generate unique client order ID
+            client_order_id = f"mathematricks_{int(time.time() * 1000)}"
+            
             if order_type == 'MARKET':
                 # Market order
                 response = self.order_client.market_order(
+                    client_order_id=client_order_id,
                     product_id=symbol,
                     side=side,
                     base_size=quantity
@@ -235,26 +300,48 @@ class CoinbaseBroker(AbstractBroker):
                 # Limit order
                 limit_price = str(order.get('limit_price', 0))
                 response = self.order_client.limit_order_gtc(
+                    client_order_id=client_order_id,
                     product_id=symbol,
                     side=side,
                     base_size=quantity,
                     limit_price=limit_price
                 )
             
-            if not response or not hasattr(response, 'success'):
-                raise OrderRejectedError(
-                    f"Order rejected by Coinbase: Invalid response",
-                    broker_name="Coinbase"
-                )
+            # Log response for debugging
+            logger.info(f"Coinbase API response type: {type(response)}")
+            logger.info(f"Coinbase API response: {response}")
+            if hasattr(response, '__dict__'):
+                logger.info(f"Response attributes: {response.__dict__}")
             
-            if not response.success:
-                error_msg = getattr(response, 'failure_reason', 'Unknown error')
-                raise OrderRejectedError(
-                    f"Order rejected: {error_msg}",
-                    broker_name="Coinbase"
-                )
-            
-            order_id = response.order_id if hasattr(response, 'order_id') else 'UNKNOWN'
+            # Handle dict or object response
+            if isinstance(response, dict):
+                success = response.get('success', False)
+                if not success:
+                    error_response = response.get('error_response', {})
+                    error_msg = error_response.get('message', 'Unknown error')
+                    raise OrderRejectedError(
+                        f"Order rejected: {error_msg}",
+                        broker_name="Coinbase"
+                    )
+                
+                success_response = response.get('success_response', {})
+                order_id = success_response.get('order_id', 'UNKNOWN')
+            else:
+                # Object response
+                if not response or not hasattr(response, 'success'):
+                    raise OrderRejectedError(
+                        f"Order rejected by Coinbase: Invalid response",
+                        broker_name="Coinbase"
+                    )
+                
+                if not response.success:
+                    error_msg = getattr(response, 'failure_reason', 'Unknown error')
+                    raise OrderRejectedError(
+                        f"Order rejected: {error_msg}",
+                        broker_name="Coinbase"
+                    )
+                
+                order_id = response.order_id if hasattr(response, 'order_id') else 'UNKNOWN'
             
             logger.info(f"✅ Order placed successfully - Order ID: {order_id}")
             
@@ -316,10 +403,12 @@ class CoinbaseBroker(AbstractBroker):
             raise BrokerConnectionError("Not connected to Coinbase", broker_name="Coinbase")
         
         try:
-            # Use data_client for reading account balance
-            accounts_response = self.data_client.get_accounts()
-            
-            if not accounts_response or not hasattr(accounts_response, 'accounts'):
+            # Use sandbox order client when sandbox is enabled
+            accounts_client = self.order_client if self.sandbox else self.data_client
+            accounts_response = accounts_client.get_accounts()
+            accounts_list = self._extract_accounts(accounts_response)
+
+            if not accounts_list:
                 raise BrokerAPIError(
                     "Failed to get accounts from Coinbase",
                     broker_name="Coinbase"
@@ -329,9 +418,8 @@ class CoinbaseBroker(AbstractBroker):
             cash_balance = 0.0
             holdings = {}
             
-            for account in accounts_response.accounts:
-                currency = account.currency
-                available = float(account.available_balance.value) if hasattr(account.available_balance, 'value') else 0.0
+            for account in accounts_list:
+                currency, available = self._get_currency_and_available(account)
                 
                 if currency == 'USD':
                     cash_balance = available
@@ -434,18 +522,39 @@ class CoinbaseBroker(AbstractBroker):
             symbol = self._normalize_symbol(instrument)
             
             # Use data_client for getting prices (always production)
-            ticker = self.data_client.get_product(product_id=symbol)
+            # Try ticker endpoint first (more reliable for current price)
+            try:
+                ticker = self.data_client.get_product_ticker(product_id=symbol)
+                logger.debug(f"Ticker response for {symbol}: {ticker}")
+                if ticker and hasattr(ticker, 'price'):
+                    price = float(ticker.price)
+                    logger.debug(f"Current price for {symbol}: ${price:,.2f}")
+                    return price
+                else:
+                    logger.warning(f"Ticker missing price attribute for {symbol}, ticker: {ticker}")
+            except Exception as ticker_err:
+                logger.warning(f"Ticker endpoint failed for {symbol}: {ticker_err}")
             
-            if not ticker or not hasattr(ticker, 'price'):
-                raise BrokerAPIError(
-                    f"Failed to get price for {symbol}",
-                    broker_name="Coinbase"
-                )
+            # Fallback to product endpoint
+            product = self.data_client.get_product(product_id=symbol)
+            logger.debug(f"Product response for {symbol}: {product}")
             
-            price = float(ticker.price)
-            logger.debug(f"Current price for {symbol}: ${price:,.2f}")
+            # Handle both dict response and object response
+            if isinstance(product, dict):
+                if 'price' in product and product['price']:
+                    price = float(product['price'])
+                    logger.debug(f"Current price for {symbol}: ${price:,.2f}")
+                    return price
+            elif hasattr(product, 'price'):
+                price = float(product.price)
+                logger.debug(f"Current price for {symbol}: ${price:,.2f}")
+                return price
             
-            return price
+            logger.error(f"Product missing price for {symbol}, product: {product}")
+            raise BrokerAPIError(
+                f"Failed to get price for {symbol}",
+                broker_name="Coinbase"
+            )
             
         except (InvalidSymbolError, BrokerConnectionError):
             raise
@@ -455,6 +564,10 @@ class CoinbaseBroker(AbstractBroker):
                 f"Failed to get price: {str(e)}",
                 broker_name="Coinbase"
             )
+
+    def get_market_price(self, instrument: str, instrument_type: str = "CRYPTO") -> float:
+        """Compatibility wrapper for execution service live price lookups."""
+        return self.get_current_price(instrument)
     
     def get_order_book(self, instrument: str, depth: int = 10) -> Dict[str, Any]:
         """

@@ -389,7 +389,7 @@ def check_market_data_availability(signals_folder: Path, broker_name: str, file_
     
     try:
         import requests
-        response = requests.get('http://localhost:8083/market_status', timeout=10)
+        response = requests.get('http://localhost:8083/market_status', timeout=30)
         
         if response.status_code != 200:
             print(f"   ❌ Execution service returned {response.status_code}")
@@ -466,7 +466,9 @@ def check_market_data_availability(signals_folder: Path, broker_name: str, file_
     # Build asset_class_status from market data
     asset_class_status = {}
     for inst_type in signals_by_type.keys():
-        is_open = markets.get(inst_type, False)
+        # Market status returns lowercase keys (stock, option, forex, crypto)
+        # but signals use uppercase instrument_type (STOCK, OPTION, etc.)
+        is_open = markets.get(inst_type.lower(), False)
         
         if is_open:
             asset_class_status[inst_type] = {

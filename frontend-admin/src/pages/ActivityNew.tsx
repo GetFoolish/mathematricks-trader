@@ -295,6 +295,9 @@ export const Activity: React.FC = () => {
                                     const showMath = showMathForLeg === legId;
                                     const decision = leg.decision || {};
                                     const decisionStatus = decision.status || 'PENDING';
+                                    const execution = leg.execution || {};
+                                    const executionStatus = execution.status;
+                                    const executionError = execution.error_reason;
                                     
                                     return (
                                       <div key={legIdx} className="border border-gray-700 rounded-lg overflow-hidden">
@@ -315,7 +318,17 @@ export const Activity: React.FC = () => {
                                             }`}>
                                               {decisionStatus}
                                             </span>
-                                            {decision.reason && (
+                                            {executionStatus === 'ERROR' && (
+                                              <span className="px-2 py-0.5 rounded text-xs font-semibold bg-red-900 text-red-300">
+                                                EXEC ERROR
+                                              </span>
+                                            )}
+                                            {executionError && (
+                                              <span className="text-xs text-red-400 truncate max-w-md">
+                                                {executionError}
+                                              </span>
+                                            )}
+                                            {!executionError && decision.reason && (
                                               <span className="text-xs text-gray-400 truncate max-w-md">
                                                 {decision.reason}
                                               </span>
@@ -356,6 +369,9 @@ export const Activity: React.FC = () => {
                                                 <h5 className="text-xs font-semibold text-gray-400">Execution Results</h5>
                                                 <div className="bg-gray-900 p-3 rounded text-xs font-mono space-y-1">
                                                   <div><span className="text-gray-500">Status:</span> <span className="text-white">{leg.execution.status || 'N/A'}</span></div>
+                                                  {leg.execution.error_reason && (
+                                                    <div><span className="text-gray-500">Error:</span> <span className="text-red-300">{leg.execution.error_reason}</span></div>
+                                                  )}
                                                   <div><span className="text-gray-500">Quantity Filled:</span> <span className="text-white">{leg.execution.total_quantity_filled || 0}</span></div>
                                                   <div><span className="text-gray-500">Avg Fill Price:</span> <span className="text-white">${leg.execution.weighted_avg_price?.toFixed(2) || 'N/A'}</span></div>
                                                   {leg.execution.total_cost_basis && (

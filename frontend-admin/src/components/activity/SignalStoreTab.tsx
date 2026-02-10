@@ -483,8 +483,8 @@ export default function SignalStoreTab() {
                                 {legs.map((leg: any, legIdx: number) => {
                                   const legId = `${signal._id}-${legIdx}`;
                                   const isLegExpanded = expandedLegId === legId;
-                                  const decision = leg.decision || {};
-                                  const decisionStatus = decision.status || 'PENDING';
+                                  const cerebro = leg.cerebro || {};
+                                  const cerebroStatus = cerebro.status || 'PENDING';
                                   const serviceStatus = getServiceStatus(leg);
                                   
                                   return (
@@ -500,20 +500,20 @@ export default function SignalStoreTab() {
                                             Leg {leg.leg_index !== undefined ? leg.leg_index + 1 : legIdx + 1}: {leg.leg_type || 'N/A'}
                                           </span>
                                           <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                                            decisionStatus === 'APPROVED' ? 'bg-green-900/30 text-green-400' :
-                                            decisionStatus === 'REJECTED' ? 'bg-red-900/30 text-red-400' :
+                                            cerebroStatus === 'APPROVED' ? 'bg-green-900/30 text-green-400' :
+                                            cerebroStatus === 'REJECTED' ? 'bg-red-900/30 text-red-400' :
                                             'bg-yellow-900/30 text-yellow-400'
                                           }`}>
-                                            {decisionStatus}
+                                            {cerebroStatus}
                                           </span>
                                           <div className="flex items-center gap-1.5">
                                             <StatusDot status={serviceStatus.ingestion.status} tooltip={serviceStatus.ingestion.tooltip} />
                                             <StatusDot status={serviceStatus.cerebro.status} tooltip={serviceStatus.cerebro.tooltip} />
                                             <StatusDot status={serviceStatus.execution.status} tooltip={serviceStatus.execution.tooltip} />
                                           </div>
-                                          {decision.reason && (
+                                          {cerebro.reason && (
                                             <span className="text-xs text-gray-400 truncate max-w-md">
-                                              {decision.reason}
+                                              {cerebro.reason}
                                             </span>
                                           )}
                                         </div>
@@ -533,13 +533,13 @@ export default function SignalStoreTab() {
                                             <div>
                                               <span className="text-gray-500">Raw Quantity:</span>{' '}
                                               <span className="text-white font-semibold">
-                                                {leg.raw?.quantity || leg.raw?.legs?.[0]?.quantity || 'N/A'}
+                                                {leg.raw?.quantity || leg.raw?.signal_legs?.[0]?.quantity || 'N/A'}
                                               </span>
                                             </div>
                                             <div>
                                               <span className="text-gray-500">Cerebro Quantity:</span>{' '}
                                               <span className="text-white font-semibold">
-                                                {decision.quantity !== undefined ? decision.quantity : (decision.legs?.[0]?.quantity || 'N/A')}
+                                                {cerebro.quantity !== undefined ? cerebro.quantity : (cerebro.created_orders?.[0]?.quantity || 'N/A')}
                                               </span>
                                             </div>
                                           </div>
@@ -573,7 +573,7 @@ export default function SignalStoreTab() {
                                                   <tr>
                                                     <td className="px-3 py-2 text-white">Cerebro</td>
                                                     <td className="px-3 py-2 text-gray-300 font-mono">
-                                                      {leg.processing_timestamps?.cerebro_processed ? formatDate(leg.processing_timestamps.cerebro_processed) : (decision.timestamp ? formatDate(decision.timestamp) : 'N/A')}
+                                                      {leg.processing_timestamps?.cerebro_processed ? formatDate(leg.processing_timestamps.cerebro_processed) : (cerebro.timestamp ? formatDate(cerebro.timestamp) : 'N/A')}
                                                     </td>
                                                     <td className="px-3 py-2 text-gray-300 font-mono">
                                                       {leg.processing_lag?.service_lags?.cerebro ? `${(leg.processing_lag.service_lags.cerebro / 1000).toFixed(3)}s` : '-'}
@@ -623,7 +623,33 @@ export default function SignalStoreTab() {
                                                 <button
                                                   onClick={() => {
                                                     const boxId = `cerebro-${signal._id}-${legIdx}`;
-                                                    const text = `Signal ID: ${signal.signal_id}\nLeg ID: ${leg.leg_id}\n\nStatus: ${decision.status || 'N/A'}\nReason: ${decision.reason || 'N/A'}\nTimestamp: ${decision.timestamp ? formatDate(decision.timestamp) : 'N/A'}${decision.quantity !== undefined ? `\nQuantity: ${decision.quantity}` : ''}${decision.legs && decision.legs.length > 0 ? '\n\nDecision Legs:\n' + decision.legs.map((dLeg: any) => `• ${dLeg.action} ${dLeg.quantity} ${dLeg.instrument} @ ${dLeg.price}`).join('\n') : ''}${decision.math ? '\n\nCalculation:\n' + decision.math : ''}`;
+                                                    let text = `Signal ID: ${signal.signal_id}\nLeg ID: ${leg.leg_id}\n\nStatus: ${cerebro.status || 'N/A'}\nReason: ${cerebro.reason || 'N/A'}\nTimestamp: ${cerebro.timestamp ? formatDate(cerebro.timestamp) : 'N/A'}`;
+                                                    if (cerebro.quantity !== undefined) {
+                                                      text += `\nQuantity: ${cerebro.quantity}`;
+                                                    }
+                                                    if (cerebro.created_orders && cerebro.created_orders.length > 0) {
+                                                      text += '\n\nCreated Orders:\n';
+                                                      cerebro.created_orders.forEach((order: any, idx: number) => {
+                                                        text += `\nOrder ${idx + 1}:\n`;
+                                                        text += `  Broker: ${order.broker || 'N/A'}\n`;
+                                                        text += `  Account: ${order.account_id || 'N/A'}\n`;
+                                                        text += `  Fund: ${order.fund_id || 'N/A'}\n`;
+                                                        text += `  Action: ${order.action || 'N/A'}\n`;
+                                                        text += `  Instrument: ${order.instrument || 'N/A'}\n`;
+                                                        text += `  Quantity: ${order.quantity || 0}\n`;
+                                                        text += `  Price: $${order.price?.toFixed(2) || 'N/A'}\n`;
+                                                        text += `  Order Type: ${order.order_type || 'N/A'}\n`;
+                                                        if (order.allocated_capital) {
+                                                          text += `  Allocated Capital: $${order.allocated_capital.toLocaleString()}\n`;
+                                                        }
+                                                        if (order.margin_required) {
+                                                          text += `  Margin Required: $${order.margin_required.toLocaleString()}\n`;
+                                                        }
+                                                      });
+                                                    }
+                                                    if (cerebro.math) {
+                                                      text += '\n\nCalculation:\n' + cerebro.math;
+                                                    }
                                                     copyToClipboard(text, boxId);
                                                   }}
                                                   className="absolute top-2 right-2 p-1.5 bg-gray-800 hover:bg-gray-700 rounded transition-colors"
@@ -636,43 +662,70 @@ export default function SignalStoreTab() {
                                                   )}
                                                 </button>
 
-                                                {/* Decision Details */}
+                                                {/* Cerebro Details */}
                                                 <div className="space-y-1">
                                                   <div><span className="text-gray-500">Signal ID:</span> <span className="text-white text-xs">{signal.signal_id}</span></div>
                                                   <div><span className="text-gray-500">Leg ID:</span> <span className="text-white text-xs">{leg.leg_id}</span></div>
                                                   <div className="border-t border-gray-800 my-2"></div>
-                                                  <div><span className="text-gray-500">Status:</span> <span className="text-white">{decision.status || 'N/A'}</span></div>
-                                                  <div><span className="text-gray-500">Reason:</span> <span className="text-white">{decision.reason || 'N/A'}</span></div>
-                                                  {decision.timestamp && (
-                                                    <div><span className="text-gray-500">Timestamp:</span> <span className="text-white">{formatDate(decision.timestamp)}</span></div>
+                                                  <div><span className="text-gray-500">Status:</span> <span className="text-white">{cerebro.status || 'N/A'}</span></div>
+                                                  <div><span className="text-gray-500">Reason:</span> <span className="text-white">{cerebro.reason || 'N/A'}</span></div>
+                                                  {cerebro.timestamp && (
+                                                    <div><span className="text-gray-500">Timestamp:</span> <span className="text-white">{formatDate(cerebro.timestamp)}</span></div>
                                                   )}
-                                                  {decision.quantity !== undefined && (
-                                                    <div><span className="text-gray-500">Quantity:</span> <span className="text-white">{decision.quantity}</span></div>
-                                                  )}
-                                                  {decision.legs && decision.legs.length > 0 && (
-                                                    <div className="mt-2">
-                                                      <span className="text-gray-500">Decision Legs:</span>
-                                                      <div className="ml-3 mt-1 space-y-1">
-                                                        {decision.legs.map((dLeg: any, dLegIdx: number) => (
-                                                          <div key={dLegIdx} className="text-gray-300">
-                                                            • {dLeg.action} {dLeg.quantity} {dLeg.instrument} @ {dLeg.price}
-                                                          </div>
-                                                        ))}
-                                                      </div>
-                                                    </div>
+                                                  {cerebro.quantity !== undefined && (
+                                                    <div><span className="text-gray-500">Quantity:</span> <span className="text-white">{cerebro.quantity}</span></div>
                                                   )}
                                                 </div>
 
-                                                {/* Orders Created Section */}
+                                                {/* Orders Created by Cerebro */}
+                                                {cerebro.created_orders && cerebro.created_orders.length > 0 && (
+                                                  <div className="border-t border-gray-700 pt-3">
+                                                    <div className="text-gray-500 font-semibold mb-2">Orders Created ({cerebro.created_orders.length}):</div>
+                                                    <div className="ml-3 space-y-2">
+                                                      {cerebro.created_orders.map((order: any, orderIdx: number) => (
+                                                        <div key={orderIdx} className="bg-gray-950 p-2 rounded text-xs">
+                                                          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                                                            <div><span className="text-gray-500">Fund:</span> <span className="text-white">{order.fund_id || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Account:</span> <span className="text-white">{order.account_id || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Broker:</span> <span className="text-white">{order.broker || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Data Source:</span> <span className="text-white">{order.data_source || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Action:</span> <span className="text-white">{order.action || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Instrument:</span> <span className="text-white">{order.instrument || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Quantity:</span> <span className="text-white">{order.quantity || 0}</span></div>
+                                                            <div><span className="text-gray-500">Price:</span> <span className="text-white">${order.price?.toFixed(2) || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Order Type:</span> <span className="text-white">{order.order_type || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Direction:</span> <span className="text-white">{order.direction || 'N/A'}</span></div>
+                                                            {order.allocated_capital && (
+                                                              <div className="col-span-2">
+                                                                <span className="text-gray-500">Allocated Capital:</span>{' '}
+                                                                <span className="text-white">${order.allocated_capital.toLocaleString()}</span>
+                                                              </div>
+                                                            )}
+                                                            {order.margin_required && (
+                                                              <div className="col-span-2">
+                                                                <span className="text-gray-500">Margin Required:</span>{' '}
+                                                                <span className="text-white">${order.margin_required.toLocaleString()}</span>
+                                                              </div>
+                                                            )}
+                                                          </div>
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  </div>
+                                                )}
+
+                                                {/* Execution Orders (after order is sent) */}
                                                 {leg.execution?.orders && leg.execution.orders.length > 0 && (
                                                   <div className="border-t border-gray-700 pt-3">
-                                                    <div className="text-gray-500 font-semibold mb-2">Orders Created ({leg.execution.orders.length}):</div>
+                                                    <div className="text-gray-500 font-semibold mb-2">Execution Results ({leg.execution.orders.length}):</div>
                                                     <div className="ml-3 space-y-2">
                                                       {leg.execution.orders.map((order: any, orderIdx: number) => (
                                                         <div key={orderIdx} className="bg-gray-950 p-2 rounded text-xs">
                                                           <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                                                             <div><span className="text-gray-500">Fund/Account:</span> <span className="text-white">{order.fund_id}/{order.account_id}</span></div>
-                                                            <div><span className="text-gray-500">Broker:</span> <span className="text-white">{order.broker_name || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Exec Broker:</span> <span className="text-white">{order.broker || order.broker_name || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Data Source:</span> <span className="text-white">{order.data_source || 'N/A'}</span></div>
+                                                            <div><span className="text-gray-500">Price Broker:</span> <span className="text-white">{order.price_broker || 'N/A'}</span></div>
                                                             <div><span className="text-gray-500">Qty Filled:</span> <span className="text-white">{order.quantity_filled || order.quantity}</span></div>
                                                             <div><span className="text-gray-500">Avg Price:</span> <span className="text-white">${(order.avg_fill_price || order.price)?.toFixed(2)}</span></div>
                                                             {order.broker_order_id && (
@@ -695,11 +748,11 @@ export default function SignalStoreTab() {
                                                 )}
 
                                                 {/* Calculation Breakdown */}
-                                                {decision.math && (
+                                                {cerebro.math && (
                                                   <div className="border-t border-gray-700 pt-3">
                                                     <div className="text-gray-500 font-semibold mb-2">Calculation:</div>
                                                     <pre className="text-gray-300 whitespace-pre-wrap">
-                                                      {decision.math}
+                                                      {cerebro.math}
                                                     </pre>
                                                   </div>
                                                 )}
@@ -716,6 +769,9 @@ export default function SignalStoreTab() {
                                                     onClick={() => {
                                                       const boxId = `execution-${signal._id}-${legIdx}`;
                                                       let text = `Signal ID: ${signal.signal_id}\nLeg ID: ${leg.leg_id}\n\nStatus: ${leg.execution.status || 'N/A'}`;
+                                                      if (leg.execution.status === 'ERROR') {
+                                                        if (leg.execution.error_reason) text += `\nError: ${leg.execution.error_reason}`;
+                                                      }
                                                       if (leg.execution.status === 'REJECTED') {
                                                         if (leg.execution.rejection_reason) text += `\nRejection Reason: ${leg.execution.rejection_reason}`;
                                                         if (leg.execution.rejected_at) text += `\nRejected At: ${new Date(leg.execution.rejected_at).toLocaleString()}`;
@@ -741,6 +797,11 @@ export default function SignalStoreTab() {
                                                   <div><span className="text-gray-500">Leg ID:</span> <span className="text-white text-xs">{leg.leg_id}</span></div>
                                                   <div className="border-t border-gray-800 my-2"></div>
                                                   <div><span className="text-gray-500">Status:</span> <span className="text-white">{leg.execution.status || 'N/A'}</span></div>
+                                                  
+                                                  {/* Error Details */}
+                                                  {leg.execution.status === 'ERROR' && leg.execution.error_reason && (
+                                                    <div><span className="text-gray-500">Error:</span> <span className="text-red-400">{leg.execution.error_reason}</span></div>
+                                                  )}
                                                   
                                                   {/* Rejection Details */}
                                                   {leg.execution.status === 'REJECTED' && leg.execution.rejection_reason && (

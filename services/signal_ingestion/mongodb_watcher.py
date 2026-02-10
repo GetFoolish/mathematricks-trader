@@ -106,7 +106,7 @@ class MongoDBWatcher:
                 "signal_type": signal_type,
                 "legs": raw_legs
             },
-            "decision": None,  # Will be populated by cerebro
+            "cerebro": None,  # Will be populated by cerebro
             "execution": None,  # Will be populated by execution service
             "processing_timestamps": {
                 "signal_received": raw_signal_doc.get('received_at', now),  # When signal was first received

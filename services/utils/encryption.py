@@ -89,7 +89,10 @@ def decrypt_value(ciphertext: str) -> str:
         plaintext_bytes = cipher.decrypt(encrypted_bytes)
         return plaintext_bytes.decode()
     except Exception as e:
-        logger.error(f"❌ Decryption failed: {e}")
+        logger.error(f"❌ Decryption failed: {type(e).__name__}: {str(e)}")
+        logger.error(f"   Ciphertext preview: {ciphertext[:20]}...")
+        import traceback
+        logger.error(f"   Traceback: {traceback.format_exc()}")
         raise
 
 

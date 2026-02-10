@@ -8,7 +8,7 @@ import logging
 import json
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import requests
@@ -155,32 +155,58 @@ def round_quantity_for_instrument(quantity: float, instrument_type: str) -> floa
 
 
 def allocate_quantity_across_accounts(
-    total_quantity: int,
+    total_quantity: Union[int, float],
     account_allocations: List[Dict[str, Any]],
     target_capital: float,
     instrument_type: str
-) -> List[int]:
+) -> List[Union[int, float]]:
     """
     Allocate quantity across multiple accounts ensuring sum equals total_quantity.
-    Uses floor division with remainder distribution to avoid rounding errors.
+    For OPTIONS/FUTURES: Uses floor division with remainder distribution (integer contracts).
+    For CRYPTO/FOREX/STOCK: Distributes proportionally based on allocated capital (fractional OK).
     
     Args:
-        total_quantity: Total quantity to distribute
+        total_quantity: Total quantity to distribute (int for options, float for crypto/forex)
         account_allocations: List of {account_id, allocated_capital} dicts
         target_capital: Total capital being distributed
         instrument_type: Instrument type for precision rules
         
     Returns:
-        List of integer quantities, one per account, summing to total_quantity
+        List of quantities, one per account, summing to total_quantity
         
-    Example:
+    Example (OPTIONS):
         Input: total_quantity=231, 2 accounts with equal capital
-        Output: [115, 116] (NOT [116, 116])
+        Output: [115, 116] (integer contracts)
+    
+    Example (CRYPTO):
+        Input: total_quantity=0.5, 2 accounts with 60/40 capital split
+        Output: [0.3, 0.2] (fractional BTC)
     """
     if not account_allocations:
         return []
     
     num_accounts = len(account_allocations)
+    
+    # For crypto/forex/stock, use proportional allocation (preserves fractions)
+    if instrument_type in ['CRYPTO', 'FOREX', 'STOCK']:
+        quantities = []
+        if target_capital > 0:
+            for account in account_allocations:
+                allocated_capital = account.get('allocated_capital', 0)
+                proportion = allocated_capital / target_capital
+                quantities.append(total_quantity * proportion)
+        else:
+            # Equal distribution if no capital info
+            qty_per_account = total_quantity / num_accounts
+            quantities = [qty_per_account] * num_accounts
+        
+        logger.info(
+            f"✅ Allocated {total_quantity} {instrument_type} units across {num_accounts} accounts: {quantities}"
+        )
+        return quantities
+    
+    # For options/futures, use integer contract allocation
+    total_quantity = int(total_quantity)  # Ensure integer for contract-based instruments
     
     # Calculate base quantity and remainder using floor division
     base_qty = total_quantity // num_accounts
@@ -225,18 +251,18 @@ def build_decision_v2(
     legs: list = None
 ) -> dict:
     """
-    Build a clean v2 decision document for signal_store.
+    Build a clean v2 cerebro document for signal_store.
 
     v2 Schema:
-    - decision.status: APPROVED | REJECTED | RESIZE
-    - decision.reason: Human-readable explanation
-    - decision.legs[]: Final quantities per instrument
-    - decision.math: Detailed calculation breakdown
+    - cerebro.status: APPROVED | REJECTED | RESIZE
+    - cerebro.reason: Human-readable explanation
+    - cerebro.created_orders[]: Final order specifications per instrument
+    - cerebro.math: Detailed calculation breakdown
     """
     from bson import ObjectId
 
-    # Build decision.legs from leg_results or signal
-    decision_legs = []
+    # Build cerebro.created_orders from leg_results or signal
+    created_orders = []
     leg_results = []
 
     if decision_obj and decision_obj.metadata.get('leg_results'):
@@ -264,7 +290,7 @@ def build_decision_v2(
             })
 
     for leg in leg_results:
-        decision_legs.append({
+        created_orders.append({
             "instrument": leg.get('instrument'),
             "instrument_type": leg.get('instrument_type', 'STOCK'),
             "action": leg.get('action'),
@@ -272,10 +298,10 @@ def build_decision_v2(
             "quantity": leg.get('quantity', 0),
             "order_type": leg.get('order_type', 'MARKET'),
             "price": leg.get('price_used', 0),
-            "margin_required": leg.get('initial_margin', 0)
+            "margin_required": leg.get('initial_margin', 0),
+            # Note: broker, exchange, time_in_force are added later when distributing across accounts
             # If this leg contains nested option 'legs', attach them so execution receives full details
-        ,
-        "legs": leg.get('legs') if leg.get('legs') else None
+            "legs": leg.get('legs') if leg.get('legs') else None
         })
 
     # Build decision.math as formatted string (7 sections matching log_detailed_calculation_math)
@@ -324,6 +350,11 @@ def build_decision_v2(
         deployed = position_sizing.get('deployed_capital', 0)
         available = position_sizing.get('allocated_capital_available', 0)
         position_count = position_sizing.get('position_count', 0)
+        account_equity = metadata.get('account_state', {}).get('equity', 0)
+        allocation_pct = position_sizing.get('allocation_percentage', 0)
+        
+        math_lines.append(f"Account Balance: ${account_equity:,.2f}")
+        math_lines.append(f"Strategy Allocation: {allocation_pct:.2f}% of account")
         math_lines.append(f"Allocated Capital: ${allocated:,.2f}")
         math_lines.append(f"Deployed Capital: ${deployed:,.2f} ({position_count} positions)")
         math_lines.append(f"Available Capital: ${available:,.2f}")
@@ -332,19 +363,23 @@ def build_decision_v2(
         scaling = position_sizing.get('scaling_ratio', 1)
         signal_equity = position_sizing.get('signal_account_equity', 0)
         math_lines.append("\n--- 4. SCALING CALCULATION ---")
-        if signal_equity > 0 and scaling and scaling != 1:
-            math_lines.append(f"Signal Account Equity: ${signal_equity:,.2f}")
-            math_lines.append(f"Available Capital: ${available:,.2f}")
-            math_lines.append(f"Scaling Ratio: {scaling:.5f}")
-            scaled_qty = raw_qty * scaling
-            math_lines.append(f"Quantity: {raw_qty} x {scaling:.5f} = {scaled_qty:.2f} -> {final_qty}")
-        elif metadata.get('entry_signal_id'):
-            # EXIT signal
+        if metadata.get('entry_signal_id'):
+            # EXIT signal - show position matching info
             math_lines.append(f"Entry Signal: {metadata.get('entry_signal_ref', 'N/A')}")
             math_lines.append(f"Entry Quantity: {metadata.get('entry_quantity', 0)}")
             math_lines.append(f"Quantity to Close: {final_qty}")
+            math_lines.append("Note: EXIT signals match entry position (no scaling)")
+        elif signal_equity > 0:
+            # ENTRY signal - always show scaling calculation
+            math_lines.append(f"Signal Account Equity: ${signal_equity:,.2f} (from signal payload)")
+            math_lines.append(f"Allocated Capital: ${allocated:,.2f} (strategy allocation before deployment)")
+            math_lines.append(f"Scaling Ratio Calculation: ${allocated:,.2f} ÷ ${signal_equity:,.2f} = {scaling:.5f}")
+            scaled_qty = raw_qty * scaling
+            math_lines.append(f"Scaled Quantity: {raw_qty} × {scaling:.5f} = {scaled_qty:.4f}")
+            math_lines.append(f"Final Quantity: {final_qty} (after precision rules)")
         else:
-            math_lines.append("N/A - No scaling applied")
+            # Fallback for edge cases
+            math_lines.append("N/A - No scaling information available")
 
         # --- 5. MARGIN VALIDATION ---
         margin_required = position_sizing.get('margin_required', 0)
@@ -354,10 +389,13 @@ def build_decision_v2(
         math_lines.append(f"Method: {margin_method}")
         if notional > 0:
             math_lines.append(f"Notional: ${notional:,.2f}")
-        math_lines.append(f"Required: ${margin_required:,.2f}")
+        math_lines.append(f"Margin Required: ${margin_required:,.2f}")
+        math_lines.append(f"Allocated Capital: ${allocated:,.2f}")
+        math_lines.append(f"Deployed Capital: ${deployed:,.2f} ({position_count} positions)")
+        math_lines.append(f"Available Capital: ${available:,.2f}")
         if available > 0:
-            check = "OK" if margin_required <= available else "EXCEEDS"
-            math_lines.append(f"Check: {check} (${margin_required:,.2f} vs ${available:,.2f})")
+            check = "✅ OK" if margin_required <= available else "❌ EXCEEDS"
+            math_lines.append(f"Affordability Check: {check} (${margin_required:,.2f} vs ${available:,.2f} available)")
 
         # --- 6. BROKER ACCOUNT STATE ---
         account_state = metadata.get('account_state', {})
@@ -378,24 +416,24 @@ def build_decision_v2(
 
     math_breakdown = "\n".join(math_lines) if math_lines else "No calculation data"
 
-    # Build the v2 decision document
+    # Build the v2 cerebro document
     return {
         "status": status,
         "reason": reason,
         "timestamp": datetime.utcnow(),
-        "legs": decision_legs,
+        "created_orders": created_orders,
         "math": math_breakdown
     }
 
 
-# Helper function to update signal_store with cerebro decision
+# Helper function to update signal_store with cerebro output
 def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict, raw_signal_id: str = None):
     """
-    Update signal_store document with decision in CONSOLIDATED SCHEMA (v3).
+    Update signal_store document with cerebro output in CONSOLIDATED SCHEMA (v3).
 
     CONSOLIDATED SCHEMA:
     - Finds the specific leg in legs[] array by matching raw._id
-    - Updates legs[i].decision field for that leg
+    - Updates legs[i].cerebro field for that leg
     - Sets processing_complete flag at document root
 
     Args:
@@ -443,9 +481,9 @@ def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict, 
         # Fallback: find first leg without decision
         if leg_index is None:
             for idx, leg in enumerate(legs):
-                if not leg.get('decision'):
+                if not leg.get('cerebro'):
                     leg_index = idx
-                    logger.debug(f"Using first leg without decision at index {idx}")
+                    logger.debug(f"Using first leg without cerebro at index {idx}")
                     break
 
         if leg_index is None:
@@ -453,38 +491,29 @@ def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict, 
             logger.error(f"   Document has {len(legs)} legs, raw_signal_id={raw_signal_id}")
             return
 
-        # Update the specific leg's decision field and add cerebro timestamp
+        # Update the specific leg's cerebro field and add cerebro timestamp
         now = datetime.utcnow()
         signal_store_collection.update_one(
             {"_id": ObjectId(signal_store_id)},
             {
                 "$set": {
-                    f"legs.{leg_index}.decision": decision_doc,
+                    f"legs.{leg_index}.cerebro": decision_doc,
                     f"legs.{leg_index}.processing_timestamps.cerebro_processed": now,
                     "processing_complete": status in ["APPROVED", "RESIZE"],
                     "updated_at": now
                 }
             }
         )
-        logger.info(f"✅ Updated signal_store {signal_store_id} leg {leg_index} with decision (status={status})")
+        logger.info(f"✅ Updated signal_store {signal_store_id} leg {leg_index} with cerebro (status={status})")
 
     except Exception as e:
         logger.error(f"⚠️ Failed to update signal_store: {e}", exc_info=True)
 
 
 # ============================================================================
-# GOOGLE CLOUD PUB/SUB
+# SERVICE URLs
 # ============================================================================
 
-# Pub/Sub clients (initialized in main block to avoid triggering during imports)
-project_id = None
-subscriber = None
-publisher = None
-signals_subscription = None
-trading_orders_topic = None
-order_commands_topic = None
-
-# Service URLs
 ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:8082')
 EXECUTION_SERVICE_URL = os.getenv('EXECUTION_SERVICE_URL', 'http://localhost:8083')
 
@@ -789,13 +818,14 @@ def estimate_ibkr_margin(signal: Dict[str, Any], quantity: float, price: float) 
 # POSITION MANAGEMENT
 # ============================================================================
 
-def get_deployed_capital(strategy_id: str) -> Dict[str, Any]:
+def get_deployed_capital(strategy_id: str, account_state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Get currently deployed capital for a strategy from OPEN positions (not pending orders).
-    Uses PositionManager for accurate position tracking.
+    Calculate deployed capital for a strategy from account state's open positions.
+    Uses account-data-service data (which reads from MongoDB trading_accounts.open_positions[]).
 
     Args:
         strategy_id: Strategy ID to check
+        account_state: Account state dict from account-data-service
 
     Returns:
         Dict with:
@@ -805,7 +835,34 @@ def get_deployed_capital(strategy_id: str) -> Dict[str, Any]:
             - position_count: Number of open positions
     """
     try:
-        return position_manager.get_deployed_capital(strategy_id)
+        # Get open positions from account state (from account-data-service)
+        all_positions = account_state.get('open_positions', [])
+        
+        # Filter for this strategy
+        strategy_positions = [p for p in all_positions if p.get('strategy_id') == strategy_id and p.get('status') == 'OPEN']
+        
+        # Calculate total capital deployed (quantity * avg_entry_price)
+        total_capital = sum(
+            p.get('quantity', 0) * p.get('avg_entry_price', 0)
+            for p in strategy_positions
+        )
+        
+        # Estimate margin (for stocks, typically 25% margin requirement)
+        total_margin = total_capital * 0.25
+        
+        result = {
+            'deployed_capital': total_capital,
+            'deployed_margin': total_margin,
+            'open_positions': strategy_positions,
+            'position_count': len(strategy_positions)
+        }
+        
+        logger.info(f"🔍 get_deployed_capital({strategy_id}): ${result['deployed_capital']:,.2f} from {result['position_count']} positions")
+        if result['position_count'] > 0:
+            for pos in strategy_positions:
+                logger.info(f"   - {pos.get('instrument')}: {pos.get('quantity')} @ ${pos.get('avg_entry_price'):.2f} = ${pos.get('total_cost_basis', 0):,.2f}")
+        
+        return result
     except Exception as e:
         logger.error(f"Error getting deployed capital for {strategy_id}: {e}")
         return {
@@ -837,25 +894,8 @@ def get_account_state(account_name: str) -> Optional[Dict[str, Any]]:
 # ORDER COMMANDS
 # ============================================================================
 
-def publish_cancel_command(order_id: str, reason: str = ""):
-    """
-    Publish a cancel command to order-commands topic
-    """
-    try:
-        command_data = {
-            'command': 'CANCEL',
-            'order_id': order_id,
-            'reason': reason,
-            'timestamp': datetime.utcnow().isoformat()
-        }
-        message_data = json.dumps(command_data, default=str).encode('utf-8')
-        future = publisher.publish(order_commands_topic, message_data)
-        message_id = future.result()
-        logger.info(f"✅ Published cancel command for order {order_id}: {message_id}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Error publishing cancel command for {order_id}: {e}")
-        return False
+# NOTE: Order cancel commands removed - cerebro no longer publishes to pub/sub.
+# Use execution-service API directly if order cancellation is needed.
 
 
 def check_and_cancel_pending_entry(signal: Dict[str, Any], signal_type_info: Dict[str, Any]) -> bool:
@@ -936,7 +976,7 @@ def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) ->
 
         # CONSOLIDATED SCHEMA v3: Query for document with position.status = OPEN
         # The document root has: strategy_id, instrument, position.status
-        # Each leg in legs[] has: decision.status, execution.status
+        # Each leg in legs[] has: cerebro.status, execution.status
         entry_signal = signal_store_collection.find_one({
             "strategy_id": strategy_id,
             "instrument": instrument,
@@ -945,7 +985,7 @@ def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) ->
             "legs": {
                 "$elemMatch": {
                     "leg_type": "ENTRY",
-                    "decision.status": {"$in": ["APPROVED", "RESIZE"]},
+                    "cerebro.status": {"$in": ["APPROVED", "RESIZE"]},
                     "execution.status": "FILLED"
                 }
             }
@@ -984,13 +1024,13 @@ def find_and_cancel_pending_entry(strategy_id: str, instrument: str, direction: 
 
     try:
         # Query for pending ENTRY order (v2 schema first, then v1 fallback)
-        # v2: decision.status, position.status, execution.status
+        # v2: cerebro.status, position.status, execution.status
         # A pending entry is one that's been approved but NOT yet filled (execution.status != FILLED)
         pending_entry = signal_store_collection.find_one({
             "strategy_id": strategy_id,
             "raw.legs.instrument": instrument,
             "raw.legs.direction": entry_direction,
-            "decision.status": {"$in": ["APPROVED", "RESIZE"]},
+            "cerebro.status": {"$in": ["APPROVED", "RESIZE"]},
             "$and": [
                 # Position not yet OPEN (null, doesn't exist, or not OPEN)
                 {"$or": [
@@ -1061,9 +1101,9 @@ def find_and_cancel_pending_entry(strategy_id: str, instrument: str, direction: 
             {
                 "$set": {
                     # v2 schema
-                    "decision.status": "CANCELLED",
-                    "decision.reason": f"Cancelled: EXIT signal arrived before entry filled",
-                    "decision.cancelled_at": cancel_timestamp,
+                    "cerebro.status": "CANCELLED",
+                    "cerebro.reason": f"Cancelled: EXIT signal arrived before entry filled",
+                    "cerebro.cancelled_at": cancel_timestamp,
                     "position.status": "CANCELLED",
                     # v1 schema (for backward compat)
                     "cerebro_decision.decision": "CANCELLED",
@@ -1323,16 +1363,23 @@ def log_detailed_calculation_math(signal: Dict[str, Any], context, decision_obj,
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- 4. SCALING CALCULATION ---")
     signal_account_equity = ps.get('signal_account_equity', 0)
     scaling_ratio = ps.get('scaling_ratio', 0)
+    allocated_capital_available = ps.get('allocated_capital_available', 0)
 
-    if signal_account_equity > 0:
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Account Equity: ${signal_account_equity:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Available Capital: ${available_capital:,.2f}")
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Scaling Ratio: ${available_capital:,.2f} ÷ ${signal_account_equity:,.2f} = {scaling_ratio:.5f}")
+    if signal_account_equity > 0 and allocated_capital_available > 0:
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Signal Account Equity: ${signal_account_equity:,.2f} (from signal payload)")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Allocated Capital Available: ${allocated_capital_available:,.2f} (strategy allocation minus deployed)")
+        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Scaling Ratio Calculation: ${allocated_capital_available:,.2f} ÷ ${signal_account_equity:,.2f} = {scaling_ratio:.5f}")
         calculated_qty = signal_qty * scaling_ratio
         log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Scaled Quantity: {signal_qty} × {scaling_ratio:.5f} = {calculated_qty:.4f}")
         log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | Final Quantity: {decision_obj.quantity} (after precision rules)")
     else:
-        log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | N/A - No signal_account_equity for scaling")
+        # Check if this is an EXIT signal
+        signal_type_info = decision_obj.metadata.get('signal_type_info', {}) if decision_obj.metadata else {}
+        sig_type = signal_type_info.get('signal_type', 'UNKNOWN')
+        if sig_type in ['EXIT', 'SCALE_OUT']:
+            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | N/A - EXIT signals don't use scaling (quantity matches entry position)")
+        else:
+            log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | N/A - No signal_account_equity provided (required for ENTRY signals)")
 
     # --- 5. MARGIN VALIDATION ---
     log_lines.append(f"SIGNAL: {signal_id} | DETAILED_MATH | --- 5. MARGIN VALIDATION ---")
@@ -1383,6 +1430,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     """
     signal_id = signal.get('signal_id')
     signal_store_id = signal.get('mathematricks_signal_id')  # Extract from Pub/Sub message (mongodb_watcher created this)
+    decision_written = False
 
     # Initialize signal processing logger on first signal
     signal_logger = get_signal_processing_logger()
@@ -1396,15 +1444,15 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
     if legs_array and isinstance(legs_array, list) and len(legs_array) > 0:
         # CONSOLIDATED SCHEMA: Extract raw data and legs from first leg that needs processing
-        # Find first leg without decision (needs cerebro processing)
+        # Find first leg without cerebro decision (needs cerebro processing)
         current_leg = None
         for leg in legs_array:
-            if not leg.get('decision'):
+            if not leg.get('cerebro'):  # FIX: Check 'cerebro' field, not 'decision'
                 current_leg = leg
                 break
 
         if not current_leg:
-            logger.debug(f"All legs already have decisions, skipping signal {signal_id}")
+            logger.debug(f"All legs already have cerebro decisions, skipping signal {signal_id}")
             return
 
         # Extract raw data from the current leg
@@ -1467,6 +1515,18 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         'legs': legs
     }
 
+    # Reject if account_equity missing (required for scaling)
+    if normalized_signal.get('account_equity') is None:
+        logger.error(f"❌ Missing account_equity in signal {signal_id} - rejecting")
+        decision = build_decision_v2(
+            status="REJECTED",
+            reason="MISSING_ACCOUNT_EQUITY",
+            signal=signal,
+            legs=legs
+        )
+        update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
+        return
+
     signal_logger.info(f"Processing signal {signal_id} with Portfolio Constructor")
     if signal_store_id:
         logger.info(f"📍 Mathematricks Signal ID: {signal_store_id}")
@@ -1525,6 +1585,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     # Process signal for EACH fund allocation
     # ============================================================================
     all_fund_orders = []  # Collect all orders across all funds
+    missing_accounts = False
     
     for allocation in active_allocations:
         fund_id = allocation['fund_id']
@@ -1572,7 +1633,34 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             continue
         
         # Get available accounts for this strategy in this fund
-        asset_class = strategy_doc.get('asset_class', 'equity')
+        # For multi-asset strategies, determine actual asset class from signal's instrument_type
+        strategy_asset_class = strategy_doc.get('asset_class', 'equity')
+        # Map instrument_type from signal to account asset_class
+        instrument_type = normalized_signal.get('instrument_type', 'STOCK').upper()
+        instrument_to_asset_map = {
+            'STOCK': 'equity',
+            'EQUITY': 'equity',
+            'OPTION': 'options',
+            'OPTIONS': 'options',
+            'FUTURE': 'futures',
+            'FUTURES': 'futures',
+            'FOREX': 'forex',
+            'CRYPTO': 'crypto'
+        }
+        if strategy_asset_class == 'multi-asset':
+            asset_class = instrument_to_asset_map.get(instrument_type, 'equity')
+            logger.info(f"🔄 Multi-asset strategy: mapped instrument_type={instrument_type} → asset_class={asset_class}")
+        else:
+            asset_class = strategy_asset_class
+            if instrument_type in instrument_to_asset_map:
+                mapped_asset_class = instrument_to_asset_map[instrument_type]
+                if mapped_asset_class != 'equity' and (strategy_asset_class is None or str(strategy_asset_class).lower() == 'equity'):
+                    asset_class = mapped_asset_class
+                    logger.warning(
+                        f"⚠️ Strategy asset_class=equity but instrument_type={instrument_type}; "
+                        f"using asset_class={asset_class} for account selection"
+                    )
+        
         mode = signal.get('mode')  # Extract mode for account routing (mock_live, paper_live, etc.)
         
         available_accounts = get_available_accounts_for_strategy(
@@ -1583,6 +1671,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         
         if not available_accounts:
             logger.error(f"❌ No available accounts for strategy {strategy_id} in fund {fund_id}")
+            missing_accounts = True
             continue
         
         logger.info(f"🎯 Found {len(available_accounts)} available account(s):")
@@ -1595,6 +1684,26 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         account_name = primary_account['account_id']
         
         logger.info(f"🎯 Using primary account for signal evaluation: {account_name}")
+
+        # Configure broker adapter for live price fetching (per-signal)
+        # Both 'paper' and 'live' accounts connect to real brokers and have live prices
+        data_source = normalized_signal.get('data_source', 'mock')
+        price_broker_id = None
+        if data_source == 'live':
+            strategy_accounts = strategy_doc.get('accounts', {})
+            if isinstance(strategy_accounts, dict):
+                # Try live accounts first, then paper accounts (both have real prices)
+                for account_type in ['live', 'paper']:
+                    candidates = strategy_accounts.get(account_type, [])
+                    if candidates:
+                        price_broker_id = candidates[0]
+                        logger.info(f"📡 Price broker for live data: {price_broker_id} (from strategy.accounts.{account_type})")
+                        break
+                if not price_broker_id:
+                    logger.error(f"No live or paper accounts configured for strategy {strategy_id} - cannot fetch live prices")
+        broker_adapter.data_source = data_source
+        broker_adapter.price_broker_id = price_broker_id
+        logger.info(f"📡 Broker adapter configured: data_source={data_source}, price_broker={price_broker_id}")
 
         account_state = get_account_state(account_name)
 
@@ -1946,7 +2055,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
 
             # Get allocated capital and deployed capital
             allocated_capital = decision_obj.allocated_capital
-            deployment_info = get_deployed_capital(strategy_id)
+            deployment_info = get_deployed_capital(strategy_id, account_state)
             deployed_capital = deployment_info['deployed_capital']
             open_positions = deployment_info['open_positions']
             position_count = deployment_info['position_count']
@@ -1954,14 +2063,16 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             # Calculate available capital
             allocated_capital_available = allocated_capital - deployed_capital
 
-            # Calculate scaling ratio for quantity using BROKER's account equity
-            # This ensures proper scaling: if signal uses 10% of 10K account (25 shares),
-            # and broker has 154K equity, we scale 154K/10K = 15.4x → 385 shares
-            broker_account_equity = account_state.get('equity', 0)
-            scaling_ratio = broker_account_equity / signal_account_equity
+            # Calculate scaling ratio for quantity using FULL ALLOCATED CAPITAL (before deployment)
+            # Multi-fund architecture: Each strategy gets a slice of total equity
+            # Example: Strategy has $100K allocation, signal designed for $100K → scaling = 1.0
+            # Example: Strategy has $200K allocation, signal designed for $100K → scaling = 2.0
+            # Note: Margin validation will check if we can afford this with available capital
+            broker_account_equity = account_state.get('equity', 0)  # For logging reference only
+            scaling_ratio = allocated_capital / signal_account_equity
 
             logger.info(f"📊 Allocation: ${allocated_capital:,.2f} - ${deployed_capital:,.2f} deployed = ${allocated_capital_available:,.2f} available")
-            logger.info(f"📊 Scaling ratio: ${broker_account_equity:,.2f} (broker equity) / ${signal_account_equity:,.2f} (signal equity) = {scaling_ratio:.5f}")
+            logger.info(f"📊 Scaling ratio: ${allocated_capital:,.2f} (allocated capital) / ${signal_account_equity:,.2f} (signal equity) = {scaling_ratio:.5f}")
 
             # Check if we have capital available
             if allocated_capital_available <= 0:
@@ -2182,6 +2293,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         'leg_results': leg_results,
                         'account_state': account_state,  # For decision.math display
                         'position_sizing': {
+                            'allocation_percentage': strategy_pct,  # For display in Section 3
                             'allocated_capital': allocated_capital,
                             'deployed_capital': deployed_capital,
                             'allocated_capital_available': allocated_capital_available,
@@ -2226,18 +2338,6 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             logger.info(f"Margin Required: ${decision_obj.margin_required:,.2f}")
         logger.info(f"{'='*70}")
 
-        # Step 5: Save decision to MongoDB (v2 format)
-        decision_doc = build_decision_v2(
-            status=decision_obj.action,
-            reason=decision_obj.reason,
-            signal=signal,
-            decision_obj=decision_obj,
-            legs=legs  # Pass legs explicitly so raw_qty can be extracted
-        )
-
-        # Write decision to signal_store (embedded)
-        update_signal_store_with_decision(signal_store_id, decision_doc)
-
         # Unified signal processing log for decision
         logger.info(f"SIGNAL: {signal_id} | DECISION | Action={decision_obj.action} | OrigQty={normalized_signal.get('quantity', 0)} | FinalQty={decision_obj.quantity} | Reason={decision_obj.reason}")
 
@@ -2255,6 +2355,18 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     logger.warning(f"Rounded quantity is 0, rejecting signal")
                     continue  # Skip this fund, try next one
 
+                # Determine price: fetch live if data_source='live', else use signal price
+                if data_source == 'live':
+                    order_price = broker_adapter.fetch_live_price(
+                        normalized_signal.get('instrument'),
+                        instrument_type
+                    )
+                    logger.info(f"📈 EXIT/single-leg: live price ${order_price} (signal price was ${normalized_signal.get('price')})")
+                else:
+                    order_price = normalized_signal.get('price')
+                    if not order_price or order_price <= 0:
+                        raise ValueError(f"No price available in signal for {normalized_signal.get('instrument')}")
+
                 leg_results = [{
                     'leg_index': 0,
                     'instrument': normalized_signal.get('instrument'),
@@ -2263,7 +2375,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     'action': normalized_signal.get('action'),
                     'order_type': normalized_signal.get('order_type', 'MARKET'),
                     'quantity': final_quantity_rounded,
-                    'price_used': normalized_signal.get('price', 0)
+                    'price_used': order_price
                 }]
 
             # ============================================================================
@@ -2289,7 +2401,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             leg_account_quantities = {}
             for leg_result in leg_results:
                 leg_index = leg_result.get('leg_index', 0)
-                leg_base_quantity = int(leg_result.get('quantity', 0))
+                leg_base_quantity = leg_result.get('quantity', 0)  # Keep as float for crypto/forex
                 leg_instrument_type = leg_result.get('instrument_type', 'STOCK')
                 
                 # Use proper allocation function to distribute quantities
@@ -2301,9 +2413,66 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 )
                 leg_account_quantities[leg_index] = allocated_quantities
             
+            # Update cerebro.created_orders with broker and account-specific details
+            # This enriches the orders with execution-specific information
+            enriched_orders = []
+            for account_idx, account_alloc in enumerate(account_allocations):
+                target_account_name = account_alloc['account_id']
+                account_broker = account_alloc.get('broker', 'Unknown')
+                account_capital = account_alloc['allocated_capital']
+                
+                for leg_result in leg_results:
+                    leg_index = leg_result.get('leg_index', 0)
+                    leg_quantity = leg_account_quantities[leg_index][account_idx]
+                    leg_instrument_type = leg_result.get('instrument_type', 'STOCK')
+                    
+                    if leg_quantity > 0:
+                        # Preserve fractional quantities for crypto/forex/stock
+                        if leg_instrument_type in ['CRYPTO', 'FOREX', 'STOCK']:
+                            final_quantity = leg_quantity  # Keep as float
+                        else:
+                            final_quantity = int(leg_quantity)  # Integer contracts for options/futures
+                        
+                        enriched_orders.append({
+                            "instrument": leg_result.get('instrument'),
+                            "instrument_type": leg_instrument_type,
+                            "action": leg_result.get('action'),
+                            "direction": leg_result.get('direction'),
+                            "quantity": final_quantity,
+                            "order_type": leg_result.get('order_type', 'MARKET'),
+                            "price": leg_result.get('price_used', 0),
+                            "margin_required": leg_result.get('initial_margin', 0) * (account_capital / target_capital) if target_capital > 0 else 0,
+                            "broker": account_broker,  # ✅ Broker field included
+                            "account_id": target_account_name,
+                            "fund_id": fund_id,
+                            "allocated_capital": account_capital,
+                            "data_source": normalized_signal.get('data_source', 'mock'),  # ✅ For price enrichment
+                            "legs": leg_result.get('legs') if leg_result.get('legs') else None
+                        })
+            
+            # Build complete cerebro document with enriched orders
+            decision_doc = build_decision_v2(
+                status=decision_obj.action,
+                reason=decision_obj.reason,
+                signal=signal,
+                decision_obj=decision_obj,
+                legs=legs  # Pass legs explicitly so raw_qty can be extracted
+            )
+            
+            # Replace created_orders with enriched version that includes broker/account info
+            decision_doc["created_orders"] = enriched_orders
+            
+            # Update signal_store with COMPLETE cerebro document
+            update_signal_store_with_decision(signal_store_id, decision_doc, raw_signal_id)
+            decision_written = True
+            logger.info(f"✅ Updated signal_store with cerebro including {len(enriched_orders)} enriched order(s) with broker info")
+            
+            # Now create and send trading orders to execution service
+            
             for account_idx, account_alloc in enumerate(account_allocations):
                 target_account_name = account_alloc['account_id']
                 account_capital = account_alloc['allocated_capital']
+                account_broker = account_alloc.get('broker', 'Unknown')
 
                 for leg_result in leg_results:
                     leg_index = leg_result.get('leg_index', 0)
@@ -2341,6 +2510,12 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         elif order_direction == 'SHORT':
                             order_action = 'BUY_TO_COVER'
 
+                    # Conditional quantity conversion: preserve fractional for crypto/forex/stock, int for options/futures
+                    if leg_instrument_type in ['CRYPTO', 'FOREX', 'STOCK']:
+                        execution_quantity = leg_quantity  # Keep fractional (e.g., 0.5 BTC)
+                    else:
+                        execution_quantity = int(leg_quantity)  # Integer for contracts (options/futures)
+                    
                     trading_order = {
                         "order_id": order_id,
                         "signal_id": signal_id,
@@ -2350,6 +2525,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         "fund_id": fund_id,  # NEW: Fund architecture support
                         "account_id": target_account_name,  # NEW: Renamed from "account"
                         "account": target_account_name,  # DEPRECATED: Keep for backward compatibility
+                        "broker": account_broker,  # Broker name (Mock, IBKR, Coinbase, etc.)
                         "timestamp": datetime.utcnow().isoformat(),  # Convert to ISO string for JSON
                         "instrument": leg_result.get('instrument'),
                         "direction": order_direction,
@@ -2358,7 +2534,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         "side": "SELL" if signal_type in ['EXIT', 'SCALE_OUT'] else "BUY",  # Explicit side for execution service
                         "order_type": leg_result.get('order_type', 'MARKET'),
                         "price": leg_result.get('price_used', 0),
-                        "quantity": int(leg_quantity),  # Convert to int for Pydantic validation
+                        "quantity": execution_quantity,  # Fractional for crypto/forex/stock, integer for options/futures
                         "stop_loss": first_leg.get('stop_loss'),
                         "take_profit": first_leg.get('take_profit'),
                         "expiry": first_leg.get('expiry'),
@@ -2414,7 +2590,15 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                         payload = trading_order
                         
                         logger.info(f"📤 Calling Execution API: {api_endpoint}")
-                        logger.info(f"   Payload: {payload}")
+                        logger.info(f"   📋 CEREBRO → EXECUTION ORDER SUMMARY:")
+                        logger.info(f"   order_id: {payload.get('order_id')}")
+                        logger.info(f"   instrument: {payload.get('instrument')} ({payload.get('instrument_type')})")
+                        logger.info(f"   action: {payload.get('action')} | direction: {payload.get('direction')}")
+                        logger.info(f"   quantity: {payload.get('quantity')}")
+                        logger.info(f"   price: ${payload.get('price')} (data_source={payload.get('data_source')})")
+                        logger.info(f"   account_id: {payload.get('account_id')}")
+                        logger.info(f"   fund_id: {payload.get('fund_id')}")
+                        logger.info(f"   Full payload: {payload}")
                         
                         response = requests.post(
                             api_endpoint,
@@ -2444,6 +2628,19 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             if len(orders_created) > 0:
                 logger.info(f"✅ Created {len(orders_created)} order(s) for fund {fund_id}")
             logger.info(f"{'='*70}\n")
+        
+        else:
+            # REJECTED signal - save decision to signal_store
+            decision_doc = build_decision_v2(
+                status=decision_obj.action,
+                reason=decision_obj.reason,
+                signal=signal,
+                decision_obj=decision_obj,
+                legs=legs
+            )
+            update_signal_store_with_decision(signal_store_id, decision_doc, raw_signal_id)
+            decision_written = True
+            logger.info(f"✅ Saved REJECTED decision to signal_store")
     
         # ============================================================================
     # Summary: All funds processed
@@ -2453,37 +2650,16 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         logger.info(f"📦 Total orders created: {len(all_fund_orders)}")
     else:
         logger.warning(f"⚠️ Signal {signal_id} processed but no orders created")
+        if not decision_written:
+            reason = "NO_AVAILABLE_ACCOUNTS" if missing_accounts else "NO_ORDERS_CREATED"
+            decision = build_decision_v2(
+                status="REJECTED",
+                reason=reason,
+                signal=signal,
+                legs=legs
+            )
+            update_signal_store_with_decision(signal_store_id, decision, raw_signal_id)
     logger.info("-" * 50)
-
-
-# ============================================================================
-# PUB/SUB SUBSCRIBER
-# ============================================================================
-
-def signals_callback(message):
-    """
-    Callback for standardized signals from Pub/Sub
-    """
-    try:
-        data = json.loads(message.data.decode('utf-8'))
-        logger.info(f"Received signal: {data.get('signal_id')}")
-
-        # Use new portfolio constructor approach
-        process_signal_with_constructor(data)
-
-        message.ack()
-
-    except Exception as e:
-        signal_id = data.get('signal_id', 'UNKNOWN') if 'data' in locals() else 'UNKNOWN'
-        logger.error(f"🚨 CRITICAL ERROR processing signal {signal_id}: {str(e)}", exc_info=True)
-        logger.error(f"Signal data: {data if 'data' in locals() else 'Not available'}")
-        logger.error(f"Error type: {type(e).__name__}")
-        logger.error(f"Error details: {e.args}")
-
-        # IMPORTANT: ACK the message to prevent infinite redelivery loop
-        # The failsafe in execution service will catch any duplicate attempts
-        logger.warning(f"⚠️ ACKing failed signal {signal_id} to prevent redelivery loop")
-        message.ack()
 
 
 # ============================================================================

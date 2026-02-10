@@ -269,11 +269,12 @@ class SignalIngestionService:
         except Exception as e:
             logger.warning(f"⚠️ Error sending Telegram notification: {e}")
 
-        logger.info(f"✅ Signal published to Cerebro: {message_id}")
-        logger.info(f"   → Signal ID: {standardized_signal['signal_id']}")
-        logger.info(f"   → Mathematricks Signal ID: {mathematricks_signal_id}")
-        logger.info(f"   → Instrument: {standardized_signal['instrument']}")
-        logger.info(f"   → Action: {standardized_signal['action']}")
+        # Signal processing complete (cerebro called via mongodb_watcher)
+        logger.info(f"✅ Signal processing complete")
+        if mathematricks_signal_id:
+            logger.info(f"   → Mathematricks Signal ID: {mathematricks_signal_id}")
+        if signal_id_from_data:
+            logger.info(f"   → Signal ID: {signal_id_from_data}")
         logger.info("-" * 50)
 
     def start(self):

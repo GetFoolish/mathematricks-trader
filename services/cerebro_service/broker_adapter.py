@@ -2,9 +2,12 @@
 Broker Adapter for Cerebro Service
 
 Provides broker-like interface for margin calculations.
+When data_source='live', fetches real prices from execution service's /api/v1/price endpoint.
+When data_source='mock', uses signal prices (fallback).
 Uses AccountDataService to fetch real margin data from IBKR for futures.
 """
 
+import os
 import logging
 import requests
 from typing import Dict, Any, Optional
@@ -20,15 +23,8 @@ class CerebroBrokerAdapter:
     """
     Adapter to provide broker-like interface for margin calculators.
 
-    Current implementation (Phase 1):
-    - Uses signal data for prices when available
-    - Provides fallback margin calculations
-    - Does NOT fetch live prices from broker
-
-    Future implementation (Phase 2):
-    - Integrate with AccountDataService API
-    - Fetch real-time prices from broker
-    - Get actual margin requirements from broker
+    When data_source='live': fetches real-time prices from execution service API
+    When data_source='mock': uses signal price from the signal data
     """
 
     def __init__(self, broker_name: str = "IBKR", account_id: str = "IBKR_PAPER", use_mock: bool = False):
@@ -43,178 +39,145 @@ class CerebroBrokerAdapter:
         self.broker_name = broker_name
         self.account_id = account_id
         self.use_mock = use_mock
+        self.execution_service_url = os.getenv('EXECUTION_SERVICE_URL', 'http://localhost:8083')
+
+        # Per-signal state (set by cerebro_main before each margin calculation)
+        self.data_source = 'mock'       # 'mock' or 'live'
+        self.price_broker_id = None     # e.g. 'IBKR_PAPER' — the live broker to query for prices
+
         mode_str = "MOCK MODE" if use_mock else "LIVE MODE"
         logger.info(f"Initialized CerebroBrokerAdapter for {broker_name} (account: {account_id}) - {mode_str}")
+
+    # ========================================================================
+    # LIVE PRICE FETCHING (via execution service)
+    # ========================================================================
+
+    def fetch_live_price(self, symbol: str, instrument_type: str = 'STOCK') -> float:
+        """
+        Fetch live price from execution service's /api/v1/price endpoint.
+
+        Args:
+            symbol: Instrument symbol (e.g., 'AAPL', 'BTC-USD')
+            instrument_type: Type of instrument (STOCK, CRYPTO, FOREX, etc.)
+
+        Returns:
+            float: Live market price
+
+        Raises:
+            ValueError: If price cannot be fetched
+        """
+        url = f"{self.execution_service_url}/api/v1/price/{symbol}"
+        params = {'instrument_type': instrument_type}
+        if self.price_broker_id:
+            params['broker'] = self.price_broker_id
+
+        try:
+            logger.info(f"Fetching live price: GET {url} params={params}")
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            price = data['price']
+            broker_used = data.get('broker', 'unknown')
+            logger.info(f"Live price for {symbol}: ${price} (from broker: {broker_used})")
+            return price
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch live price for {symbol} from execution service: {e}")
+            raise ValueError(f"Live price fetch failed for {symbol}: {e}")
+
+    def _get_price_with_live_fallback(self, ticker: str, instrument_type: str, signal_price: Optional[float] = None) -> Dict[str, float]:
+        """
+        Common logic: if data_source='live', fetch live price. Otherwise use signal price.
+
+        Returns:
+            Dict with price data including 'price', 'last', 'bid', 'ask', 'timestamp', '_source'
+        """
+        # Live mode: fetch from execution service
+        if self.data_source == 'live':
+            live_price = self.fetch_live_price(ticker, instrument_type)
+            return {
+                'price': live_price,
+                'last': live_price,
+                'bid': live_price * 0.999,
+                'ask': live_price * 1.001,
+                'timestamp': datetime.utcnow(),
+                '_source': f'{self.price_broker_id}_live'
+            }
+
+        # Mock mode: use signal price
+        if signal_price and signal_price > 0:
+            logger.debug(f"Using signal price for {ticker}: ${signal_price}")
+            return {
+                'price': signal_price,
+                'last': signal_price,
+                'bid': signal_price * 0.999,
+                'ask': signal_price * 1.001,
+                'timestamp': datetime.utcnow(),
+                '_source': 'signal'
+            }
+
+        raise ValueError(
+            f"No price available for {ticker}. "
+            f"data_source={self.data_source}, signal_price={signal_price}"
+        )
 
     # ========================================================================
     # STOCK/ETF PRICING
     # ========================================================================
 
     def get_ticker_price(self, ticker: str, signal_price: Optional[float] = None) -> Dict[str, float]:
-        """
-        Get stock/ETF price.
-
-        Current: Uses signal price if provided
-        TODO: Fetch from broker API
-
-        Args:
-            ticker: Stock ticker
-            signal_price: Price from signal (fallback)
-
-        Returns:
-            Dict with price data
-        """
-        if signal_price and signal_price > 0:
-            logger.debug(f"Using signal price for {ticker}: ${signal_price}")
-            return {
-                'price': signal_price,
-                'last': signal_price,
-                'bid': signal_price * 0.999,  # Approximate bid (0.1% below)
-                'ask': signal_price * 1.001,  # Approximate ask (0.1% above)
-                'timestamp': datetime.utcnow()
-            }
-
-        # If no signal price, we must reject
-        raise ValueError(
-            f"No price available for {ticker}. "
-            f"Signal must include 'price' field, or broker integration must be completed."
-        )
+        """Get stock/ETF price. Live if data_source='live', else signal price."""
+        return self._get_price_with_live_fallback(ticker, 'STOCK', signal_price)
 
     # ========================================================================
     # FOREX PRICING
     # ========================================================================
 
     def get_forex_rate(self, ticker: str, signal_price: Optional[float] = None) -> Dict[str, float]:
-        """
-        Get forex pair rate.
-
-        Current: Uses signal price if provided
-        TODO: Fetch from broker API
-
-        Args:
-            ticker: Forex pair (e.g., 'AUDCAD')
-            signal_price: Price from signal (fallback)
-
-        Returns:
-            Dict with rate data
-        """
-        if signal_price and signal_price > 0:
-            # For forex, bid/ask spread is typically 0.0001-0.0005
-            spread = signal_price * 0.0002  # 0.02% spread
-            logger.debug(f"Using signal price for {ticker}: {signal_price}")
-            return {
-                'price': signal_price,
-                'mid': signal_price,
-                'bid': signal_price - spread / 2,
-                'ask': signal_price + spread / 2,
-                'timestamp': datetime.utcnow()
-            }
-
-        raise ValueError(
-            f"No price available for forex pair {ticker}. "
-            f"Signal must include 'price' field, or broker integration must be completed."
-        )
+        """Get forex pair rate. Live if data_source='live', else signal price."""
+        result = self._get_price_with_live_fallback(ticker, 'FOREX', signal_price)
+        # Add forex-specific fields
+        result['mid'] = result['price']
+        spread = result['price'] * 0.0002  # 0.02% spread
+        result['bid'] = result['price'] - spread / 2
+        result['ask'] = result['price'] + spread / 2
+        return result
 
     # ========================================================================
     # OPTIONS PRICING
     # ========================================================================
 
     def get_option_price(self, ticker: str, signal_price: Optional[float] = None) -> Dict[str, float]:
-        """
-        Get option premium.
-
-        Current: Uses signal price if provided
-        TODO: Fetch from broker API
-
-        Args:
-            ticker: Option symbol
-            signal_price: Premium from signal (fallback)
-
-        Returns:
-            Dict with premium data
-        """
-        if signal_price and signal_price > 0:
-            logger.debug(f"Using signal premium for {ticker}: ${signal_price}")
-            return {
-                'price': signal_price,
-                'premium': signal_price,
-                'bid': signal_price * 0.95,  # Approximate (5% spread for options)
-                'ask': signal_price * 1.05,
-                'timestamp': datetime.utcnow()
-            }
-
-        raise ValueError(
-            f"No premium available for option {ticker}. "
-            f"Signal must include 'price' field, or broker integration must be completed."
-        )
+        """Get option premium. Live if data_source='live', else signal price."""
+        result = self._get_price_with_live_fallback(ticker, 'OPTION', signal_price)
+        result['premium'] = result['price']
+        # Options have wider spreads
+        result['bid'] = result['price'] * 0.95
+        result['ask'] = result['price'] * 1.05
+        return result
 
     # ========================================================================
     # FUTURES PRICING
     # ========================================================================
 
     def get_futures_price(self, ticker: str, signal_price: Optional[float] = None) -> Dict[str, float]:
-        """
-        Get futures price.
-
-        Current: Uses signal price if provided
-        TODO: Fetch from broker API
-
-        Args:
-            ticker: Futures symbol
-            signal_price: Price from signal (fallback)
-
-        Returns:
-            Dict with price data
-        """
-        if signal_price and signal_price > 0:
-            logger.debug(f"Using signal price for {ticker}: {signal_price}")
-            return {
-                'price': signal_price,
-                'settlement': signal_price,
-                'last': signal_price,
-                'bid': signal_price - 0.01,  # Approximate tick
-                'ask': signal_price + 0.01,
-                'timestamp': datetime.utcnow()
-            }
-
-        raise ValueError(
-            f"No price available for futures {ticker}. "
-            f"Signal must include 'price' field, or broker integration must be completed."
-        )
+        """Get futures price. Live if data_source='live', else signal price."""
+        result = self._get_price_with_live_fallback(ticker, 'FUTURE', signal_price)
+        result['settlement'] = result['price']
+        result['bid'] = result['price'] - 0.01
+        result['ask'] = result['price'] + 0.01
+        return result
 
     # ========================================================================
     # CRYPTO PRICING
     # ========================================================================
 
     def get_crypto_price(self, ticker: str, signal_price: Optional[float] = None) -> Dict[str, float]:
-        """
-        Get cryptocurrency price.
-
-        Current: Uses signal price if provided
-        TODO: Fetch from exchange API
-
-        Args:
-            ticker: Crypto symbol
-            signal_price: Price from signal (fallback)
-
-        Returns:
-            Dict with price data
-        """
-        if signal_price and signal_price > 0:
-            # Crypto spreads can be wider (0.1-0.5%)
-            logger.debug(f"Using signal price for {ticker}: ${signal_price}")
-            return {
-                'price': signal_price,
-                'last': signal_price,
-                'bid': signal_price * 0.997,  # 0.3% spread
-                'ask': signal_price * 1.003,
-                'timestamp': datetime.utcnow()
-            }
-
-        raise ValueError(
-            f"No price available for crypto {ticker}. "
-            f"Signal must include 'price' field, or exchange integration must be completed."
-        )
+        """Get cryptocurrency price. Live if data_source='live', else signal price."""
+        result = self._get_price_with_live_fallback(ticker, 'CRYPTO', signal_price)
+        # Crypto has wider spreads
+        result['bid'] = result['price'] * 0.997
+        result['ask'] = result['price'] * 1.003
+        return result
 
     # ========================================================================
     # MARGIN REQUIREMENTS
@@ -283,7 +246,7 @@ class CerebroBrokerAdapter:
             if self.use_mock:
                 # Use 10% initial margin estimate for mock mode (typical for Gold/Copper futures)
                 margin = notional_value * 0.10
-                logger.info(f"📋 MOCK MODE: Using estimated futures margin for {ticker}: ${margin:,.2f}")
+                logger.info(f"MOCK MODE: Using estimated futures margin for {ticker}: ${margin:,.2f}")
                 return {
                     'initial_margin': margin,
                     'maintenance_margin': margin * 0.75,
@@ -299,10 +262,8 @@ class CerebroBrokerAdapter:
             # In mock mode, use a conservative estimate based on buying options
             if self.use_mock:
                 # For buying options: margin = option premium (notional value)
-                # This is conservative - actual margin depends on strategy
-                # For a LONG option (BUY), margin is just the premium paid
                 margin = notional_value
-                logger.info(f"📋 MOCK MODE: Using estimated options margin for {ticker}: ${margin:,.2f} (full premium)")
+                logger.info(f"MOCK MODE: Using estimated options margin for {ticker}: ${margin:,.2f} (full premium)")
                 return {
                     'initial_margin': margin,
                     'maintenance_margin': margin,
@@ -392,7 +353,7 @@ class CerebroBrokerAdapter:
                 init_margin = margin_impact.get('init_margin_change', 0)
                 maint_margin = margin_impact.get('maint_margin_change', 0)
 
-                logger.info(f"✅ Futures margin from IBKR: Initial=${init_margin:,.2f}, Maintenance=${maint_margin:,.2f}")
+                logger.info(f"Futures margin from IBKR: Initial=${init_margin:,.2f}, Maintenance=${maint_margin:,.2f}")
 
                 return {
                     'initial_margin': init_margin,
@@ -425,9 +386,6 @@ class CerebroBrokerAdapter:
     def get_quantity_precision(self, symbol: str, instrument_type: str) -> int:
         """
         Get the number of decimal places allowed for quantity.
-
-        Current: Uses default precision map
-        TODO: Query real broker for actual precision
 
         Args:
             symbol: Asset symbol (e.g., "AAPL", "EURUSD")

@@ -140,6 +140,13 @@ def build_broker_config(broker_name: str, account_id: str, auth_details: Dict) -
             "api_key": auth_details.get('api_key'),
             "practice": auth_details.get('practice', True)
         })
+
+    elif broker_name == 'Coinbase':
+        config.update({
+            "api_key": auth_details.get('api_key_name') or auth_details.get('api_key'),
+            "api_secret": auth_details.get('api_key'),
+            "sandbox": auth_details.get('sandbox', True)
+        })
     
     elif broker_name == 'Mock':
         config.update(auth_details)

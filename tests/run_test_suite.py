@@ -59,11 +59,19 @@ class TestSuite:
                 result = db[coll_name].delete_many({})
                 print(f"   ✅ {coll_name}: deleted {result.deleted_count} document(s)")
             
-            # Reset trading account balances
+            # Reset trading account balances (ONLY MOCK accounts - paper/live use real balances)
             print("\n💰 Resetting account balances...")
             accounts = list(db['trading_accounts'].find({}))
             reset_count = 0
             for account in accounts:
+                account_type = account.get('account_type', '').lower()
+                account_id = account.get('account_id')
+                
+                # Only reset mock accounts - paper and live accounts keep their real balances
+                if account_type != 'mock':
+                    print(f"   ⏭️  {account_id}: skipped (account_type={account_type}, keeping real balance)")
+                    continue
+                
                 initial_equity = account.get('authentication_details', {}).get('initial_equity', 1000000.0)
                 
                 reset_balances = {
@@ -94,7 +102,7 @@ class TestSuite:
                     }
                 )
                 reset_count += 1
-                print(f"   ✅ {account.get('account_id')}: reset to ${initial_equity:,.2f}")
+                print(f"   ✅ {account_id}: reset to ${initial_equity:,.2f}")
             
             # Reset fund total_equity
             print("\n💼 Resetting fund total_equity...")

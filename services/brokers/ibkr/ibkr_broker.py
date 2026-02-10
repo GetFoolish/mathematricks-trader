@@ -300,12 +300,14 @@ class IBKRBroker(AbstractBroker):
     # ORDER MANAGEMENT
     # ========================================================================
 
-    def _translate_direction_to_side(self, direction: str) -> str:
+    def _translate_direction_to_side(self, direction: str, instrument: str = None, account_id: str = None) -> str:
         """
         Translate internal direction to IBKR side.
 
         Args:
-            direction: Internal direction ("LONG" or "SHORT")
+            direction: Internal direction ("LONG", "SHORT", or "CLOSE")
+            instrument: Symbol (required if direction is "CLOSE")
+            account_id: Account ID (required if direction is "CLOSE")
 
         Returns:
             IBKR side ("BUY" or "SELL")
@@ -315,6 +317,29 @@ class IBKRBroker(AbstractBroker):
             'SHORT': 'SELL'
         }
         direction_upper = direction.upper() if direction else ''
+        
+        # Handle CLOSE direction - need to determine opposite side from position
+        if direction_upper == 'CLOSE':
+            if not instrument or not account_id:
+                logger.warning(f"CLOSE direction requires instrument and account_id, but got instrument={instrument}, account_id={account_id}")
+                return 'BUY'  # Default fallback
+                
+            try:
+                # Get positions from account state
+                positions = self.get_positions(account_id)
+                for pos in positions:
+                    if pos.get('instrument') == instrument:
+                        pos_direction = pos.get('direction', '').upper()
+                        # Close LONG position = SELL, Close SHORT position = BUY
+                        return 'SELL' if pos_direction == 'LONG' else 'BUY'
+                
+                # No position found - default to BUY (safest for closing shorts)
+                logger.warning(f"No position found for {instrument} in account {account_id}, defaulting CLOSE to BUY")
+                return 'BUY'
+            except Exception as e:
+                logger.error(f"Error determining side for CLOSE order: {e}")
+                return 'BUY'  # Default fallback
+        
         return mapping.get(direction_upper, direction_upper)
 
     def _translate_order(self, internal_order: Dict[str, Any]) -> Dict[str, Any]:
@@ -365,8 +390,12 @@ class IBKRBroker(AbstractBroker):
             # Rename 'instrument' to 'symbol' and uppercase
             'symbol': internal_order.get('instrument', '').upper(),
 
-            # Translate 'direction' to 'side' (LONG→BUY, SHORT→SELL)
-            'side': self._translate_direction_to_side(internal_order.get('direction', '')),
+            # Translate 'direction' to 'side' (LONG→BUY, SHORT→SELL, CLOSE→depends on position)
+            'side': self._translate_direction_to_side(
+                internal_order.get('direction', ''),
+                instrument=internal_order.get('instrument', ''),
+                account_id=internal_order.get('account_id', '')
+            ),
 
             # Quantity - pass through as float, precision should be applied before reaching here
             'quantity': float(internal_order.get('quantity', 0)),
@@ -1062,8 +1091,15 @@ class IBKRBroker(AbstractBroker):
         # Wait for result with timeout
         try:
             return future.result(timeout=10.0)
+        except TimeoutError:
+            # Timeout usually means no market data available (market closed or data permissions issue)
+            logger.warning(f"⏱️ Timeout fetching price for {symbol} - market may be closed or no data permissions")
+            raise BrokerAPIError(
+                f"No market data available for {symbol}. Market may be closed or data subscription required.",
+                broker_name="IBKR"
+            )
         except Exception as e:
-            logger.error(f"Error fetching price for {symbol}: {e}", exc_info=True)
+            logger.error(f"Error fetching price for {symbol}: {e}")
             raise BrokerAPIError(f"Failed to get market price: {str(e)}", broker_name="IBKR")
 
     async def _fetch_price_async(self, symbol: str, instrument_type: str) -> float:

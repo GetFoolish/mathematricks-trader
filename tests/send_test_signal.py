@@ -304,9 +304,7 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
     signal_payload["data_source"] = data_source
     signal_payload["account_type"] = account_type
     
-    # Add account_equity if not present (required for position sizing)
-    if "account_equity" not in signal_payload:
-        signal_payload["account_equity"] = 1000000.0  # Default $1M for testing
+    # Do not inject account_equity; must be provided by signal payload
 
     # POST to signal receiver API
     try:

@@ -46,7 +46,7 @@ class CryptoMarginCalculator(BaseMarginCalculator):
         """
         try:
             # Normalize ticker - remove common separators
-            normalized_ticker = ticker.replace('-', '').replace('_', '').replace('/', '').upper()
+            normalized_ticker = ticker.upper()
 
             # Try crypto-specific method first
             if hasattr(self.broker, 'get_crypto_price'):

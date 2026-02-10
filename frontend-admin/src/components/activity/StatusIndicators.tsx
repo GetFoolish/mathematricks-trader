@@ -38,14 +38,14 @@ export const getServiceStatus = (leg: any) => {
   let cerebroStatus: 'gray' | 'green' | 'orange' | 'red' = 'gray';
   let cerebroTooltip = 'Cerebro: No decision';
   
-  if (leg.decision) {
-    if (leg.decision.status === 'REJECTED') {
+  if (leg.cerebro) {
+    if (leg.cerebro.status === 'REJECTED') {
       cerebroStatus = 'red';
       cerebroTooltip = 'Cerebro: Rejected';
-    } else if (leg.decision.status === 'APPROVED') {
+    } else if (leg.cerebro.status === 'APPROVED') {
       cerebroStatus = 'green';
       cerebroTooltip = 'Cerebro: Approved';
-    } else if (leg.decision.status === 'PENDING') {
+    } else if (leg.cerebro.status === 'PENDING') {
       cerebroStatus = 'orange';
       cerebroTooltip = 'Cerebro: Pending';
     }
