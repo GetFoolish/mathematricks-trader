@@ -5,20 +5,48 @@ Usage: .venv/bin/python test_ibgateway_price.py [SYMBOL]
 """
 import sys
 import time
+import subprocess
 from ib_insync import IB, Stock, util
 
 # Configuration
 HOST = "127.0.0.1"
-PORT = 49347  # IB Gateway port (check with: docker port ib-gateway-ibkr-paper)
 CLIENT_ID = 999  # Use unique client ID to avoid conflicts
 
-def get_price(symbol='AAPL'):
+def get_ibgateway_port(container_name='ib-gateway-ibkr-paper'):
+    """
+    Dynamically detect IB Gateway port from docker.
+    Returns the host port mapped to container port 4004.
+    """
+    try:
+        result = subprocess.run(
+            ['docker', 'port', container_name, '4004'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode == 0 and result.stdout.strip():
+            # Output format: "0.0.0.0:57122" or "[::]:57122"
+            # Take first line and extract port number
+            port_line = result.stdout.strip().split('\n')[0]
+            port = int(port_line.split(':')[-1])
+            print(f"🔍 Auto-detected IB Gateway port: {port}")
+            return port
+        else:
+            print(f"⚠️  Could not auto-detect port. Using default 4004")
+            return 4004
+            
+    except Exception as e:
+        print(f"⚠️  Error detecting port: {e}. Using default 4004")
+        return 4004
+
+def get_price(symbol='AAPL', port=4004):
     """Fetch current market price for a symbol."""
     ib = IB()
     
     try:
-        print(f"🔌 Connecting to IB Gateway at {HOST}:{PORT}...")
-        ib.connect(HOST, PORT, clientId=CLIENT_ID, timeout=10)
+        print(f"🔌 Connecting to IB Gateway at {HOST}:{port}...")
+        ib.connect(HOST, port, clientId=CLIENT_ID, timeout=10)
         print(f"✅ Connected! Client ID: {CLIENT_ID}")
         
         # Request market data type (4 = delayed frozen for paper)
@@ -78,7 +106,10 @@ if __name__ == "__main__":
     print("IB Gateway Direct Price Test")
     print("=" * 60)
     
-    price = get_price(symbol)
+    # Get dynamic port
+    PORT = get_ibgateway_port()
+    
+    price = get_price(symbol, PORT)
     
     if price:
         print(f"\n🎉 Final Result: {symbol} = ${price:.2f}")

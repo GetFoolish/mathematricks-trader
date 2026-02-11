@@ -293,8 +293,8 @@ export const Activity: React.FC = () => {
                                     const legId = `${signal._id}-${legIdx}`;
                                     const isLegExpanded = expandedLegId === legId;
                                     const showMath = showMathForLeg === legId;
-                                    const decision = leg.decision || {};
-                                    const decisionStatus = decision.status || 'PENDING';
+                                    const cerebro = leg.cerebro || {};
+                                    const decisionStatus = cerebro.status || 'PENDING';
                                     const execution = leg.execution || {};
                                     const executionStatus = execution.status;
                                     const executionError = execution.error_reason;
@@ -328,13 +328,13 @@ export const Activity: React.FC = () => {
                                                 {executionError}
                                               </span>
                                             )}
-                                            {!executionError && decision.reason && (
+                                            {!executionError && cerebro.reason && (
                                               <span className="text-xs text-gray-400 truncate max-w-md">
-                                                {decision.reason}
+                                                {cerebro.reason}
                                               </span>
                                             )}
                                           </div>
-                                          {decision.math && (
+                                          {cerebro.math && (
                                             <button
                                               onClick={(e) => {
                                                 e.stopPropagation();
@@ -396,21 +396,21 @@ export const Activity: React.FC = () => {
                                               </div>
                                             )}
 
-                                            {/* Decision Details */}
-                                            {decision && Object.keys(decision).length > 0 && (
+                                            {/* Cerebro Decision Details */}
+                                            {cerebro && Object.keys(cerebro).length > 0 && (
                                               <div className="space-y-2">
                                                 <h5 className="text-xs font-semibold text-gray-400">Cerebro Decision</h5>
                                                 <div className="bg-gray-900 p-3 rounded text-xs font-mono space-y-1">
-                                                  <div><span className="text-gray-500">Status:</span> <span className="text-white">{decision.status || 'N/A'}</span></div>
-                                                  <div><span className="text-gray-500">Reason:</span> <span className="text-white">{decision.reason || 'N/A'}</span></div>
-                                                  {decision.timestamp && (
-                                                    <div><span className="text-gray-500">Timestamp:</span> <span className="text-white">{formatDate(decision.timestamp)}</span></div>
+                                                  <div><span className="text-gray-500">Status:</span> <span className="text-white">{cerebro.status || 'N/A'}</span></div>
+                                                  <div><span className="text-gray-500">Reason:</span> <span className="text-white">{cerebro.reason || 'N/A'}</span></div>
+                                                  {cerebro.timestamp && (
+                                                    <div><span className="text-gray-500">Timestamp:</span> <span className="text-white">{formatDate(cerebro.timestamp)}</span></div>
                                                   )}
-                                                  {decision.legs && decision.legs.length > 0 && (
+                                                  {cerebro.legs && cerebro.legs.length > 0 && (
                                                     <div className="mt-2">
                                                       <span className="text-gray-500">Decision Legs:</span>
                                                       <div className="ml-3 mt-1 space-y-1">
-                                                        {decision.legs.map((dLeg: any, dLegIdx: number) => (
+                                                        {cerebro.legs.map((dLeg: any, dLegIdx: number) => (
                                                           <div key={dLegIdx} className="text-gray-300">
                                                             • {dLeg.action} {dLeg.quantity} {dLeg.instrument} @ {dLeg.price}
                                                           </div>
@@ -423,11 +423,11 @@ export const Activity: React.FC = () => {
                                             )}
                                             
                                             {/* Math Details */}
-                                            {showMath && decision.math && (
+                                            {showMath && cerebro.math && (
                                               <div className="space-y-2">
                                                 <h5 className="text-xs font-semibold text-gray-400">Calculation Breakdown</h5>
                                                 <pre className="bg-gray-900 p-3 rounded text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap">
-                                                  {decision.math}
+                                                  {cerebro.math}
                                                 </pre>
                                               </div>
                                             )}

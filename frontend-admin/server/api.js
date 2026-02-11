@@ -74,7 +74,7 @@ app.get('/api/v1/activity/signals', async (req, res) => {
 
       for (const leg of legs) {
         const raw = leg.raw || {};
-        const decision = leg.decision || null;
+        const cerebro = leg.cerebro || null;
         const execution = leg.execution || null;
         const position = doc.position || {};
 
@@ -84,8 +84,8 @@ app.get('/api/v1/activity/signals', async (req, res) => {
           firstLeg = raw.legs[0];
         }
 
-        // Decision status
-        let decisionStatus = decision ? (decision.status || 'PENDING') : null;
+        // Cerebro decision status
+        let decisionStatus = cerebro ? (cerebro.status || 'PENDING') : null;
 
         // Signal type
         let signalType = leg.leg_type || raw.signal_type || 'UNKNOWN';
@@ -117,9 +117,9 @@ app.get('/api/v1/activity/signals', async (req, res) => {
             executionCompletedTimestamp = new Date(lastOrder.filled_at);
           }
         }
-        // Fallback to decision timestamp
-        if (!executionCompletedTimestamp && decision && decision.timestamp) {
-          executionCompletedTimestamp = new Date(decision.timestamp);
+        // Fallback to cerebro timestamp
+        if (!executionCompletedTimestamp && cerebro && cerebro.timestamp) {
+          executionCompletedTimestamp = new Date(cerebro.timestamp);
         }
 
         if (executionCompletedTimestamp && signalSentEpoch) {
@@ -129,12 +129,12 @@ app.get('/api/v1/activity/signals', async (req, res) => {
         // Get PnL from position
         const pnl = position.pnl || null;
 
-        // Get final quantity from decision.legs or execution
+        // Get final quantity from cerebro.legs or execution
         let finalQuantity = firstLeg.quantity;
-        if (decision && decision.legs && decision.legs.length > 0) {
-          finalQuantity = decision.legs[0].quantity;
+        if (cerebro && cerebro.legs && cerebro.legs.length > 0) {
+          finalQuantity = cerebro.legs[0].quantity;
         } else if (execution && execution.total_quantity_filled) {
-          // For EXIT legs, decision.legs is empty but execution has the actual quantity
+          // For EXIT legs, cerebro.legs is empty but execution has the actual quantity
           finalQuantity = execution.total_quantity_filled;
         }
 
@@ -860,9 +860,9 @@ app.get('/api/v1/activity/signal-status', async (req, res) => {
       const entryLegs = legs.filter(leg => leg.leg_type === 'ENTRY');
       const exitLegs = legs.filter(leg => leg.leg_type === 'EXIT');
 
-      // Get decision status from first leg
-      const firstLegDecision = legs.length > 0 ? (legs[0].decision || {}) : {};
-      const decisionStatus = firstLegDecision.status || 'PENDING';
+      // Get cerebro decision status from first leg
+      const firstLegCerebro = legs.length > 0 ? (legs[0].cerebro || {}) : {};
+      const decisionStatus = firstLegCerebro.status || 'PENDING';
 
       return {
         _id: doc._id,

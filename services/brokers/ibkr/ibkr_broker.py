@@ -924,28 +924,12 @@ class IBKRBroker(AbstractBroker):
                 # avgCost in IBKR is already the average price per share
                 avg_price = abs(pos.avgCost)
 
-                # Request live market data for current price
-                current_price = 0
-                market_value = 0
-                unrealized_pnl = 0
-
-                try:
-                    # Request market data snapshot
-                    self.ib.reqMktData(pos.contract, snapshot=True)
-                    self.ib.sleep(0.5)  # Brief wait for data
-
-                    ticker = self.ib.ticker(pos.contract)
-                    if ticker and ticker.marketPrice():
-                        current_price = ticker.marketPrice()
-                        market_value = current_price * quantity
-                        unrealized_pnl = (current_price - avg_price) * quantity * (1 if side == "LONG" else -1)
-                    else:
-                        # Fallback: use avg_price if no market data available
-                        market_value = avg_price * quantity
-
-                except Exception as e:
-                    logger.warning(f"Could not fetch market data for {pos.contract.symbol}: {e}")
-                    market_value = avg_price * quantity
+                # NOTE: Disabled live market data requests to avoid competing with execution service
+                # IBKR Paper accounts only allow 1 concurrent live data subscription
+                # Account data service doesn't need real-time prices - use average cost instead
+                current_price = avg_price  # Use avg_price instead of requesting live data
+                market_value = avg_price * quantity
+                unrealized_pnl = 0  # Cannot calculate without current price
 
                 open_positions.append({
                     "instrument": pos.contract.symbol,
@@ -1088,7 +1072,7 @@ class IBKRBroker(AbstractBroker):
             self._ib_loop
         )
         
-        # Wait for result with timeout
+        # Wait for result with timeout, ensuring cleanup on all error paths
         try:
             return future.result(timeout=10.0)
         except TimeoutError:
@@ -1101,6 +1085,11 @@ class IBKRBroker(AbstractBroker):
         except Exception as e:
             logger.error(f"Error fetching price for {symbol}: {e}")
             raise BrokerAPIError(f"Failed to get market price: {str(e)}", broker_name="IBKR")
+        finally:
+            # Ensure the future is cancelled if it's still pending (cleanup guarantee)
+            if not future.done():
+                logger.debug(f"🧹 Cancelling pending future for {symbol} price fetch")
+                future.cancel()
 
     async def _fetch_price_async(self, symbol: str, instrument_type: str) -> float:
         """

@@ -749,10 +749,10 @@ def update_account_positions(signal: Dict, status: str, entry_quantity: float, e
             logger.warning(f"Missing account_id/strategy_id/instrument for position tracking")
             return
         
-        # Get direction from first leg
+        # Get direction from first leg (using cerebro field)
         first_leg = legs[0] if legs else {}
-        first_decision = first_leg.get('decision', {})
-        first_legs_data = first_decision.get('legs', [])
+        first_cerebro = first_leg.get('cerebro', {})
+        first_legs_data = first_cerebro.get('legs', [])
         direction = first_legs_data[0].get('direction', 'LONG') if first_legs_data else 'LONG'
         
         if status == 'OPEN':

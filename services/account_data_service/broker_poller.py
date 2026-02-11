@@ -429,10 +429,16 @@ class BrokerPoller:
         # Add authentication details based on broker type
         if account['broker'] == "IBKR":
             # IBKR connection settings from MongoDB authentication_details
+            # NOTE: Use different client_id than execution_service to avoid competing sessions
+            # IBKR Paper accounts only allow 1 live market data subscription
+            # Add 1000 to client_id for account_data_service (e.g., 100 → 1100)
+            base_client_id = auth.get('client_id', 100)
+            service_client_id = base_client_id + 1000
+            
             config.update({
                 "host": auth.get('host'),
                 "port": auth.get('port'),
-                "client_id": auth.get('client_id')
+                "client_id": service_client_id
             })
         elif account['broker'] == "Zerodha":
             config.update({

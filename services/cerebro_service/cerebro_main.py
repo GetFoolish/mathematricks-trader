@@ -1488,9 +1488,9 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     if 'current_leg' in locals() and current_leg:
         signal_leg_index = current_leg.get('leg_index', 0)
     elif legs_array and isinstance(legs_array, list):
-        # If current_leg not available, find the most recent leg without a decision
+        # If current_leg not available, find the most recent leg without cerebro
         for leg in legs_array:
-            if not leg.get('decision'):
+            if not leg.get('cerebro'):
                 signal_leg_index = leg.get('leg_index', 0)
                 break
 
