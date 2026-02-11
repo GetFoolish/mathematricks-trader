@@ -781,6 +781,22 @@ export default function SignalStoreTab() {
                                                       if (leg.execution.total_cost_basis) text += `\nTotal Cost: $${leg.execution.total_cost_basis.toFixed(2)}`;
                                                       if (leg.execution.total_proceeds) text += `\nTotal Proceeds: $${leg.execution.total_proceeds.toFixed(2)}`;
                                                       if (leg.execution.completed_at) text += `\nCompleted At: ${new Date(leg.execution.completed_at).toLocaleString()}`;
+                                                      if (leg.execution.orders && leg.execution.orders.length > 0) {
+                                                        text += `\n\nOrders (${leg.execution.orders.length}):`;
+                                                        leg.execution.orders.forEach((order: any, idx: number) => {
+                                                          text += `\n\nOrder ${idx + 1}:`;
+                                                          text += `\n  Order ID: ${order.order_id}`;
+                                                          if (order.broker_order_id) text += `\n  Broker Order ID: ${order.broker_order_id}`;
+                                                          if (order.fund_id) text += `\n  Fund: ${order.fund_id}`;
+                                                          if (order.account_id) text += `\n  Account: ${order.account_id}`;
+                                                          if (order.broker) text += `\n  Broker: ${order.broker}`;
+                                                          if (order.data_source) text += `\n  Data Source: ${order.data_source}`;
+                                                          if (order.price_broker) text += `\n  Price Broker: ${order.price_broker}`;
+                                                          if (order.quantity_filled) text += `\n  Filled: ${order.quantity_filled}${order.quantity_requested ? `/${order.quantity_requested}` : ''}`;
+                                                          if (order.avg_fill_price) text += ` @ $${order.avg_fill_price.toFixed(2)}`;
+                                                          if (order.filled_at) text += `\n  Filled At: ${new Date(order.filled_at).toLocaleString()}`;
+                                                        });
+                                                      }
                                                       copyToClipboard(text, boxId);
                                                     }}
                                                     className="absolute top-2 right-2 p-1.5 bg-gray-800 hover:bg-gray-700 rounded transition-colors z-10"
@@ -885,6 +901,15 @@ export default function SignalStoreTab() {
                                                             <div><span className="text-gray-500">Order ID:</span> <span className="text-white">{order.order_id}</span></div>
                                                             <div><span className="text-gray-500">Broker Order ID:</span> <span className="text-white">{order.broker_order_id}</span></div>
                                                             <div><span className="text-gray-500">Fund/Account:</span> <span className="text-white">{order.fund_id}/{order.account_id}</span></div>
+                                                            {order.broker && (
+                                                              <div><span className="text-gray-500">Broker:</span> <span className="text-white">{order.broker}</span></div>
+                                                            )}
+                                                            {order.data_source && (
+                                                              <div><span className="text-gray-500">Data Source:</span> <span className="text-white">{order.data_source}</span></div>
+                                                            )}
+                                                            {order.price_broker && (
+                                                              <div><span className="text-gray-500">Price Broker:</span> <span className="text-white">{order.price_broker}</span></div>
+                                                            )}
                                                             <div><span className="text-gray-500">Filled:</span> <span className="text-white">{order.quantity_filled}/{order.quantity_requested} @ ${order.avg_fill_price?.toFixed(2)}</span></div>
                                                             {order.filled_at && (
                                                               <div><span className="text-gray-500">Filled At:</span> <span className="text-white">{new Date(order.filled_at).toLocaleString()}</span></div>

@@ -364,7 +364,8 @@ def get_account_state_legacy(account_name: str):
             "margin_available": account['balances']['margin_available'],
             "unrealized_pnl": account['balances'].get('unrealized_pnl', 0),
             "realized_pnl": account['balances'].get('realized_pnl', 0),
-            "open_positions": account['open_positions'],
+            "open_positions": account.get('open_positions', []),
+            "holdings": account['balances'].get('holdings', {}),  # Crypto holdings
             "open_orders": [],  # Not tracking orders in this service
             "created_at": account['updated_at']
         }

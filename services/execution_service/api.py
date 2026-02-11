@@ -969,6 +969,10 @@ def sync_account_balance(account_id: str):
             
             # Save to MongoDB
             try:
+                # Get account document to find fund_id
+                account_doc = db.trading_accounts.find_one({"account_id": account_id})
+                fund_id = account_doc.get('fund_id') if account_doc else None
+                
                 update_result = db.trading_accounts.update_one(
                     {"account_id": account_id},
                     {
@@ -981,6 +985,10 @@ def sync_account_balance(account_id: str):
                 
                 if update_result.modified_count > 0:
                     logger.info(f"💾 Updated MongoDB balance for {account_id}")
+                    
+                    # Update fund total_equity (sum of all account equities)
+                    if fund_id:
+                        update_fund_total_equity(fund_id)
                 else:
                     logger.warning(f"⚠️ No MongoDB update for {account_id} (account may not exist)")
                     
