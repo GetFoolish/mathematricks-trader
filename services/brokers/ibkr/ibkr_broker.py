@@ -1106,12 +1106,15 @@ class IBKRBroker(AbstractBroker):
         """
         Async coroutine to fetch price - runs in IB's event loop thread.
         """
+        contract = None
+        ticker = None
+        
         try:
             # Create contract
             contract = self._create_contract_for_pricing(symbol, instrument_type)
 
-            # Request market data 
-            ticker = self.ib.reqMktData(contract, '', False, False)
+            # Request market data (snapshot=True for one-time data, avoids subscription conflicts)
+            ticker = self.ib.reqMktData(contract, '', True, False)  # snapshot=True
 
             # Wait for data using asyncio.sleep() - we're in the right loop now
             logger.info(f"⏳ Waiting for market data for {symbol}...")
@@ -1128,9 +1131,6 @@ class IBKRBroker(AbstractBroker):
                 if has_bid or has_ask or has_last:
                     logger.info(f"✅ Market data received after {(i+1)*0.1:.1f}s: bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}")
                     break
-
-            # Cancel market data subscription
-            self.ib.cancelMktData(contract)
 
             # Return mid-price if available, otherwise last price
             if ticker.bid and ticker.ask and not math.isnan(ticker.bid) and not math.isnan(ticker.ask) and ticker.bid > 0 and ticker.ask > 0:
@@ -1150,6 +1150,14 @@ class IBKRBroker(AbstractBroker):
                 raise
             logger.error(f"Error in _fetch_price_async for {symbol}: {e}", exc_info=True)
             raise BrokerAPIError(f"Failed to fetch price: {str(e)}", broker_name="IBKR")
+        finally:
+            # CRITICAL: Always cancel market data subscription to avoid accumulating subscriptions
+            if ticker is not None and contract is not None:
+                try:
+                    self.ib.cancelMktData(contract)
+                    logger.debug(f"🧹 Cleaned up market data subscription for {symbol}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup market data for {symbol}: {cleanup_error}")
 
     def _create_contract_for_pricing(self, symbol: str, instrument_type: str):
         """
