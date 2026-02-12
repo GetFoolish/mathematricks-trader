@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 import threading
 import asyncio
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from ib_insync import IB, Stock, Option, Forex, Future as IBFuture, Crypto, MarketOrder, LimitOrder
 
 # Import base classes and exceptions
@@ -326,7 +326,7 @@ class IBKRBroker(AbstractBroker):
                 
             try:
                 # Get positions from account state
-                positions = self.get_positions(account_id)
+                positions = self.get_open_positions(account_id)
                 for pos in positions:
                     if pos.get('instrument') == instrument:
                         pos_direction = pos.get('direction', '').upper()
@@ -486,6 +486,7 @@ class IBKRBroker(AbstractBroker):
             # Step 1: Translate internal order format to IBKR format
             order = self._translate_order(order)
             logger.info(f"Order translated for IBKR: {order.get('symbol')} {order.get('side')} {order.get('quantity')}")
+            logger.info(f"🔍 DEBUG place_order Step 1: Order translated successfully")
 
             # Step 2: Validate required fields (now in IBKR format)
             symbol = order.get("symbol", "").strip()
@@ -493,6 +494,7 @@ class IBKRBroker(AbstractBroker):
             quantity = order.get("quantity", 0)
             order_type = order.get("order_type", "MARKET").upper()
             instrument_type = order.get("instrument_type", "STOCK").upper()
+            logger.info(f"🔍 DEBUG place_order Step 2: Extracted fields - symbol={symbol}, side={side}, qty={quantity}, type={order_type}, instrument_type={instrument_type}")
 
             if not symbol and instrument_type != "OPTION":
                 raise ValueError("Missing required field: 'symbol'")
@@ -503,12 +505,16 @@ class IBKRBroker(AbstractBroker):
             if quantity <= 0:
                 raise ValueError(f"Invalid quantity: {quantity}. Must be > 0")
 
+            logger.info(f"🔍 DEBUG place_order Step 3: Validation passed, creating contracts...")
             # Create contract(s)
             contracts = self._create_contracts(order)
+            logger.info(f"🔍 DEBUG place_order Step 4: Created {len(contracts)} contract(s)")
 
             # Submit orders (may be multiple legs for options)
             trades = []
-            for contract_item in contracts:
+            logger.info(f"🔍 DEBUG place_order Step 5: Starting loop through {len(contracts)} contract(s)")
+            for i, contract_item in enumerate(contracts, 1):
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}: Processing contract {i}/{len(contracts)}")
                 contract = contract_item['contract']
                 leg_action = contract_item['action']
                 # Apply broker precision to quantity
@@ -519,20 +525,16 @@ class IBKRBroker(AbstractBroker):
                     leg_quantity = int(round(raw_quantity))
                 else:
                     leg_quantity = round(raw_quantity, precision)
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}a: Quantity adjusted - raw={raw_quantity} → final={leg_quantity}")
 
-                # Qualify contract with IBKR
-                qualified_contracts = self.ib.qualifyContracts(contract)
-                if not qualified_contracts:
-                    raise InvalidSymbolError(
-                        f"Failed to qualify contract: {contract}",
-                        broker_name="IBKR",
-                        symbol=str(contract)
-                    )
-
-                qualified_contract = qualified_contracts[0]
-                logger.info(f"✅ Contract qualified: {qualified_contract}")
+                # Skip contract qualification to avoid hanging
+                # For SMART exchange, IBKR handles routing without pre-qualification
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}b: Using contract directly (skipping qualification): {contract}")
+                qualified_contract = contract
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}c: Contract ready for placement")
 
                 # Create IBKR order
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}f: Creating IB order object (type={order_type})")
                 if order_type == "MARKET":
                     ib_order = MarketOrder(leg_action, 0)  # Set totalQuantity to 0, will set below
                 elif order_type == "LIMIT":
@@ -543,9 +545,11 @@ class IBKRBroker(AbstractBroker):
                 else:
                     # Default to market
                     ib_order = MarketOrder(leg_action, 0)
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}g: IB order object created")
 
                 # For CRYPTO, IBKR requires cashQty (USD amount) instead of totalQuantity
                 if instrument_type == "CRYPTO":
+                    logger.info(f"🔍 DEBUG place_order Step 5.{i}h: CRYPTO order - calculating cash quantity")
                     price = order.get("limit_price") or order.get("price", 0)
                     if price <= 0:
                         raise ValueError("CRYPTO orders require a price to calculate cash quantity")
@@ -555,13 +559,21 @@ class IBKRBroker(AbstractBroker):
                     ib_order.tif = "IOC" if order_type == "MARKET" else "GTC"
                     logger.info(f"📤 Placing CRYPTO order: {leg_action} ${cash_amount:.2f} USD of {qualified_contract.symbol}")
                 else:
+                    logger.info(f"🔍 DEBUG place_order Step 5.{i}h: Setting totalQuantity={leg_quantity}")
                     ib_order.totalQuantity = leg_quantity
                     logger.info(f"📤 Placing order: {leg_action} {leg_quantity} {qualified_contract.symbol}")
+                
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}i: Connection status before placeOrder: {self.is_connected()}")
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}j: About to call ib.placeOrder() - THIS IS WHERE IT MAY HANG")
                 trade = self.ib.placeOrder(qualified_contract, ib_order)
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}k: ib.placeOrder() RETURNED! Trade object: {trade}")
                 trades.append(trade)
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}l: Trade added to list (total trades: {len(trades)})")
 
             # Wait for order acknowledgment
+            logger.info(f"🔍 DEBUG place_order Step 6: All contracts processed, waiting 2s for acknowledgment...")
             self.ib.sleep(2)
+            logger.info(f"🔍 DEBUG place_order Step 7: Sleep complete, checking order status...")
 
             # Check if any legs were rejected
             rejected_count = 0
@@ -1315,10 +1327,10 @@ class IBKRBroker(AbstractBroker):
 
     def get_quantity_precision(self, symbol: str, instrument_type: str) -> int:
         """
-        Get the number of decimal places allowed for quantity from IBKR.
+        Get the number of decimal places allowed for quantity.
 
-        Uses reqContractDetails to get the contract's minSize and sizeIncrement
-        to determine precision.
+        Uses static defaults to avoid blocking calls to IBKR during order placement.
+        Previous implementation queried IBKR's qualifyContracts() which could hang.
 
         Args:
             symbol: Asset symbol (e.g., "AAPL", "EURUSD")
@@ -1327,77 +1339,9 @@ class IBKRBroker(AbstractBroker):
         Returns:
             int: Number of decimal places (0 for integers)
         """
-        try:
-            if not self.is_connected():
-                logger.warning("Not connected to IBKR, using default precision")
-                return self._get_default_precision(instrument_type)
-
-            # Create contract for query
-            instrument_type_upper = instrument_type.upper()
-
-            if instrument_type_upper == "STOCK":
-                contract = Stock(symbol=symbol, exchange='SMART', currency='USD')
-            elif instrument_type_upper == "FOREX":
-                # For forex, symbol is like "EURUSD", need to split into pair
-                if len(symbol) == 6:
-                    base = symbol[:3]
-                    quote = symbol[3:]
-                    contract = Forex(pair=f"{base}{quote}")
-                else:
-                    contract = Forex(symbol=symbol)
-            elif instrument_type_upper == "FUTURE":
-                # For futures, we'd need expiry - use default for now
-                logger.debug(f"Futures precision query requires expiry, using default")
-                return 0
-            elif instrument_type_upper == "OPTION":
-                # Options are always integer contracts
-                return 0
-            elif instrument_type_upper == "CRYPTO":
-                # Crypto typically has high precision
-                return 8
-            else:
-                return self._get_default_precision(instrument_type)
-
-            # Qualify the contract first
-            qualified_contracts = self.ib.qualifyContracts(contract)
-            if not qualified_contracts:
-                logger.warning(f"Could not qualify contract for {symbol}, using default precision")
-                return self._get_default_precision(instrument_type)
-
-            qualified_contract = qualified_contracts[0]
-
-            # Get contract details
-            details_list = self.ib.reqContractDetails(qualified_contract)
-            if not details_list:
-                logger.warning(f"No contract details for {symbol}, using default precision")
-                return self._get_default_precision(instrument_type)
-
-            details = details_list[0]
-
-            # Determine precision from minSize/sizeIncrement
-            # For stocks, minSize is typically 1.0, sizeIncrement is 1.0 → precision 0
-            # For forex, minSize might be 1.0 but positions are in units → precision 0
-            # For crypto, could have fractional sizes
-
-            min_size = getattr(details, 'minSize', 1.0)
-            size_increment = getattr(details, 'sizeIncrement', 1.0)
-
-            # Calculate precision from size increment
-            # e.g., size_increment = 0.001 → precision = 3
-            if size_increment >= 1.0:
-                precision = 0
-            else:
-                # Count decimal places in size_increment
-                precision = len(str(size_increment).split('.')[-1].rstrip('0'))
-
-            logger.info(f"IBKR precision for {symbol} ({instrument_type}): {precision} decimals "
-                       f"(minSize={min_size}, sizeIncrement={size_increment})")
-
-            return precision
-
-        except Exception as e:
-            logger.warning(f"Error querying IBKR for precision: {e}")
-            return self._get_default_precision(instrument_type)
+        # Use default precision values to avoid hanging during order placement
+        # IBKR qualifyContracts() and reqContractDetails() can block indefinitely
+        return self._get_default_precision(instrument_type)
 
     def _get_default_precision(self, instrument_type: str) -> int:
         """

@@ -428,7 +428,11 @@ class CoinbaseBroker(AbstractBroker):
                     # Get current price for crypto holdings
                     try:
                         symbol = f"{currency}-USD"
-                        price = self.get_current_price(symbol)
+                        # Stablecoins are always $1.00, no need to fetch price from API
+                        if currency in ('USDC', 'USDT', 'DAI', 'BUSD', 'GUSD', 'PAX'):
+                            price = 1.0
+                        else:
+                            price = self.get_current_price(symbol)
                         value = available * price
                         total_equity += value
                         
@@ -479,12 +483,20 @@ class CoinbaseBroker(AbstractBroker):
             balance = self.get_account_balance()
             holdings = balance.get('holdings', {})
             
+            # Stablecoins valued at $1.00
+            STABLECOINS = {'USDC', 'USDT', 'DAI', 'BUSD', 'GUSD', 'PAX'}
+            
             positions = []
             for currency, quantity in holdings.items():
                 if quantity > 0:
                     symbol = f"{currency}-USD"
                     try:
-                        current_price = self.get_current_price(symbol)
+                        # Stablecoins are always $1.00
+                        if currency in STABLECOINS:
+                            current_price = 1.0
+                        else:
+                            current_price = self.get_current_price(symbol)
+                            
                         positions.append({
                             'instrument': symbol,
                             'quantity': quantity,
