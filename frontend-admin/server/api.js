@@ -5,24 +5,36 @@ import { MongoClient, ObjectId } from 'mongodb';
 const app = express();
 const PORT = process.env.API_PORT || 8000;
 
-// MongoDB connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27018/?replicaSet=rs0';
+// MongoDB connection URIs
+const MONGODB_URI_CLOUD = process.env.MONGODB_URI_CLOUD || 'mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/';
+const MONGODB_URI_LOCAL = process.env.MONGODB_URI_LOCAL || 'mongodb://localhost:27018/?replicaSet=rs0';
+
+// Current MongoDB configuration
+let currentMongoDbMode = process.env.MONGODB_URI?.includes('mongodb+srv') ? 'cloud' : 'local';
+let MONGODB_URI = process.env.MONGODB_URI || MONGODB_URI_CLOUD;
+let mongoClient;
 let db;
 let signalStoreCollection;
 let tradingOrdersCollection;
 let rawSignalsCollection;
 
 // Connect to MongoDB
-async function connectToMongo() {
+async function connectToMongo(uri = MONGODB_URI) {
   try {
-    const client = new MongoClient(MONGODB_URI);
-    await client.connect();
-    db = client.db('mathematricks_trading');
+    // Close existing connection if any
+    if (mongoClient) {
+      await mongoClient.close();
+    }
+    
+    mongoClient = new MongoClient(uri);
+    await mongoClient.connect();
+    db = mongoClient.db('mathematricks_trading');
     signalStoreCollection = db.collection('signal_store');
     tradingOrdersCollection = db.collection('trading_orders');
-    // Add collections for new Activity tabs
     rawSignalsCollection = db.collection('trading_signals_raw');
-    console.log('[API] Connected to MongoDB (mathematricks_trading)');
+    
+    const modeLabel = currentMongoDbMode === 'cloud' ? 'Cloud (Atlas)' : 'Local (27018)';
+    console.log(`[API] Connected to MongoDB (${modeLabel})`);
   } catch (error) {
     console.error('[API] MongoDB connection error:', error);
     process.exit(1);
@@ -48,6 +60,43 @@ function serializeDocument(doc) {
   }
   return doc;
 }
+
+// MongoDB Mode Management Endpoints
+// GET /api/mongodb-mode - Get current MongoDB connection mode
+app.get('/api/mongodb-mode', (req, res) => {
+  res.json({ 
+    mode: currentMongoDbMode,
+    uri: currentMongoDbMode === 'cloud' ? 'Cloud (Atlas)' : 'Local (27018)'
+  });
+});
+
+// POST /api/mongodb-mode - Switch MongoDB connection mode
+app.post('/api/mongodb-mode', async (req, res) => {
+  try {
+    const { mode } = req.body;
+    
+    if (!mode || (mode !== 'cloud' && mode !== 'local')) {
+      return res.status(400).json({ error: 'Invalid mode. Must be "cloud" or "local"' });
+    }
+    
+    // Update current mode and URI
+    currentMongoDbMode = mode;
+    MONGODB_URI = mode === 'cloud' ? MONGODB_URI_CLOUD : MONGODB_URI_LOCAL;
+    
+    // Reconnect to MongoDB with new URI
+    await connectToMongo(MONGODB_URI);
+    
+    console.log(`[API] Switched to ${mode === 'cloud' ? 'Cloud (Atlas)' : 'Local (27018)'} MongoDB`);
+    
+    res.json({ 
+      mode: currentMongoDbMode,
+      message: `Successfully switched to ${mode === 'cloud' ? 'cloud' : 'local'} MongoDB`
+    });
+  } catch (error) {
+    console.error('[API] Error switching MongoDB mode:', error);
+    res.status(500).json({ error: 'Failed to switch MongoDB mode' });
+  }
+});
 
 // GET /api/v1/activity/signals
 // CONSOLIDATED SCHEMA v3: Each document has legs[] array, return each leg as a signal row

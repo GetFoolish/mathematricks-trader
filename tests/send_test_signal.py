@@ -240,11 +240,15 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
         previous_entry_id: MongoDB ObjectId of previous ENTRY signal (for EXIT signals)
         mode: Trading mode (mock_mock, mock_live, paper_live, live_live)
         run_id_suffix: Optional 6-digit suffix to append to signalID for uniqueness across test runs
+        environment: Environment for signal routing (staging, production)
+        account_type: Account type override
     """
     import requests
     
-    # Signal receiver API URL
-    SIGNAL_API_URL = os.getenv('SIGNAL_API_URL', 'http://localhost:3000/api/v1/signals')
+    # Signal receiver API URL - must be set in .env file
+    SIGNAL_API_URL = os.getenv('SIGNAL_API_URL')
+    if not SIGNAL_API_URL:
+        raise ValueError("SIGNAL_API_URL environment variable not set. Please configure it in .env file.")
     
     # Inject entry_signal_id if this is an EXIT signal and we have a previous ENTRY
     if signal_type == "exit" and previous_entry_id:
@@ -307,6 +311,10 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
     # Do not inject account_equity; must be provided by signal payload
 
     # POST to signal receiver API
+    print(f"\n📡 Sending signal to: {SIGNAL_API_URL}")
+    print(f"   Environment: {environment}")
+    print(f"   Mode: {mode}")
+    
     try:
         response = requests.post(
             SIGNAL_API_URL,

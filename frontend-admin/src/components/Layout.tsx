@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -12,12 +12,15 @@ import {
   CheckCircle,
   CreditCard,
   ChevronDown,
+  Cloud,
+  HardDrive,
 } from 'lucide-react';
 
 export const Layout: React.FC = () => {
   const { user, logout } = useAuth();
   const location = useLocation();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [mongoDbMode, setMongoDbMode] = useState<'cloud' | 'local'>('cloud');
 
   const navigation = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -28,6 +31,45 @@ export const Layout: React.FC = () => {
     { name: 'Accounts', href: '/accounts', icon: CreditCard },
     { name: 'Hedged Funds', href: '/hedged-funds', icon: Wrench },
   ];
+
+  // Get API base URL from environment
+  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+  // Fetch current MongoDB mode on mount
+  useEffect(() => {
+    const fetchMongoDbMode = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/mongodb-mode`);
+        const data = await response.json();
+        setMongoDbMode(data.mode);
+      } catch (error) {
+        console.error('Failed to fetch MongoDB mode:', error);
+      }
+    };
+    fetchMongoDbMode();
+  }, []);
+
+  // Toggle MongoDB connection
+  const toggleMongoDb = async () => {
+    const newMode = mongoDbMode === 'cloud' ? 'local' : 'cloud';
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/mongodb-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode }),
+      });
+      
+      if (response.ok) {
+        setMongoDbMode(newMode);
+        // Reload the page to refresh all data with new connection
+        window.location.reload();
+      } else {
+        console.error('Failed to switch MongoDB mode');
+      }
+    } catch (error) {
+      console.error('Error switching MongoDB mode:', error);
+    }
+  };
 
   const isActive = (path: string) => {
     if (path === '/activity') {
@@ -94,13 +136,40 @@ export const Layout: React.FC = () => {
             
             {/* Dropdown Menu */}
             {dropdownOpen && (
-              <div className="absolute right-0 mt-2 w-48 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-50">
+              <div className="absolute right-0 mt-2 w-64 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-50">
+                {/* MongoDB Connection Toggle */}
+                <div className="px-4 py-3 border-b border-gray-700">
+                  <p className="text-xs text-gray-400 mb-2">Database Connection</p>
+                  <button
+                    onClick={toggleMongoDb}
+                    className="w-full flex items-center justify-between px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+                  >
+                    <div className="flex items-center space-x-2">
+                      {mongoDbMode === 'cloud' ? (
+                        <Cloud className="h-4 w-4 text-blue-400" />
+                      ) : (
+                        <HardDrive className="h-4 w-4 text-green-400" />
+                      )}
+                      <span className="text-sm font-medium text-white">
+                        {mongoDbMode === 'cloud' ? 'Cloud (Atlas)' : 'Local (27018)'}
+                      </span>
+                    </div>
+                    <div className={`w-10 h-5 rounded-full transition-colors ${mongoDbMode === 'cloud' ? 'bg-blue-600' : 'bg-green-600'} relative`}>
+                      <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${mongoDbMode === 'cloud' ? 'translate-x-5' : 'translate-x-0'}`}></div>
+                    </div>
+                  </button>
+                  <p className="text-xs text-gray-500 mt-1 text-center">
+                    Click to switch
+                  </p>
+                </div>
+                
+                {/* Logout Button */}
                 <button
                   onClick={() => {
                     logout();
                     setDropdownOpen(false);
                   }}
-                  className="w-full flex items-center space-x-2 px-4 py-3 hover:bg-gray-700 text-white rounded-lg transition-colors"
+                  className="w-full flex items-center space-x-2 px-4 py-3 hover:bg-gray-700 text-white rounded-b-lg transition-colors"
                 >
                   <LogOut className="h-4 w-4" />
                   <span className="text-sm font-medium">Logout</span>
