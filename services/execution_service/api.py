@@ -12,6 +12,7 @@ from pydantic import BaseModel
 import uvicorn
 from pymongo import MongoClient
 from bson import ObjectId
+from exceptions import BrokerAPIError, BrokerTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ def health_check():
                 'get_price': 'GET /api/v1/price/{symbol}?broker={broker_name}&instrument_type={type}',
                 'execute_order': 'POST /api/v1/execute-order',
                 'sync_balance': 'POST /api/v1/sync-account-balance?account_id=<id>',
+                'sync_positions': 'POST /api/v1/sync-account-positions?account_id=<id>',
                 'order_status': 'GET /api/v1/order/<order_id>/status',
                 'cancel_order': 'POST /api/v1/order/<order_id>/cancel'
             }
@@ -429,24 +431,27 @@ def execute_order_endpoint(request: ExecuteOrderRequest):
             message=message
         )
 
+    # Initialize variables for finally block
+    signal_id = request.signal_id
+    order_data = request.dict()
+    fund_id = request.fund_id
+    account_id = request.account_id
+    execution_result = None
+    error_occurred = None
+
     try:
         logger.info(f"📥 API Request: Execute order {request.order_id}")
-        logger.info(f"📋 FULL ORDER DATA: {request.dict()}")
-
-        account_id = request.account_id
-        signal_id = request.signal_id
-        fund_id = request.fund_id
+        logger.info(f"📋 FULL ORDER DATA: {order_data}")
 
         if not account_id:
-            return _return_error("Missing account_id")
+            error_occurred = "Missing account_id"
+            raise ValueError(error_occurred)
 
         # Get broker from pool
         broker = broker_pool.get(account_id)
         if not broker:
-            return _return_error(f"No broker found for account {account_id}")
-
-        # Convert request to dict
-        order_data = request.dict()
+            error_occurred = f"No broker found for account {account_id}"
+            raise ValueError(error_occurred)
 
         # Check data_source - only fetch live prices if data_source='live'
         data_source = order_data.get('data_source', 'mock')
@@ -481,10 +486,8 @@ def execute_order_endpoint(request: ExecuteOrderRequest):
                         price_broker = broker_pool.get(price_broker_id)
 
                 if not price_broker:
-                    return _return_error(
-                        f"No live price broker mapped for strategy {strategy_id}",
-                        order_data, signal_id, fund_id, account_id
-                    )
+                    error_occurred = f"No live price broker mapped for strategy {strategy_id}"
+                    raise ValueError(error_occurred)
 
                 logger.info(f"🔍 [{account_id}] Mock execution + Live data: Fetching price for {symbol} from {price_broker_id}")
                 try:
@@ -498,12 +501,18 @@ def execute_order_endpoint(request: ExecuteOrderRequest):
                     order_data['_price_source'] = f'{price_broker_id}_live'
                     order_data['_price_broker'] = price_broker_id  # Store actual broker used for price
                     logger.info(f"📈 Enriched {symbol} with live price: ${live_price:.2f} from {price_broker_id}")
+                except (BrokerAPIError, BrokerTimeoutError, TimeoutError) as e:
+                    # Market closed, no data subscription, or timeout - fall back to signal price
+                    signal_price = order_data.get('price')
+                    logger.warning(f"⚠️  Live price unavailable for {symbol} ({str(e)}), using signal price: ${signal_price}")
+                    order_data['_price_source'] = 'signal_fallback'
+                    order_data['_price_fallback_reason'] = str(e)
+                    # Continue with signal price (already in order_data)
                 except Exception as e:
-                    logger.error(f"❌ Failed to get live price for {symbol} from {price_broker_id}: {e}")
-                    return _return_error(
-                        f"Failed to fetch live price for {symbol}: {str(e)}",
-                        order_data, signal_id, fund_id, account_id
-                    )
+                    # Critical error (connection failed, invalid broker, etc.) - fail the order
+                    logger.error(f"❌ Critical error getting price for {symbol} from {price_broker_id}: {e}")
+                    error_occurred = f"Failed to fetch live price for {symbol}: {str(e)}"
+                    raise
         else:
             # DEBUG: Log why price enrichment was skipped
             logger.info(f"⏭️  DEBUG: Price enrichment SKIPPED - broker_name={broker_name}, is_mock={broker.broker_name == 'Mock' if hasattr(broker, 'broker_name') else 'N/A'}, data_source={data_source}")
@@ -511,45 +520,76 @@ def execute_order_endpoint(request: ExecuteOrderRequest):
 
         # Submit order to broker
         try:
-            result = broker.place_order(order_data)
+            execution_result = broker.place_order(order_data)
         except Exception as e:
             logger.error(f"🚨 ERROR executing order {request.order_id}: {str(e)}", exc_info=True)
-            return _return_error(f"Error executing order: {str(e)}", order_data, signal_id, fund_id, account_id)
+            error_occurred = f"Broker error: {str(e)}"
+            raise
 
-        if not result:
-            return _return_error("Broker rejected the order", order_data, signal_id, fund_id, account_id)
+        if not execution_result:
+            error_occurred = "Broker rejected the order"
+            raise ValueError(error_occurred)
 
-        logger.info(f"✅ Order {request.order_id} executed: {result.get('status')}")
-
-        # Update signal_store with execution results
-        if signal_id:
-            update_signal_store_execution(signal_id, result, order_data, fund_id, account_id)
+        logger.info(f"✅ Order {request.order_id} executed: {execution_result.get('status')}")
 
         return ExecuteOrderResponse(
-            status=result.get('status', 'SUBMITTED'),
+            status=execution_result.get('status', 'SUBMITTED'),
             order_id=request.order_id,
             message=f"Order {request.order_id} executed successfully"
         )
 
     except Exception as e:
         logger.error(f"🚨 ERROR executing order {request.order_id}: {str(e)}", exc_info=True)
-        return _return_error(f"Error executing order: {str(e)}")
+        if not error_occurred:
+            error_occurred = str(e)
+        
+        # Create error execution result
+        execution_result = {
+            'status': 'ERROR',
+            'error_reason': error_occurred,
+            'error_type': type(e).__name__
+        }
+        
+        return ExecuteOrderResponse(
+            status='ERROR',
+            order_id=request.order_id,
+            message=error_occurred
+        )
+    
+    finally:
+        # ALWAYS update signal_store with execution status (success or error)
+        if signal_id and execution_result:
+            try:
+                update_signal_store_execution(signal_id, execution_result, order_data, fund_id, account_id)
+                logger.info(f"✅ Finally block: Updated signal_store for {signal_id} with status={execution_result.get('status')}")
+            except Exception as update_error:
+                logger.error(f"❌ CRITICAL: Failed to update signal_store in finally block for {signal_id}: {update_error}", exc_info=True)
 
 
 def update_signal_store_execution(signal_id: str, execution_result: Dict, order_data: Dict, fund_id: str, account_id: str):
     """Update signal_store with execution results and position summary"""
     try:
-        # Extract leg_id from order_id (format: {signal_id}_{fund_id}_{account_id}_SL{leg_index}_ORD)
+        # Extract leg_id from order_id 
+        # Formats: 
+        #   - {signal_id}_{fund_id}_{account_id}_SL{leg_index}_ORD
+        #   - {signal_id}_{fund_id}_{account_id}_SL{leg_index}_TL{trade_leg}_ORD (multi-leg)
         order_id = order_data.get('order_id', '')
         leg_index = None
         
-        # Parse leg index from order_id (e.g., SL0_ORD, SL1_ORD)
-        if '_SL' in order_id and '_ORD' in order_id:
+        # Parse leg index from order_id (e.g., SL0_ORD, SL1_ORD, SL0_TL0_ORD, SL0_TL1_ORD)
+        if '_SL' in order_id:
             try:
-                leg_part = order_id.split('_SL')[1].split('_ORD')[0]
-                leg_index = int(leg_part)
-            except (IndexError, ValueError):
-                logger.warning(f"Could not parse leg_index from order_id: {order_id}")
+                # Extract everything after _SL
+                after_sl = order_id.split('_SL')[1]
+                # Take only the numeric part (handles SL0_ORD and SL0_TL0_ORD)
+                import re
+                match = re.match(r'^(\d+)', after_sl)
+                if match:
+                    leg_index = int(match.group(1))
+                else:
+                    logger.warning(f"Could not extract numeric leg_index from: {after_sl}")
+            except (IndexError, ValueError, AttributeError) as e:
+                logger.warning(f"Could not parse leg_index from order_id: {order_id} ({e})")
         
         if leg_index is None:
             logger.warning(f"No leg_index found for signal {signal_id}, skipping signal_store update")
@@ -611,7 +651,7 @@ def update_account_balance_with_pnl(signal: Dict, realized_pnl: float):
     """
     try:
         # Get account_id from first leg's execution
-        legs = signal.get('legs', [])
+        legs = signal.get('signal_legs', [])
         if not legs:
             logger.warning(f"No legs found in signal for balance update")
             return
@@ -730,7 +770,7 @@ def update_account_positions(signal: Dict, status: str, entry_quantity: float, e
         logger.info(f"🔍 update_account_positions called: status={status}, entry_qty={entry_quantity}, exit_qty={exit_quantity}")
         
         # Get account_id and strategy_id from signal
-        legs = signal.get('legs', [])
+        legs = signal.get('signal_legs', [])
         if not legs:
             return
             
@@ -828,8 +868,13 @@ def update_position_summary(signal_id: str):
             logger.warning(f"Signal {signal_id} not found for position summary update")
             return
         
-        legs = signal.get('legs', [])
+        legs = signal.get('signal_legs', [])
         if not legs:
+            return
+        
+        # Defensive: Handle case where legs is not in expected format
+        if not isinstance(legs, list):
+            logger.error(f"❌ Legs is not a list for signal {signal_id}: {type(legs)}")
             return
         
         # Calculate position metrics
@@ -839,6 +884,11 @@ def update_position_summary(signal_id: str):
         exit_value = 0
         
         for leg in legs:
+            # Defensive: Skip if leg is not a dict (handle malformed data)
+            if not isinstance(leg, dict):
+                logger.warning(f"⚠️  Skipping malformed leg (not a dict): {type(leg)} - {leg}")
+                continue
+            
             leg_type = leg.get('leg_type', '')
             execution = leg.get('execution')
 
@@ -1040,6 +1090,85 @@ def sync_account_balance(account_id: str):
         raise HTTPException(status_code=500, detail=f"Error syncing balance: {str(e)}")
 
 
+@app.post('/api/v1/sync-account-positions')
+def sync_account_positions(account_id: str):
+    """
+    Sync open positions from broker.
+    Fetches fresh position data directly from broker and returns it.
+    Also updates MongoDB in background (non-blocking).
+    
+    This is the SOURCE OF TRUTH for position data - bypasses stale MongoDB cache.
+    """
+    try:
+        logger.info(f"📊 Position sync request for {account_id}")
+        
+        # Get broker from pool
+        broker = broker_pool.get(account_id)
+        if not broker:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No broker found for account {account_id}"
+            )
+        
+        # Check if broker is connected
+        if hasattr(broker, 'is_connected') and not broker.is_connected():
+            raise HTTPException(
+                status_code=503,
+                detail=f"Broker not connected for {account_id}"
+            )
+        
+        # Get fresh positions from broker (SOURCE OF TRUTH)
+        if hasattr(broker, 'get_open_positions'):
+            positions = broker.get_open_positions()
+            
+            # Save to MongoDB (non-blocking - we return fresh data immediately)
+            try:
+                update_result = db.trading_accounts.update_one(
+                    {"account_id": account_id},
+                    {
+                        "$set": {
+                            "open_positions": positions,
+                            "last_positions_sync": datetime.utcnow()
+                        }
+                    }
+                )
+                
+                if update_result.modified_count > 0:
+                    logger.info(f"💾 Updated MongoDB positions for {account_id}")
+                else:
+                    logger.warning(f"⚠️ No MongoDB update for {account_id} (account may not exist)")
+                    
+            except Exception as e:
+                logger.error(f"Failed to update MongoDB positions: {e}")
+                # Continue anyway - return the positions even if save fails
+            
+            logger.info(f"✅ Synced positions for {account_id}: {len(positions)} open positions")
+            if positions:
+                for pos in positions[:5]:  # Log first 5
+                    logger.info(f"   - {pos.get('instrument')}: {pos.get('quantity')} @ ${pos.get('avg_entry_price', 0):.2f}")
+                if len(positions) > 5:
+                    logger.info(f"   ... and {len(positions) - 5} more")
+            
+            return {
+                "account_id": account_id,
+                "positions": positions,
+                "position_count": len(positions),
+                "timestamp": datetime.utcnow().isoformat(),
+                "source": "broker_live"  # Indicates this is fresh broker data
+            }
+        else:
+            raise HTTPException(
+                status_code=501,
+                detail=f"Position sync not supported for broker type"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error syncing positions for {account_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error syncing positions: {str(e)}")
+
+
 @app.get('/api/v1/order/{order_id}/status')
 def get_order_status(order_id: str):
     """
@@ -1055,8 +1184,8 @@ def get_order_status(order_id: str):
             {'legs.execution.orders.$': 1, 'signal_id': 1, 'instrument': 1}
         )
         
-        if signal and 'legs' in signal:
-            for leg in signal.get('legs', []):
+        if signal and 'signal_legs' in signal:
+            for leg in signal.get('signal_legs', []):
                 execution = leg.get('execution')
                 if execution:
                     for order in execution.get('orders', []):
@@ -1120,8 +1249,8 @@ def cancel_order(order_id: str):
             {'legs.execution.orders.order_id': order_id}
         )
         
-        if signal and 'legs' in signal:
-            for leg in signal.get('legs', []):
+        if signal and 'signal_legs' in signal:
+            for leg in signal.get('signal_legs', []):
                 execution = leg.get('execution')
                 if execution:
                     for order in execution.get('orders', []):

@@ -32,6 +32,7 @@ interface SignalStore {
 
 export default function SignalStoreTab() {
   const [signals, setSignals] = useState<SignalStore[]>([]);
+  const [rawSignals, setRawSignals] = useState<{ [signalId: string]: any }>({});
   const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
   const [expandedLegId, setExpandedLegId] = useState<string | null>(null);
   const [showSignalDict, setShowSignalDict] = useState<string | null>(null);
@@ -75,6 +76,32 @@ export default function SignalStoreTab() {
       // Don't show loading spinner on refresh, only on initial load
       const data = await api.getSignalStore({ limit: 100 });
       setSignals(data.signals || []);
+      
+      // Fetch raw signals from trading_signals_raw using signal_id (or fallback to _id)
+      const rawSignalPromises = (data.signals || []).map(async (signal: SignalStore) => {
+        if (signal.signal_id && !rawSignals[signal.signal_id]) {
+          try {
+            // Try using signal_id first (will match signal_id or signalID or _id in backend)
+            const rawData = await api.getRawSignalById(signal.signal_id);
+            return { signalId: signal.signal_id, rawSignal: rawData.raw_signal };
+          } catch (err) {
+            console.error(`Failed to fetch raw signal for ${signal.signal_id}:`, err);
+            // Fallback to embedded raw_signal if fetch fails
+            return { signalId: signal.signal_id, rawSignal: signal.raw_signal };
+          }
+        }
+        return null;
+      });
+      
+      const rawSignalResults = await Promise.all(rawSignalPromises);
+      const newRawSignals = { ...rawSignals };
+      rawSignalResults.forEach((result) => {
+        if (result) {
+          newRawSignals[result.signalId] = result.rawSignal;
+        }
+      });
+      setRawSignals(newRawSignals);
+      
       setError(null);
     } catch (err: any) {
       console.error('Error fetching signal store:', err);
@@ -108,10 +135,10 @@ export default function SignalStoreTab() {
   };
 
   const getLegsCount = (signal: SignalStore) => {
-    const legs = signal.legs || [];
-    const entryCount = legs.filter((leg: any) => leg.leg_type === 'ENTRY').length;
-    const exitCount = legs.filter((leg: any) => leg.leg_type === 'EXIT').length;
-    return { entry: entryCount, exit: exitCount, total: legs.length };
+    const signal_legs = signal.signal_legs || [];
+    const entryCount = signal_legs.filter((leg: any) => leg.leg_type === 'ENTRY').length;
+    const exitCount = signal_legs.filter((leg: any) => leg.leg_type === 'EXIT').length;
+    return { entry: entryCount, exit: exitCount, total: signal_legs.length };
   };
 
   const exportToCSV = () => {
@@ -149,9 +176,9 @@ export default function SignalStoreTab() {
     ];
 
     const rows = signals.map(signal => {
-      const legs = signal.legs || [];
-      const entryLeg = legs.find((leg: any) => leg.leg_type === 'ENTRY');
-      const exitLegs = legs.filter((leg: any) => leg.leg_type === 'EXIT' || leg.leg_type === 'SCALE_OUT');
+      const signal_legs = signal.signal_legs || [];
+      const entryLeg = signal_legs.find((leg: any) => leg.leg_type === 'ENTRY');
+      const exitLegs = signal_legs.filter((leg: any) => leg.leg_type === 'EXIT' || leg.leg_type === 'SCALE_OUT');
       
       // Get entry data
       const entryExec = entryLeg?.execution || {};
@@ -358,7 +385,7 @@ export default function SignalStoreTab() {
                     const exitQty = signal.signal_status?.exit_quantity || 0;
                     const remainingQty = signal.signal_status?.remaining_quantity || 0;
                     const isExpanded = expandedSignalId === signal._id;
-                    const legs = signal.legs || [];                  
+                    const signal_legs = signal.signal_legs || [];                  
                   // Helper function to calculate lag in seconds from timestamps
                   const calculateLag = (startTime: string | undefined, endTime: string | undefined): string => {
                     if (!startTime || !endTime) return '-';
@@ -444,7 +471,7 @@ export default function SignalStoreTab() {
                         </tr>
                         
                         {/* Expanded Legs Section */}
-                        {isExpanded && legs.length > 0 && (
+                        {isExpanded && signal_legs.length > 0 && (
                           <tr>
                             <td colSpan={11} className="p-0 bg-gray-850">
                               <div className="p-4 space-y-2 overflow-visible">
@@ -452,7 +479,7 @@ export default function SignalStoreTab() {
                                 <div className="flex items-center justify-between mb-3">
                                   <div>
                                     <p className="text-xs font-mono text-gray-400 mb-2">Signal ID: {signal.signal_id}</p>
-                                    <h4 className="text-sm font-semibold text-gray-300">Signal Legs ({legs.length})</h4>
+                                    <h4 className="text-sm font-semibold text-gray-300">Signal Legs ({signal_legs.length})</h4>
                                   </div>
                                   <div className="flex items-center gap-3">
                                     <span className="text-xs font-semibold text-gray-400">Signal Dict</span>
@@ -480,7 +507,7 @@ export default function SignalStoreTab() {
                                   </div>
                                 )}
                                 
-                                {legs.map((leg: any, legIdx: number) => {
+                                {signal_legs.map((leg: any, legIdx: number) => {
                                   const legId = `${signal._id}-${legIdx}`;
                                   const isLegExpanded = expandedLegId === legId;
                                   const cerebro = leg.cerebro || {};
@@ -603,14 +630,14 @@ export default function SignalStoreTab() {
                                           <div className="grid grid-cols-3 gap-4">
                                             {/* Raw Signal */}
                                             <div className="space-y-2">
-                                              <h5 className="text-xs font-semibold text-gray-400">Raw Signal</h5>
+                                              <h5 className="text-xs font-semibold text-gray-400">Raw Signal (from trading_signals_raw)</h5>
                                               <div className="bg-gray-900 p-3 rounded text-xs font-mono space-y-1 h-full overflow-auto max-h-96">
-                                                {leg.raw ? (
+                                                {rawSignals[signal.signal_id] ? (
                                                   <pre className="text-gray-300 whitespace-pre-wrap">
-                                                    {JSON.stringify(leg.raw, null, 2)}
+                                                    {JSON.stringify(rawSignals[signal.signal_id], null, 2)}
                                                   </pre>
                                                 ) : (
-                                                  <div className="text-gray-500 italic">No raw signal data</div>
+                                                  <div className="text-gray-500 italic">Loading raw signal from trading_signals_raw...</div>
                                                 )}
                                               </div>
                                             </div>

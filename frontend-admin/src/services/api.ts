@@ -253,6 +253,11 @@ class ApiClient {
     return response.data;
   }
 
+  async getRawSignalById(signalId: string) {
+    const response = await this.frontendApiClient.get(`/api/v1/activity/raw-signal/${signalId}`);
+    return response.data;
+  }
+
   async getSignalStore(limit: number = 100, environment?: string) {
     const params: any = { limit };
     if (environment) params.environment = environment;

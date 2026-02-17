@@ -307,19 +307,19 @@ def build_decision_v2(
     # Build decision.math as formatted string (7 sections matching log_detailed_calculation_math)
     math_lines = []
     
-    # Extract original quantity from signal (check legs structure first, fallback to top-level)
+    # Extract original quantity from signal (check signal_legs structure first, fallback to top-level)
     raw_qty = 0
     if legs and len(legs) > 0:
         raw_qty = legs[0].get('quantity', 0)
-    elif signal.get('legs') and len(signal.get('legs', [])) > 0:
-        raw_qty = signal['legs'][0].get('quantity', 0)
+    elif signal.get('signal_legs') and len(signal.get('signal_legs', [])) > 0:
+        raw_qty = signal['signal_legs'][0].get('quantity', 0)
     else:
         raw_qty = signal.get('quantity', 0)
     
     final_qty = decision_obj.quantity if decision_obj else 0
 
-    # Extract first leg info for display (prefer passed legs param, fallback to signal.legs)
-    first_leg = legs[0] if legs and len(legs) > 0 else (signal.get('legs', [{}])[0] if signal.get('legs') else signal)
+    # Extract first leg info for display (prefer passed legs param, fallback to signal.signal_legs)
+    first_leg = legs[0] if legs and len(legs) > 0 else (signal.get('signal_legs', [{}])[0] if signal.get('signal_legs') else signal)
 
     # --- 1. SIGNAL INPUT ---
     math_lines.append("--- 1. SIGNAL INPUT ---")
@@ -427,19 +427,21 @@ def build_decision_v2(
 
 
 # Helper function to update signal_store with cerebro output
-def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict, raw_signal_id: str = None):
+def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict, raw_signal_id: str = None, leg_indices: list = None):
     """
-    Update signal_store document with cerebro output in CONSOLIDATED SCHEMA (v3).
+    Update signal_store document with cerebro output in CONSOLIDATED SCHEMA (v4).
 
-    CONSOLIDATED SCHEMA:
-    - Finds the specific leg in legs[] array by matching raw._id
-    - Updates legs[i].cerebro field for that leg
+    CONSOLIDATED SCHEMA v4:
+    - Finds the specific leg(s) in signal_legs[] array by matching raw_signal_id or leg_indices
+    - Updates signal_legs[i].cerebro field for each leg
     - Sets processing_complete flag at document root
+    - Raw signal data stored at document root as raw_signal
 
     Args:
         signal_store_id: MongoDB ObjectId of the signal_store document
         decision_doc: Decision document to store
-        raw_signal_id: MongoDB ObjectId of the raw signal (to match leg)
+        raw_signal_id: MongoDB ObjectId of the raw signal (to match leg) - only used if leg_indices not provided
+        leg_indices: List of leg indices to update (for multi-leg signals) - if provided, overrides raw_signal_id matching
     """
     if not signal_store_id:
         logger.warning("⚠️ No signal_store_id provided, skipping signal_store update")
@@ -451,56 +453,65 @@ def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict, 
         # Determine status for processing_complete flag
         status = decision_doc.get("status", decision_doc.get("decision", ""))
 
-        # Get the signal document to find the matching leg
+        # Get the signal document to find the matching leg(s)
         signal_doc = signal_store_collection.find_one({"_id": ObjectId(signal_store_id)})
         if not signal_doc:
             logger.error(f"❌ Signal document {signal_store_id} not found")
             return
 
-        legs = signal_doc.get('legs', [])
-        if not legs:
-            logger.error(f"❌ No legs found in signal document {signal_store_id}")
+        signal_legs = signal_doc.get('signal_legs', [])
+        if not signal_legs:
+            logger.error(f"❌ No signal_legs found in signal document {signal_store_id}")
             return
 
-        # Find the leg that matches this raw signal
-        # For consolidated schema, there should be a leg with raw._id matching the raw signal
-        leg_index = None
+        # ⭐ MULTI-LEG UPDATE: If leg_indices provided, update all specified legs
+        if leg_indices is not None:
+            target_leg_indices = leg_indices
+            logger.info(f"🔗 Updating {len(target_leg_indices)} legs: {target_leg_indices}")
+        else:
+            # Single leg mode: find the leg that matches this raw signal
+            leg_index = None
 
-        # If raw_signal_id provided, match by raw._id
-        if raw_signal_id:
-            for idx, leg in enumerate(legs):
-                if str(leg.get('raw', {}).get('_id')) == str(raw_signal_id):
-                    leg_index = idx
-                    break
+            # If raw_signal_id provided, match by raw_signal_id field in leg
+            if raw_signal_id:
+                for idx, leg in enumerate(signal_legs):
+                    if str(leg.get('raw_signal_id')) == str(raw_signal_id):
+                        leg_index = idx
+                        break
 
-        # Fallback: if only one leg, use it
-        if leg_index is None and len(legs) == 1:
-            leg_index = 0
-            logger.debug(f"Using first leg (only one leg in document)")
+            # Fallback: if only one leg, use it
+            if leg_index is None and len(signal_legs) == 1:
+                leg_index = 0
+                logger.debug(f"Using first leg (only one leg in document)")
 
-        # Fallback: find first leg without decision
-        if leg_index is None:
-            for idx, leg in enumerate(legs):
-                if not leg.get('cerebro'):
-                    leg_index = idx
-                    logger.debug(f"Using first leg without cerebro at index {idx}")
-                    break
+            # Fallback: find first leg without decision
+            if leg_index is None:
+                for idx, leg in enumerate(signal_legs):
+                    if not leg.get('cerebro'):
+                        leg_index = idx
+                        logger.debug(f"Using first leg without cerebro at index {idx}")
+                        break
 
-        if leg_index is None:
-            logger.error(f"❌ Could not find matching leg in signal document {signal_store_id}")
-            logger.error(f"   Document has {len(legs)} legs, raw_signal_id={raw_signal_id}")
-            return
+            if leg_index is None:
+                logger.error(f"❌ Could not find matching leg in signal document {signal_store_id}")
+                logger.error(f"   Document has {len(signal_legs)} signal_legs, raw_signal_id={raw_signal_id}")
+                return
+            
+            target_leg_indices = [leg_index]
 
-        # Update the specific leg's cerebro field and add cerebro timestamp
+        # Update the specific leg(s) cerebro field and add cerebro timestamp
         now = datetime.utcnow()
         
         # Prepare update fields
         update_fields = {
-            f"legs.{leg_index}.cerebro": decision_doc,
-            f"legs.{leg_index}.processing_timestamps.cerebro_processed": now,
             "processing_complete": status in ["APPROVED", "RESIZE"],
             "updated_at": now
         }
+
+        # Update each target leg
+        for leg_idx in target_leg_indices:
+            update_fields[f"signal_legs.{leg_idx}.cerebro"] = decision_doc
+            update_fields[f"signal_legs.{leg_idx}.processing_timestamps.cerebro_processed"] = now
         
         # Update signal_status based on cerebro decision
         if status == "REJECTED":
@@ -515,7 +526,14 @@ def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict, 
             {"_id": ObjectId(signal_store_id)},
             {"$set": update_fields}
         )
-        logger.info(f"✅ Updated signal_store {signal_store_id} leg {leg_index} with cerebro (status={status})")
+        
+        if len(target_leg_indices) > 1:
+            logger.info(f"✅ Updated signal_store {signal_store_id} - {len(target_leg_indices)} legs with cerebro (status={status})")
+        else:
+            logger.info(f"✅ Updated signal_store {signal_store_id} signal_leg {target_leg_indices[0]} with cerebro (status={status})")
+
+    except Exception as e:
+        logger.error(f"⚠️ Failed to update signal_store: {e}", exc_info=True)
 
     except Exception as e:
         logger.error(f"⚠️ Failed to update signal_store: {e}", exc_info=True)
@@ -793,19 +811,19 @@ def estimate_ibkr_margin(signal: Dict[str, Any], quantity: float, price: float) 
     elif instrument_type == 'OPTION':
         # Options: Use SPAN-like estimate based on underlying notional
         # For multi-leg: sum individual leg margins
-        legs = signal.get('legs', [])
+        signal_legs = signal.get('signal_legs', [])
 
-        if legs:
+        if signal_legs:
             # Multi-leg option strategy (e.g., iron condor, spreads)
             total_margin = 0
-            for leg in legs:
+            for leg in signal_legs:
                 leg_notional = leg['quantity'] * leg['strike'] * 100  # Options multiplier
                 # Rough SPAN estimate: ~20% of notional per leg
                 total_margin += leg_notional * 0.20
 
             estimated_margin = total_margin
             margin_pct = (estimated_margin / notional_value * 100) if notional_value > 0 else 20.0
-            method = f"Multi-leg Option SPAN estimate ({len(legs)} legs)"
+            method = f"Multi-leg Option SPAN estimate ({len(signal_legs)} legs)"
         else:
             # Single option position
             margin_pct = 0.20
@@ -987,13 +1005,13 @@ def find_open_entry_signal(strategy_id: str, instrument: str, direction: str) ->
 
         # CONSOLIDATED SCHEMA v3: Query for document with position.status = OPEN
         # The document root has: strategy_id, instrument, position.status
-        # Each leg in legs[] has: cerebro.status, execution.status
+        # Each leg in signal_legs[] has: cerebro.status, execution.status
         entry_signal = signal_store_collection.find_one({
             "strategy_id": strategy_id,
             "instrument": instrument,
             "position.status": "OPEN",
             # Check that at least one leg has APPROVED decision and FILLED execution
-            "legs": {
+            "signal_legs": {
                 "$elemMatch": {
                     "leg_type": "ENTRY",
                     "cerebro.status": {"$in": ["APPROVED", "RESIZE"]},
@@ -1446,36 +1464,52 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
     signal_logger = get_signal_processing_logger()
 
     # Extract raw signal data and legs based on schema version
-    # CONSOLIDATED SCHEMA (v3): legs at signal.legs[] with raw data at signal.legs[].raw
+    # CONSOLIDATED SCHEMA (v4): signal_legs at signal.signal_legs[] with raw data at signal.raw_signal
+    # OLD SCHEMA (v3): legs at signal.legs[] with raw data at signal.legs[].raw
     # OLD SCHEMA (v2): legs at signal.raw.legs[]
 
-    # Try consolidated schema first: signal.legs[]
-    legs_array = signal.get('legs')  # Consolidated schema
+    # Try consolidated schema first: signal.signal_legs[]
+    legs_array = signal.get('signal_legs')  # Consolidated schema v4
 
     if legs_array and isinstance(legs_array, list) and len(legs_array) > 0:
-        # CONSOLIDATED SCHEMA: Extract raw data and legs from first leg that needs processing
-        # Find first leg without cerebro decision (needs cerebro processing)
-        current_leg = None
-        for leg in legs_array:
-            if not leg.get('cerebro'):  # FIX: Check 'cerebro' field, not 'decision'
-                current_leg = leg
-                break
+        # CONSOLIDATED SCHEMA v4: Extract raw data from root and legs from legs array
+        # ⭐ MULTI-LEG SIGNAL PROCESSING: Find ALL legs without cerebro decision
+        unprocessed_legs = []
+        unprocessed_leg_indices = []  # Track indices in signal_legs array
+        for idx, leg in enumerate(legs_array):
+            if not leg.get('cerebro'):  # Check 'cerebro' field
+                unprocessed_legs.append(leg)
+                unprocessed_leg_indices.append(idx)
 
-        if not current_leg:
+        if not unprocessed_legs:
             logger.debug(f"All legs already have cerebro decisions, skipping signal {signal_id}")
             return
 
-        # Extract raw data from the current leg
-        raw_obj = current_leg.get('raw', {})
+        # Extract raw data from document root (NEW in v4)
+        raw_obj = signal.get('raw_signal', {})
+        if not raw_obj:
+            # Fallback to old schema (v3) - raw data in first unprocessed leg
+            raw_obj = unprocessed_legs[0].get('raw', {})
+        
         raw_signal_id = str(raw_obj.get('_id')) if raw_obj.get('_id') else None
         raw_signal = raw_obj  # For compatibility with code that uses raw_signal
-        legs = raw_obj.get('signal_legs', [])  # The actual signal legs (BUY/SELL actions)
+        legs = raw_obj.get('signal_legs', [])  # The actual signal legs (BUY/SELL actions from raw signal)
+
+        # ⭐ MULTI-LEG PROCESSING: Log how many legs we're processing together
+        if len(unprocessed_legs) > 1:
+            logger.info(f"🔗 MULTI-LEG SIGNAL: Processing {len(unprocessed_legs)} legs together for signal {signal_id}")
+            for idx, leg in enumerate(unprocessed_legs):
+                logger.info(f"   Leg {idx}: {leg.get('instrument')} ({leg.get('leg_type')})")
+        
+        # Use first unprocessed leg for building normalized signal (compatibility)
+        current_leg = unprocessed_legs[0]
     else:
         # OLD SCHEMA (v2): signal.raw.legs or signal.signal_data
         raw_obj = signal.get('raw', {})
         raw_signal_id = str(raw_obj.get('_id')) if raw_obj.get('_id') else None
         raw_signal = signal.get('signal_data', signal)  # v1 compatibility
         legs = raw_obj.get('legs') or raw_signal.get('legs') or raw_signal.get('signal_legs') or raw_signal.get('signal')
+        unprocessed_leg_indices = None  # Old schema doesn't support multi-leg updates
     if not legs or len(legs) == 0:
         logger.error(f"❌ No legs found in signal {signal_id} - cannot process")
         decision = build_decision_v2(
@@ -1874,7 +1908,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                     if entry_signal:
                         logger.info(f"✅ Found entry signal by ObjectId: {entry_signal.get('signal_id')}")
                         # Extract order IDs from entry signal for cancellation reference
-                        for leg in entry_signal.get('legs', []):
+                        for leg in entry_signal.get('signal_legs', []):
                             execution = leg.get('execution', {})
                             for order in execution.get('orders', []):
                                 entry_order_ids.append(order.get('order_id'))
@@ -1894,7 +1928,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
                 if entry_signal:
                     logger.info(f"✅ Found entry signal by fuzzy match: {entry_signal.get('signal_id')}")
                     # Extract order IDs
-                    for leg in entry_signal.get('legs', []):
+                    for leg in entry_signal.get('signal_legs', []):
                         execution = leg.get('execution', {})
                         for order in execution.get('orders', []):
                             entry_order_ids.append(order.get('order_id'))
@@ -1957,7 +1991,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             actual_filled_quantity = None
             
             if entry_signal:
-                entry_legs = entry_signal.get('legs', [])
+                entry_legs = entry_signal.get('signal_legs', [])
                 if entry_legs:
                     # Find the ENTRY leg (should be first leg)
                     entry_leg = None
@@ -2501,10 +2535,19 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             # Replace created_orders with enriched version that includes broker/account info
             decision_doc["created_orders"] = enriched_orders
             
+            # ⭐ MULTI-LEG UPDATE: Update ALL processed legs with the same cerebro decision
             # Update signal_store with COMPLETE cerebro document
-            update_signal_store_with_decision(signal_store_id, decision_doc, raw_signal_id)
+            update_signal_store_with_decision(
+                signal_store_id, 
+                decision_doc, 
+                raw_signal_id,
+                leg_indices=unprocessed_leg_indices if 'unprocessed_leg_indices' in locals() else None
+            )
             decision_written = True
-            logger.info(f"✅ Updated signal_store with cerebro including {len(enriched_orders)} enriched order(s) with broker info")
+            if 'unprocessed_leg_indices' in locals() and len(unprocessed_leg_indices) > 1:
+                logger.info(f"✅ Updated signal_store with cerebro for {len(unprocessed_leg_indices)} legs, including {len(enriched_orders)} enriched order(s) with broker info")
+            else:
+                logger.info(f"✅ Updated signal_store with cerebro including {len(enriched_orders)} enriched order(s) with broker info")
             
             # Now create and send trading orders to execution service
             

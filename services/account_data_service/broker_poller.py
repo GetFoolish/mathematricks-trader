@@ -464,10 +464,10 @@ class BrokerPoller:
         # Get or create broker instance
         broker = self._get_broker(account_id, config)
 
-        # Connect if needed
+        # Connect if needed (readonly mode - no market data access needed)
         if not broker.is_connected():
             logger.info(f"Connecting to {account_id}...")
-            if not broker.connect():
+            if not broker.connect(skip_sync=True):
                 raise Exception("Failed to connect to broker")
 
         # Fetch balances
@@ -515,10 +515,10 @@ class BrokerPoller:
             # Create broker instance with mode-aware logic
             broker = self._get_broker(account_id, config)
 
-            # Connect
+            # Connect (readonly mode - no market data access needed)
             if not broker.is_connected():
                 logger.info(f"Connecting to {account_id}...")
-                if not broker.connect():
+                if not broker.connect(skip_sync=True):
                     raise Exception("Failed to connect to broker")
 
             # Fetch balances

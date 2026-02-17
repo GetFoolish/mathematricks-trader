@@ -120,9 +120,24 @@ class IBKRBroker(AbstractBroker):
                 
                 logger.info("IB thread started, attempting connection...")
                 
+                # CRITICAL: Clean up stale connections before connecting
+                # This prevents "Error 10197: No market data during competing live session"
+                original_client_id = self.client_id
+                logger.info(f"🧹 Cleaning up stale connections for client_id {original_client_id}...")
+                try:
+                    # Force disconnect any existing connection with our target client_id
+                    cleanup_ib = IB()
+                    cleanup_ib.connect(self.host, self.port, clientId=original_client_id, readonly=True, timeout=2)
+                    util.sleep(0.1)
+                    cleanup_ib.disconnect()
+                    util.sleep(0.2)
+                    logger.info(f"✅ Cleaned up stale connection for client_id {original_client_id}")
+                except Exception as e:
+                    # Expected if no stale connection exists
+                    logger.debug(f"No stale connection to clean (normal): {e}")
+                
                 # Connection retry logic (same as before but in this thread)
                 max_retries = 5
-                original_client_id = self.client_id
                 
                 for attempt in range(max_retries):
                     current_client_id = original_client_id + attempt
@@ -439,6 +454,8 @@ class IBKRBroker(AbstractBroker):
         """
         Place an order with IBKR.
 
+        Thread-safe: Submits async task to IB's dedicated event loop thread.
+
         This method accepts orders in the internal standard format and automatically
         translates them to IBKR-specific format before placement.
 
@@ -478,10 +495,36 @@ class IBKRBroker(AbstractBroker):
             InvalidSymbolError: If symbol is invalid
             BrokerAPIError: For other broker API errors
         """
+        if not self.is_connected():
+            raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+
+        if not self._ib_loop:
+            raise BrokerAPIError("IB event loop not started", broker_name="IBKR")
+
+        # Submit async task to IB's event loop from any thread
+        future = asyncio.run_coroutine_threadsafe(
+            self._place_order_async(order),
+            self._ib_loop
+        )
+        
+        # Wait for result with timeout
         try:
-            # Ensure connected
-            if not self.is_connected():
-                raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+            return future.result(timeout=30.0)  # 30s timeout for order placement
+        except TimeoutError:
+            logger.error(f"⏱️ Timeout placing order")
+            raise BrokerTimeoutError("Timeout placing order", broker_name="IBKR")
+        except Exception as e:
+            logger.error(f"Error in place_order future: {e}", exc_info=True)
+            raise
+        finally:
+            if not future.done():
+                future.cancel()
+
+    async def _place_order_async(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Async coroutine to place order - runs in IB's event loop thread.
+        """
+        try:
 
             # Step 1: Translate internal order format to IBKR format
             order = self._translate_order(order)
@@ -555,16 +598,18 @@ class IBKRBroker(AbstractBroker):
                         raise ValueError("CRYPTO orders require a price to calculate cash quantity")
                     cash_amount = round(leg_quantity * price, 2)  # USD amount
                     ib_order.cashQty = cash_amount
-                    # IBKR crypto requires explicit TIF - use IOC for market, GTC for limit
-                    ib_order.tif = "IOC" if order_type == "MARKET" else "GTC"
                     logger.info(f"📤 Placing CRYPTO order: {leg_action} ${cash_amount:.2f} USD of {qualified_contract.symbol}")
                 else:
                     logger.info(f"🔍 DEBUG place_order Step 5.{i}h: Setting totalQuantity={leg_quantity}")
                     ib_order.totalQuantity = leg_quantity
                     logger.info(f"📤 Placing order: {leg_action} {leg_quantity} {qualified_contract.symbol}")
                 
+                # Set TIF for all order types - IBKR requires explicit TIF
+                # IOC (Immediate or Cancel) for market orders, GTC (Good till Cancel) for limit orders
+                ib_order.tif = "IOC" if order_type == "MARKET" else "GTC"
+                
                 logger.info(f"🔍 DEBUG place_order Step 5.{i}i: Connection status before placeOrder: {self.is_connected()}")
-                logger.info(f"🔍 DEBUG place_order Step 5.{i}j: About to call ib.placeOrder() - THIS IS WHERE IT MAY HANG")
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}j: About to call ib.placeOrder()")
                 trade = self.ib.placeOrder(qualified_contract, ib_order)
                 logger.info(f"🔍 DEBUG place_order Step 5.{i}k: ib.placeOrder() RETURNED! Trade object: {trade}")
                 trades.append(trade)
@@ -572,7 +617,7 @@ class IBKRBroker(AbstractBroker):
 
             # Wait for order acknowledgment
             logger.info(f"🔍 DEBUG place_order Step 6: All contracts processed, waiting 2s for acknowledgment...")
-            self.ib.sleep(2)
+            await asyncio.sleep(2)
             logger.info(f"🔍 DEBUG place_order Step 7: Sleep complete, checking order status...")
 
             # Check if any legs were rejected
@@ -664,6 +709,8 @@ class IBKRBroker(AbstractBroker):
         """
         Cancel an open order.
 
+        Thread-safe: Runs in IB's dedicated event loop thread via call_soon_threadsafe.
+
         Args:
             broker_order_id: Broker's order ID
 
@@ -674,47 +721,67 @@ class IBKRBroker(AbstractBroker):
             OrderNotFoundError: If order doesn't exist
             BrokerAPIError: For API errors
         """
+        if not self.is_connected():
+            raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+        
+        if not self._ib_loop:
+            raise BrokerAPIError("IB event loop not started", broker_name="IBKR")
+        
+        # Use Future to pass result from IB thread back to calling thread
+        future = Future()
+        
+        def run_in_ib_thread():
+            try:
+                # Check if we have this order in our tracking
+                if broker_order_id not in self.active_trades:
+                    future.set_exception(OrderNotFoundError(
+                        f"Order {broker_order_id} not found in active orders",
+                        broker_name="IBKR",
+                        broker_order_id=broker_order_id
+                    ))
+                    return
+
+                trades = self.active_trades[broker_order_id]
+                logger.info(f"🚫 Cancelling order {broker_order_id} ({len(trades)} legs)...")
+
+                cancelled_count = 0
+                for i, trade in enumerate(trades, 1):
+                    try:
+                        status = trade.orderStatus.status
+                        if status in ['Filled', 'Cancelled', 'ApiCancelled', 'Inactive']:
+                            logger.info(f"   Leg {i} already {status} - skipping")
+                            continue
+
+                        self.ib.cancelOrder(trade.order)
+                        cancelled_count += 1
+                        logger.info(f"   ✓ Cancelled leg {i}")
+
+                    except Exception as e:
+                        logger.error(f"   ✗ Error cancelling leg {i}: {e}")
+
+                # Wait for cancellation to process
+                self.ib.sleep(0.5)
+
+                # Remove from tracking
+                del self.active_trades[broker_order_id]
+                logger.info(f"✅ Order {broker_order_id} cancelled ({cancelled_count}/{len(trades)} legs)")
+
+                future.set_result(cancelled_count > 0)
+            except Exception as e:
+                logger.error(f"Error cancelling order {broker_order_id}: {e}", exc_info=True)
+                future.set_exception(BrokerAPIError(f"Failed to cancel order: {str(e)}", broker_name="IBKR"))
+        
+        # Submit to IB thread and wait for result
+        self._ib_loop.call_soon_threadsafe(run_in_ib_thread)
+        
         try:
-            # Check if we have this order in our tracking
-            if broker_order_id not in self.active_trades:
-                raise OrderNotFoundError(
-                    f"Order {broker_order_id} not found in active orders",
-                    broker_name="IBKR",
-                    broker_order_id=broker_order_id
-                )
-
-            trades = self.active_trades[broker_order_id]
-            logger.info(f"🚫 Cancelling order {broker_order_id} ({len(trades)} legs)...")
-
-            cancelled_count = 0
-            for i, trade in enumerate(trades, 1):
-                try:
-                    status = trade.orderStatus.status
-                    if status in ['Filled', 'Cancelled', 'ApiCancelled', 'Inactive']:
-                        logger.info(f"   Leg {i} already {status} - skipping")
-                        continue
-
-                    self.ib.cancelOrder(trade.order)
-                    cancelled_count += 1
-                    logger.info(f"   ✓ Cancelled leg {i}")
-
-                except Exception as e:
-                    logger.error(f"   ✗ Error cancelling leg {i}: {e}")
-
-            # Wait for cancellation to process
-            self.ib.sleep(0.5)
-
-            # Remove from tracking
-            del self.active_trades[broker_order_id]
-            logger.info(f"✅ Order {broker_order_id} cancelled ({cancelled_count}/{len(trades)} legs)")
-
-            return cancelled_count > 0
-
-        except OrderNotFoundError:
-            raise
+            return future.result(timeout=10.0)
+        except FuturesTimeoutError:
+            logger.error(f"⏱️ Timeout cancelling order {broker_order_id}")
+            raise BrokerTimeoutError(f"Timeout cancelling order {broker_order_id}", broker_name="IBKR")
         except Exception as e:
-            logger.error(f"Error cancelling order {broker_order_id}: {e}", exc_info=True)
-            raise BrokerAPIError(f"Failed to cancel order: {str(e)}", broker_name="IBKR")
+            # Exception was already set by run_in_ib_thread
+            raise
 
     def get_order_status(self, broker_order_id: str) -> Dict[str, Any]:
         """
@@ -807,6 +874,8 @@ class IBKRBroker(AbstractBroker):
         """
         Get account balance and equity.
 
+        Thread-safe: Submits async task to IB's dedicated event loop thread.
+
         Args:
             account_id: Optional account ID (uses default from config if not provided)
 
@@ -821,13 +890,40 @@ class IBKRBroker(AbstractBroker):
                 "timestamp": "2025-01-07T12:00:00Z"
             }
         """
+        if not self.is_connected():
+            raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+        
+        if not self._ib_loop:
+            raise BrokerAPIError("IB event loop not started", broker_name="IBKR")
+        
+        # Submit async task to IB's event loop from any thread
+        future = asyncio.run_coroutine_threadsafe(
+            self._get_account_balance_async(account_id),
+            self._ib_loop
+        )
+        
+        # Wait for result with timeout
         try:
-            if not self.is_connected():
-                raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+            return future.result(timeout=10.0)
+        except FuturesTimeoutError:
+            logger.error(f"⏱️ Timeout getting account balance")
+            raise BrokerTimeoutError("Timeout getting account balance", broker_name="IBKR")
+        except Exception as e:
+            logger.error(f"Error in get_account_balance future: {e}", exc_info=True)
+            raise
+        finally:
+            if not future.done():
+                future.cancel()
 
-            # Use existing connection instead of creating temporary connections
-            # This prevents accumulating stale client IDs in IB Gateway
-            account_summary = self.ib.accountSummary()
+    async def _get_account_balance_async(self, account_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Async coroutine to get account balance - runs in IB's event loop thread.
+        Uses accountSummaryAsync() which is safe for already-running event loops.
+        """
+        try:
+            # Use async version since event loop is already running
+            # accountSummary() calls run_until_complete() internally which fails
+            account_summary = await self.ib.accountSummaryAsync()
             
             logger.info(f"Account summary items: {len(account_summary)}")
 
@@ -869,15 +965,15 @@ class IBKRBroker(AbstractBroker):
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
-        except BrokerConnectionError:
-            raise
         except Exception as e:
-            logger.error(f"Error getting account balance: {e}", exc_info=True)
+            logger.error(f"Error in _get_account_balance_async: {e}", exc_info=True)
             raise BrokerAPIError(f"Failed to get account balance: {str(e)}", broker_name="IBKR")
 
     def get_open_positions(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get all open positions.
+
+        Thread-safe: Submits async task to IB's dedicated event loop thread.
 
         Args:
             account_id: Optional account ID
@@ -896,10 +992,41 @@ class IBKRBroker(AbstractBroker):
                 }
             ]
         """
+        if not self.is_connected():
+            raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+        
+        if not self._ib_loop:
+            raise BrokerAPIError("IB event loop not started", broker_name="IBKR")
+        
+        # Submit async task to IB's event loop from any thread
+        future = asyncio.run_coroutine_threadsafe(
+            self._get_open_positions_async(account_id),
+            self._ib_loop
+        )
+        
+        # Wait for result with timeout
         try:
-            if not self.is_connected():
-                raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+            return future.result(timeout=10.0)
+        except FuturesTimeoutError:
+            logger.error(f"⏱️ Timeout getting open positions")
+            raise BrokerTimeoutError("Timeout getting open positions", broker_name="IBKR")
+        except Exception as e:
+            logger.error(f"Error in get_open_positions future: {e}", exc_info=True)
+            raise
+        finally:
+            if not future.done():
+                future.cancel()
 
+    async def _get_open_positions_async(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Async coroutine to get open positions - runs in IB's event loop thread.
+        Uses reqPositionsAsync() which is safe for already-running event loops.
+        """
+        try:
+            # Use async version since event loop is already running
+            # positions() calls run_until_complete() internally which fails
+            # Request positions and wait for them
+            await self.ib.reqPositionsAsync()
             positions = self.ib.positions()
             open_positions = []
 
@@ -930,8 +1057,6 @@ class IBKRBroker(AbstractBroker):
 
             return open_positions
 
-        except BrokerConnectionError:
-            raise
         except Exception as e:
             logger.error(f"Error getting open positions: {e}", exc_info=True)
             raise BrokerAPIError(f"Failed to get open positions: {str(e)}", broker_name="IBKR")

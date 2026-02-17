@@ -41,38 +41,11 @@ class MongoDBWatcher:
 
     def _build_leg_data(self, raw_signal_doc: dict, signal_array: list, leg_index: int) -> dict:
         """
-        Build data for a single leg to be added to the legs array.
+        Build data for a single leg to be added to the signal_legs array.
 
-        Returns leg object that will be appended to the signal document's legs array.
+        Returns leg object that will be appended to the signal document's signal_legs array.
+        NOTE: Raw signal data is now stored at document root, not in individual legs.
         """
-        # Build raw.signal_legs from signal_legs array
-        raw_signal_legs = []
-        for leg in signal_array:
-            raw_leg = {
-                "instrument": leg.get('instrument') or leg.get('ticker'),
-                "instrument_type": leg.get('instrument_type', 'STOCK'),
-                "action": leg.get('action', 'UNKNOWN'),
-                "direction": leg.get('direction', 'UNKNOWN'),
-                "quantity": leg.get('quantity', 0),
-                "order_type": leg.get('order_type', 'MARKET'),
-                "price": leg.get('price', 0),
-            }
-            # Optional fields
-            if leg.get('stop_loss'):
-                raw_leg['stop_loss'] = leg['stop_loss']
-            if leg.get('take_profit'):
-                raw_leg['take_profit'] = leg['take_profit']
-            if leg.get('strike'):
-                raw_leg['strike'] = leg['strike']
-            if leg.get('expiry'):
-                raw_leg['expiry'] = leg['expiry']
-            if leg.get('option_type'):
-                raw_leg['option_type'] = leg['option_type']
-            # Preserve nested option legs if provided (multi-leg option strategies)
-            if leg.get('legs') and isinstance(leg.get('legs'), list):
-                raw_leg['legs'] = leg['legs']
-            raw_signal_legs.append(raw_leg)
-
         # Determine leg_type from first leg's action (or signal_type if available)
         signal_type = raw_signal_doc.get('signal_type', 'ENTRY').upper()
         first_leg_action = signal_array[0].get('action', 'UNKNOWN').upper() if signal_array else 'UNKNOWN'
@@ -95,17 +68,7 @@ class MongoDBWatcher:
             "leg_id": leg_id,
             "leg_type": leg_type,
             "leg_index": leg_index,
-            "raw": {
-                "_id": raw_signal_doc['_id'],  # Reference to trading_signals_raw
-                "received_at": raw_signal_doc.get('received_at', now),
-                "sent_epoch": raw_signal_doc.get('signal_sent_EPOCH'),
-                "entry_name": raw_signal_doc.get('entry_name'),
-                "exit_name": raw_signal_doc.get('exit_name'),
-                "entry_signal_id": raw_signal_doc.get('entry_signal_id'),  # ObjectId reference to parent ENTRY
-                "account_equity": raw_signal_doc.get('account_equity'),
-                "signal_type": signal_type,
-                "signal_legs": raw_signal_legs
-            },
+            "raw_signal_id": raw_signal_doc['_id'],  # Reference to trading_signals_raw
             "cerebro": None,  # Will be populated by cerebro
             "execution": None,  # Will be populated by execution service
             "processing_timestamps": {
@@ -144,9 +107,15 @@ class MongoDBWatcher:
         if is_exit_or_scale and not parent_signal_id:
             self.logger.warning(f"EXIT/SCALE signal {signal_id} missing entry_signal_id - cannot link to parent")
 
-        # Get instrument info from first leg
-        first_leg = signal_array[0] if signal_array else {}
-        instrument = first_leg.get('instrument') or first_leg.get('ticker')
+        # Get instrument info - for multi-leg signals, combine all instruments
+        if len(signal_array) > 1:
+            # Multi-leg signal: combine all instruments with pipe separator
+            instruments = [leg.get('instrument') or leg.get('ticker') for leg in signal_array if leg.get('instrument') or leg.get('ticker')]
+            instrument = '|'.join(instruments)
+        else:
+            # Single-leg signal: use first leg
+            first_leg = signal_array[0] if signal_array else {}
+            instrument = first_leg.get('instrument') or first_leg.get('ticker')
         
         # Use resolved defaults if provided, otherwise use values from raw_signal_doc
         if resolved_defaults:
@@ -171,8 +140,11 @@ class MongoDBWatcher:
             "data_source": data_source,  # Data source for broker selection (mock or live) - resolved from strategy if missing
             "instrument": instrument,
 
-            # === LEGS ARRAY (ONE DOCUMENT PER SIGNAL!) ===
-            "legs": [],  # Will be appended to
+            # === RAW SIGNAL DATA (stored once at root, not in each leg) ===
+            "raw_signal": None,  # Will be set when creating ENTRY signal
+
+            # === SIGNAL LEGS ARRAY (ONE DOCUMENT PER SIGNAL!) ===
+            "signal_legs": [],  # Will be appended to
 
             # === SIGNAL STATUS ===
             "signal_status": {
@@ -426,7 +398,47 @@ class MongoDBWatcher:
 
                             # Add first leg (the ENTRY leg)
                             entry_leg = self._build_leg_data(raw_signal_doc, signal_array, 0)
-                            signal_store_doc['legs'] = [entry_leg]
+                            signal_store_doc['signal_legs'] = [entry_leg]
+
+                            # Build and store raw signal data at root level (once per document)
+                            raw_signal_legs = []
+                            for leg in signal_array:
+                                raw_leg = {
+                                    "instrument": leg.get('instrument') or leg.get('ticker'),
+                                    "instrument_type": leg.get('instrument_type', 'STOCK'),
+                                    "action": leg.get('action', 'UNKNOWN'),
+                                    "direction": leg.get('direction', 'UNKNOWN'),
+                                    "quantity": leg.get('quantity', 0),
+                                    "order_type": leg.get('order_type', 'MARKET'),
+                                    "price": leg.get('price', 0),
+                                }
+                                # Optional fields
+                                if leg.get('stop_loss'):
+                                    raw_leg['stop_loss'] = leg['stop_loss']
+                                if leg.get('take_profit'):
+                                    raw_leg['take_profit'] = leg['take_profit']
+                                if leg.get('strike'):
+                                    raw_leg['strike'] = leg['strike']
+                                if leg.get('expiry'):
+                                    raw_leg['expiry'] = leg['expiry']
+                                if leg.get('option_type'):
+                                    raw_leg['option_type'] = leg['option_type']
+                                # Preserve nested option legs if provided (multi-leg option strategies)
+                                if leg.get('legs') and isinstance(leg.get('legs'), list):
+                                    raw_leg['legs'] = leg['legs']
+                                raw_signal_legs.append(raw_leg)
+
+                            signal_store_doc['raw_signal'] = {
+                                "_id": raw_signal_doc['_id'],
+                                "received_at": raw_signal_doc.get('received_at', datetime.datetime.utcnow()),
+                                "sent_epoch": raw_signal_doc.get('signal_sent_EPOCH'),
+                                "entry_name": raw_signal_doc.get('entry_name'),
+                                "exit_name": raw_signal_doc.get('exit_name'),
+                                "entry_signal_id": raw_signal_doc.get('entry_signal_id'),
+                                "account_equity": raw_signal_doc.get('account_equity'),
+                                "signal_type": raw_signal_doc.get('signal_type', 'ENTRY').upper(),
+                                "signal_legs": raw_signal_legs
+                            }
 
                             # Insert into signal_store
                             result = self.signal_store_collection.insert_one(signal_store_doc)
@@ -437,7 +449,10 @@ class MongoDBWatcher:
                     # UPDATE trading_signals_raw with link
                     self.mongodb_collection.update_one(
                         {"_id": raw_signal_doc['_id']},
-                        {"$set": {"mathematricks_signal_id": mathematricks_signal_id}}
+                        {"$set": {
+                            "mathematricks_signal_id": mathematricks_signal_id,
+                            "signal_id": raw_signal_doc['signalID']  # Normalize signalID -> signal_id
+                        }}
                     )
 
                     # Convert MongoDB document to signal format
@@ -599,23 +614,29 @@ class MongoDBWatcher:
                                 parent_doc = self.signal_store_collection.find_one({"base_signal_id": parent_signal_id})
 
                             if parent_doc:
-                                # Calculate leg index
-                                leg_index = len(parent_doc.get('legs', []))
+                                # Calculate starting leg index
+                                current_leg_count = len(parent_doc.get('signal_legs', []))
 
-                                # Build leg data
-                                leg_data = self._build_leg_data(raw_signal_doc, signal_array, leg_index)
+                                # Build one leg per instrument in the EXIT signal
+                                exit_legs = []
+                                for leg_index, instrument_leg in enumerate(signal_array):
+                                    leg_data = self._build_leg_data(raw_signal_doc, signal_array, current_leg_count + leg_index)
+                                    # Add instrument-specific data
+                                    leg_data['instrument'] = instrument_leg.get('instrument') or instrument_leg.get('ticker')
+                                    leg_data['instrument_type'] = instrument_leg.get('instrument_type', 'STOCK')
+                                    exit_legs.append(leg_data)
 
-                                # Append leg to parent document
+                                # Append all EXIT legs to parent document
                                 self.signal_store_collection.update_one(
                                     {"_id": parent_doc['_id']},
                                     {
-                                        "$push": {"legs": leg_data},
+                                        "$push": {"signal_legs": {"$each": exit_legs}},
                                         "$set": {"updated_at": datetime.datetime.utcnow()}
                                     }
                                 )
 
                                 mathematricks_signal_id = parent_doc['_id']
-                                logger.info(f"📝 Appended {signal_type} leg to signal_store document: {mathematricks_signal_id}")
+                                logger.info(f"📝 Appended {len(exit_legs)} {signal_type} legs to signal_store document: {mathematricks_signal_id}")
                             else:
                                 logger.error(f"❌ Parent signal {parent_signal_id} not found for {signal_type} signal {raw_signal_doc['signalID']}")
                                 # Skip this signal
@@ -635,9 +656,58 @@ class MongoDBWatcher:
                             else:
                                 signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array, resolved_defaults)
 
-                                # Add first leg (the ENTRY leg)
-                                entry_leg = self._build_leg_data(raw_signal_doc, signal_array, 0)
-                                signal_store_doc['legs'] = [entry_leg]
+                                # Build and store raw signal data at root level (once per document)
+                                raw_signal_legs = []
+                                for leg in signal_array:
+                                    raw_leg = {
+                                        "instrument": leg.get('instrument') or leg.get('ticker'),
+                                        "instrument_type": leg.get('instrument_type', 'STOCK'),
+                                        "action": leg.get('action', 'UNKNOWN'),
+                                        "direction": leg.get('direction', 'UNKNOWN'),
+                                        "quantity": leg.get('quantity', 0),
+                                        "order_type": leg.get('order_type', 'MARKET'),
+                                        "price": leg.get('price', 0),
+                                    }
+                                    # Optional fields
+                                    if leg.get('stop_loss'):
+                                        raw_leg['stop_loss'] = leg['stop_loss']
+                                    if leg.get('take_profit'):
+                                        raw_leg['take_profit'] = leg['take_profit']
+                                    if leg.get('strike'):
+                                        raw_leg['strike'] = leg['strike']
+                                    if leg.get('expiry'):
+                                        raw_leg['expiry'] = leg['expiry']
+                                    if leg.get('option_type'):
+                                        raw_leg['option_type'] = leg['option_type']
+                                    # Preserve nested option legs if provided (multi-leg option strategies)
+                                    if leg.get('legs') and isinstance(leg.get('legs'), list):
+                                        raw_leg['legs'] = leg['legs']
+                                    raw_signal_legs.append(raw_leg)
+
+                                signal_store_doc['raw_signal'] = {
+                                    "_id": raw_signal_doc['_id'],
+                                    "received_at": raw_signal_doc.get('received_at', datetime.datetime.utcnow()),
+                                    "sent_epoch": raw_signal_doc.get('signal_sent_EPOCH'),
+                                    "entry_name": raw_signal_doc.get('entry_name'),
+                                    "exit_name": raw_signal_doc.get('exit_name'),
+                                    "entry_signal_id": raw_signal_doc.get('entry_signal_id'),
+                                    "account_equity": raw_signal_doc.get('account_equity'),
+                                    "signal_type": raw_signal_doc.get('signal_type', 'ENTRY').upper(),
+                                    "signal_legs": raw_signal_legs
+                                }
+
+                                # Create one processing leg per instrument in the raw signal
+                                # For multi-instrument signals (e.g., AUDUSD + USDCAD), create 2 legs
+                                processing_legs = []
+                                for leg_index, instrument_leg in enumerate(signal_array):
+                                    processing_leg = self._build_leg_data(raw_signal_doc, signal_array, leg_index)
+                                    # Add instrument-specific data to each processing leg
+                                    processing_leg['instrument'] = instrument_leg.get('instrument') or instrument_leg.get('ticker')
+                                    processing_leg['instrument_type'] = instrument_leg.get('instrument_type', 'STOCK')
+                                    processing_legs.append(processing_leg)
+                                
+                                signal_store_doc['signal_legs'] = processing_legs
+                                logger.info(f"📝 Creating {len(processing_legs)} processing legs for signal (instruments: {[leg.get('instrument') for leg in signal_array]})")
 
                                 # Insert into signal_store
                                 result = self.signal_store_collection.insert_one(signal_store_doc)
@@ -648,72 +718,90 @@ class MongoDBWatcher:
                         # UPDATE trading_signals_raw with link
                         self.mongodb_collection.update_one(
                             {"_id": raw_signal_doc['_id']},
-                            {"$set": {"mathematricks_signal_id": mathematricks_signal_id}}
+                            {"$set": {
+                                "mathematricks_signal_id": mathematricks_signal_id,
+                                "signal_id": raw_signal_doc['signalID']  # Normalize signalID -> signal_id
+                            }}
                         )
 
                         # ============================================================
-                        # CALL CEREBRO API (Direct API call with retry logic)
+                        # CALL CEREBRO API for each processing leg (Direct API call with retry logic)
                         # ============================================================
-                        cerebro_success = False
-                        max_retries = 3
-                        retry_delays = [0.5, 2, 5]  # exponential backoff
+                        # Determine which legs to process
+                        if is_exit_or_scale:
+                            # For EXIT signals, process the legs we just appended
+                            legs_to_process = exit_legs
+                            starting_leg_index = current_leg_count
+                        else:
+                            # For ENTRY signals, process the legs we just created
+                            legs_to_process = processing_legs
+                            starting_leg_index = 0
                         
-                        for attempt in range(max_retries):
-                            try:
-                                cerebro_url = os.getenv('CEREBRO_SERVICE_URL', 'http://cerebro-service:8082')
-                                api_endpoint = f"{cerebro_url}/api/v1/process-signal"
-                                
-                                payload = {
-                                    "signal_store_id": str(mathematricks_signal_id),
-                                    "leg_index": leg_index if is_exit_or_scale else 0
-                                }
-                                
-                                if attempt == 0:
-                                    logger.info(f"📤 Calling Cerebro API: {api_endpoint}")
-                                else:
-                                    logger.info(f"🔄 Retry attempt {attempt + 1}/{max_retries} for Cerebro API")
-                                logger.debug(f"   Payload: {payload}")
-                                
-                                # Timeout: 5 seconds for first attempt, 10s for retries
-                                timeout = 10 if attempt > 0 else 5
-                                response = requests.post(
-                                    api_endpoint,
-                                    json=payload,
-                                    timeout=timeout
-                                )
-                                
-                                # Check if request was accepted
-                                if response.status_code == 200:
-                                    logger.info(f"✅ Cerebro API accepted signal")
-                                    cerebro_success = True
+                        # Call cerebro for each leg
+                        for i, leg in enumerate(legs_to_process):
+                            leg_index = starting_leg_index + i
+                            cerebro_success = False
+                            max_retries = 3
+                            retry_delays = [0.5, 2, 5]  # exponential backoff
+                            
+                            logger.info(f"🔄 Processing leg {leg_index} - {leg.get('instrument', 'N/A')}")
+                            
+                            for attempt in range(max_retries):
+                                try:
+                                    cerebro_url = os.getenv('CEREBRO_SERVICE_URL', 'http://cerebro-service:8082')
+                                    api_endpoint = f"{cerebro_url}/api/v1/process-signal"
+                                    
+                                    payload = {
+                                        "signal_store_id": str(mathematricks_signal_id),
+                                        "leg_index": leg_index
+                                    }
+                                    
+                                    if attempt == 0:
+                                        logger.info(f"📤 Calling Cerebro API for leg {leg_index}: {api_endpoint}")
+                                    else:
+                                        logger.info(f"🔄 Retry attempt {attempt + 1}/{max_retries} for Cerebro API (leg {leg_index})")
+                                    logger.debug(f"   Payload: {payload}")
+                                    
+                                    # Timeout: 5 seconds for first attempt, 10s for retries
+                                    timeout = 10 if attempt > 0 else 5
+                                    response = requests.post(
+                                        api_endpoint,
+                                        json=payload,
+                                        timeout=timeout
+                                    )
+                                    
+                                    # Check if request was accepted
+                                    if response.status_code == 200:
+                                        logger.info(f"✅ Cerebro API accepted leg {leg_index}")
+                                        cerebro_success = True
+                                        break
+                                    else:
+                                        logger.warning(f"⚠️ Cerebro API returned status {response.status_code} for leg {leg_index}")
+                                        if attempt < max_retries - 1:
+                                            time.sleep(retry_delays[attempt])
+                                    
+                                except requests.exceptions.ConnectionError as e:
+                                    logger.warning(f"⚠️ Cerebro connection failed for leg {leg_index} (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                                    if attempt < max_retries - 1:
+                                        logger.info(f"   Retrying in {retry_delays[attempt]}s...")
+                                        time.sleep(retry_delays[attempt])
+                                    else:
+                                        logger.error(f"❌ Cerebro not available after {max_retries} attempts for leg {leg_index}")
+                                        logger.error(f"   Leg {leg_index} of signal {raw_signal_doc['signalID']} may not be processed by Cerebro!")
+                                except requests.exceptions.Timeout:
+                                    # Timeout is OK - Cerebro is processing, just took >timeout to respond
+                                    logger.info(f"⏱️ Cerebro API timeout for leg {leg_index} (processing in background)")
+                                    cerebro_success = True  # Consider this a success
                                     break
-                                else:
-                                    logger.warning(f"⚠️ Cerebro API returned status {response.status_code}")
+                                except requests.exceptions.RequestException as e:
+                                    logger.error(f"❌ Failed to call Cerebro API for leg {leg_index}: {str(e)}")
                                     if attempt < max_retries - 1:
                                         time.sleep(retry_delays[attempt])
-                                
-                            except requests.exceptions.ConnectionError as e:
-                                logger.warning(f"⚠️ Cerebro connection failed (attempt {attempt + 1}/{max_retries}): {str(e)}")
-                                if attempt < max_retries - 1:
-                                    logger.info(f"   Retrying in {retry_delays[attempt]}s...")
-                                    time.sleep(retry_delays[attempt])
-                                else:
-                                    logger.error(f"❌ Cerebro not available after {max_retries} attempts")
-                                    logger.error(f"   Signal {raw_signal_doc['signalID']} may not be processed by Cerebro!")
-                            except requests.exceptions.Timeout:
-                                # Timeout is OK - Cerebro is processing, just took >timeout to respond
-                                logger.info(f"⏱️ Cerebro API timeout (processing in background)")
-                                cerebro_success = True  # Consider this a success
-                                break
-                            except requests.exceptions.RequestException as e:
-                                logger.error(f"❌ Failed to call Cerebro API: {str(e)}")
-                                if attempt < max_retries - 1:
-                                    time.sleep(retry_delays[attempt])
-                                else:
-                                    logger.error(f"   Signal {raw_signal_doc['signalID']} may not be processed by Cerebro!")
-                            except Exception as e:
-                                logger.error(f"❌ Unexpected error calling Cerebro API: {str(e)}", exc_info=True)
-                                break
+                                    else:
+                                        logger.error(f"   Leg {leg_index} of signal {raw_signal_doc['signalID']} may not be processed by Cerebro!")
+                                except Exception as e:
+                                    logger.error(f"❌ Unexpected error calling Cerebro API for leg {leg_index}: {str(e)}", exc_info=True)
+                                    break
 
                         # Convert to signal format for callback
                         received_time = raw_signal_doc['received_at']

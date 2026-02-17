@@ -239,7 +239,7 @@ export const Activity: React.FC = () => {
                   </thead>
                   <tbody>
                     {signalStore.map((signal: any, idx: number) => {
-                      const legs = signal.legs || [];
+                      const signal_legs = signal.signal_legs || [];
                       const position = signal.position || {};
                       const isExpanded = expandedSignalId === signal._id;
                       
@@ -406,13 +406,13 @@ export const Activity: React.FC = () => {
                                                   {cerebro.timestamp && (
                                                     <div><span className="text-gray-500">Timestamp:</span> <span className="text-white">{formatDate(cerebro.timestamp)}</span></div>
                                                   )}
-                                                  {cerebro.legs && cerebro.legs.length > 0 && (
+                                                  {cerebro.created_orders && cerebro.created_orders.length > 0 && (
                                                     <div className="mt-2">
-                                                      <span className="text-gray-500">Decision Legs:</span>
+                                                      <span className="text-gray-500">Cerebro Orders:</span>
                                                       <div className="ml-3 mt-1 space-y-1">
-                                                        {cerebro.legs.map((dLeg: any, dLegIdx: number) => (
-                                                          <div key={dLegIdx} className="text-gray-300">
-                                                            • {dLeg.action} {dLeg.quantity} {dLeg.instrument} @ {dLeg.price}
+                                                        {cerebro.created_orders.map((order: any, orderIdx: number) => (
+                                                          <div key={orderIdx} className="text-gray-300">
+                                                            • {order.action} {order.quantity} {order.instrument} @ {order.price}
                                                           </div>
                                                         ))}
                                                       </div>

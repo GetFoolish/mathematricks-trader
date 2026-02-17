@@ -87,7 +87,7 @@ export const getServiceStatusForRawSignal = (rawSignal: any, signalStore: any[])
   );
   
   // Default: not sent to signal_store yet
-  if (!signal || !signal.legs || signal.legs.length === 0) {
+  if (!signal || !signal.signal_legs || signal.signal_legs.length === 0) {
     return {
       ingestion: { status: 'gray' as const, tooltip: 'Signal Ingestion: Not processed' },
       cerebro: { status: 'gray' as const, tooltip: 'Cerebro: No decision' },
@@ -97,7 +97,7 @@ export const getServiceStatusForRawSignal = (rawSignal: any, signalStore: any[])
   
   // For EXIT signals, find the specific leg that matches this signal
   if (rawSignal.signal_type === 'EXIT') {
-    const matchingLeg = signal.legs.find((leg: any) => 
+    const matchingLeg = signal.signal_legs.find((leg: any) => 
       leg.leg_id && leg.leg_id.startsWith(signalID)
     );
     if (matchingLeg) {
@@ -106,5 +106,5 @@ export const getServiceStatusForRawSignal = (rawSignal: any, signalStore: any[])
   }
   
   // For ENTRY signals or when leg not found, use the first leg
-  return getServiceStatus(signal.legs[0]);
+  return getServiceStatus(signal.signal_legs[0]);
 };

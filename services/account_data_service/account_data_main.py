@@ -489,7 +489,7 @@ def get_margin_preview(account_name: str, request: MarginPreviewRequest):
                 broker = BrokerFactory.create_broker(config)
 
                 if not broker.is_connected():
-                    if not broker.connect():
+                    if not broker.connect(skip_sync=True):
                         raise Exception("Failed to connect to IBKR")
 
                 # Query margin impact
