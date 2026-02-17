@@ -230,7 +230,7 @@ def update_option_signal_with_realistic_contract(signal: dict):
     return 'updated' if all_updated else 'failed'
 
 
-def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None, mode: str = None, run_id_suffix: str = None, environment: str = 'staging', account_type: str = None):
+def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None, mode: str = None, run_id_suffix: str = None, environment: str = 'staging', account_type: str = None, deployment_target: str = 'cloud'):
     """
     Send signal via HTTP POST to signal-receiver API
 
@@ -245,10 +245,15 @@ def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: s
     """
     import requests
     
-    # Signal receiver API URL - must be set in .env file
-    SIGNAL_API_URL = os.getenv('SIGNAL_API_URL')
-    if not SIGNAL_API_URL:
-        raise ValueError("SIGNAL_API_URL environment variable not set. Please configure it in .env file.")
+    # Determine Signal Receiver URL based on deployment target
+    if deployment_target == 'local':
+        SIGNAL_API_URL = 'http://localhost:3000/api/v1/signals'
+    else:  # cloud
+        # Use environment to determine cloud URL
+        if environment == 'live':
+            SIGNAL_API_URL = 'https://mathematricks.fund/api/v1/signals'
+        else:  # staging (default)
+            SIGNAL_API_URL = 'https://staging.mathematricks.fund/api/v1/signals'
     
     # Inject entry_signal_id if this is an EXIT signal and we have a previous ENTRY
     if signal_type == "exit" and previous_entry_id:
@@ -552,7 +557,7 @@ def shuffle_signals(entry_signals: list, exit_signals_by_entry: dict, seed: int)
 
 def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
                    signal_count: int = None, pause_and_play: bool = False, mode: str = None,
-                   file_filter: str = None, environment: str = 'staging', account_type: str = None):
+                   file_filter: str = None, environment: str = 'staging', account_type: str = None, deployment_target: str = 'cloud'):
     """
     Load and send all JSON signal files from a folder
 
@@ -781,7 +786,7 @@ def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
                     logger.info(f"   ⚠️  WARNING: Variable {entry_ref} not found in registry")
 
         # Send signal
-        result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode, run_id_suffix=run_id_suffix, environment=environment, account_type=account_type)
+        result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode, run_id_suffix=run_id_suffix, environment=environment, account_type=account_type, deployment_target=deployment_target)
         signals_sent += 1
 
         # Capture ENTRY MongoDB ObjectId and register named variable for EXIT signals to reference

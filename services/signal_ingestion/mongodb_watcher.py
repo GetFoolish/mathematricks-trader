@@ -45,8 +45,8 @@ class MongoDBWatcher:
 
         Returns leg object that will be appended to the signal document's legs array.
         """
-        # Build raw.legs from signal array
-        raw_legs = []
+        # Build raw.signal_legs from signal_legs array
+        raw_signal_legs = []
         for leg in signal_array:
             raw_leg = {
                 "instrument": leg.get('instrument') or leg.get('ticker'),
@@ -71,7 +71,7 @@ class MongoDBWatcher:
             # Preserve nested option legs if provided (multi-leg option strategies)
             if leg.get('legs') and isinstance(leg.get('legs'), list):
                 raw_leg['legs'] = leg['legs']
-            raw_legs.append(raw_leg)
+            raw_signal_legs.append(raw_leg)
 
         # Determine leg_type from first leg's action (or signal_type if available)
         signal_type = raw_signal_doc.get('signal_type', 'ENTRY').upper()
@@ -104,7 +104,7 @@ class MongoDBWatcher:
                 "entry_signal_id": raw_signal_doc.get('entry_signal_id'),  # ObjectId reference to parent ENTRY
                 "account_equity": raw_signal_doc.get('account_equity'),
                 "signal_type": signal_type,
-                "legs": raw_legs
+                "signal_legs": raw_signal_legs
             },
             "cerebro": None,  # Will be populated by cerebro
             "execution": None,  # Will be populated by execution service
@@ -119,7 +119,7 @@ class MongoDBWatcher:
             "created_at": now
         }
 
-    def _build_signal_store_doc(self, raw_signal_doc: dict, signal_array: list) -> dict:
+    def _build_signal_store_doc(self, raw_signal_doc: dict, signal_array: list, resolved_defaults: dict = None) -> dict:
         """
         Build a signal_store document using CONSOLIDATED schema.
 
@@ -128,6 +128,11 @@ class MongoDBWatcher:
         - EXIT/SCALE legs are appended to the legs array
 
         This replaces the old approach of separate documents per leg.
+        
+        Args:
+            raw_signal_doc: Raw signal document from trading_signals_raw
+            signal_array: Array of signal legs
+            resolved_defaults: Dict with resolved mode, account_type, data_source from strategy
         """
         signal_id = raw_signal_doc['signalID']
         signal_type = raw_signal_doc.get('signal_type', 'ENTRY').upper()
@@ -142,6 +147,16 @@ class MongoDBWatcher:
         # Get instrument info from first leg
         first_leg = signal_array[0] if signal_array else {}
         instrument = first_leg.get('instrument') or first_leg.get('ticker')
+        
+        # Use resolved defaults if provided, otherwise use values from raw_signal_doc
+        if resolved_defaults:
+            mode = resolved_defaults.get('mode')
+            account_type = resolved_defaults.get('account_type')
+            data_source = resolved_defaults.get('data_source')
+        else:
+            mode = raw_signal_doc.get('mode')
+            account_type = raw_signal_doc.get('account_type')
+            data_source = raw_signal_doc.get('data_source', 'mock')
 
         # Build the base signal document (for new ENTRY signals)
         return {
@@ -151,17 +166,17 @@ class MongoDBWatcher:
             "entry_name": raw_signal_doc.get('entry_name'),  # entry_name for linking EXIT signals
             "strategy_id": raw_signal_doc['strategy_name'],
             "environment": raw_signal_doc.get('environment', 'production'),
-            "account_type": raw_signal_doc.get('account_type'),  # Account type (mock, paper, live)
-            "mode": raw_signal_doc.get('mode'),  # Trading mode (mock_mock, mock_live, paper_live, live_live)
-            "data_source": raw_signal_doc.get('data_source', 'mock'),  # Data source for broker selection (mock or live)
+            "account_type": account_type,  # Account type (mock, paper, live) - resolved from strategy if missing
+            "mode": mode,  # Trading mode (mock_mock, mock_live, paper_live, live_live) - resolved from strategy if missing
+            "data_source": data_source,  # Data source for broker selection (mock or live) - resolved from strategy if missing
             "instrument": instrument,
 
             # === LEGS ARRAY (ONE DOCUMENT PER SIGNAL!) ===
             "legs": [],  # Will be appended to
 
-            # === POSITION STATUS ===
-            "position": {
-                "status": "PENDING",  # PENDING → OPEN → PARTIAL → CLOSED
+            # === SIGNAL STATUS ===
+            "signal_status": {
+                "status": "pending",  # pending → approved → rejected → filled → closed
                 "entry_quantity": 0,
                 "exit_quantity": 0,
                 "remaining_quantity": 0,
@@ -206,6 +221,124 @@ class MongoDBWatcher:
         """Set the callback function to process new signals"""
         self.signal_callback = callback
 
+    def resolve_signal_defaults(self, raw_signal_doc: dict) -> dict:
+        """
+        Resolve mode, account_type, and data_source from strategy defaults if missing in signal.
+        
+        Returns a dict with resolved values:
+        {
+            'mode': str | None,
+            'account_type': str | None,
+            'data_source': str | None,
+            'missing_fields': list  # List of fields that were missing and couldn't be resolved
+        }
+        """
+        mode = raw_signal_doc.get('mode')
+        account_type = raw_signal_doc.get('account_type')
+        data_source = raw_signal_doc.get('data_source')
+        missing_fields = []
+        
+        # If all fields are already present, no need to query strategy
+        if mode and account_type and data_source:
+            return {
+                'mode': mode,
+                'account_type': account_type,
+                'data_source': data_source,
+                'missing_fields': []
+            }
+        
+        # Fetch strategy configuration
+        strategy_id = raw_signal_doc.get('strategy_name')
+        if not strategy_id:
+            logger.warning("⚠️ No strategy_name in signal - cannot resolve defaults")
+            if not mode:
+                missing_fields.append('mode')
+            if not account_type:
+                missing_fields.append('account_type')
+            if not data_source:
+                missing_fields.append('data_source')
+            return {
+                'mode': mode,
+                'account_type': account_type,
+                'data_source': data_source,
+                'missing_fields': missing_fields
+            }
+        
+        try:
+            db = self.mongodb_client['mathematricks_trading']
+            strategies_collection = db['strategies']
+            strategy = strategies_collection.find_one({"strategy_id": strategy_id})
+            
+            if not strategy:
+                logger.warning(f"⚠️ Strategy {strategy_id} not found - cannot resolve defaults")
+                if not mode:
+                    missing_fields.append('mode')
+                if not account_type:
+                    missing_fields.append('account_type')
+                if not data_source:
+                    missing_fields.append('data_source')
+                return {
+                    'mode': mode,
+                    'account_type': account_type,
+                    'data_source': data_source,
+                    'missing_fields': missing_fields
+                }
+            
+            # Get defaults from strategy.status field
+            strategy_status = strategy.get('status')
+            
+            # Handle both old format (string) and new format (object)
+            if isinstance(strategy_status, dict):
+                # New format: status is an object with defaults
+                if not mode and strategy_status.get('mode'):
+                    mode = strategy_status['mode']
+                    logger.info(f"✅ Resolved mode from strategy: {mode}")
+                elif not mode:
+                    missing_fields.append('mode')
+                
+                if not account_type and strategy_status.get('account_type'):
+                    account_type = strategy_status['account_type']
+                    logger.info(f"✅ Resolved account_type from strategy: {account_type}")
+                elif not account_type:
+                    missing_fields.append('account_type')
+                
+                if not data_source and strategy_status.get('data_source'):
+                    data_source = strategy_status['data_source']
+                    logger.info(f"✅ Resolved data_source from strategy: {data_source}")
+                elif not data_source:
+                    missing_fields.append('data_source')
+            else:
+                # Old format: status is just a string, no defaults available
+                logger.info(f"ℹ️ Strategy {strategy_id} uses old status format (string) - no defaults available")
+                if not mode:
+                    missing_fields.append('mode')
+                if not account_type:
+                    missing_fields.append('account_type')
+                if not data_source:
+                    missing_fields.append('data_source')
+            
+            return {
+                'mode': mode,
+                'account_type': account_type,
+                'data_source': data_source,
+                'missing_fields': missing_fields
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error resolving strategy defaults: {e}")
+            if not mode:
+                missing_fields.append('mode')
+            if not account_type:
+                missing_fields.append('account_type')
+            if not data_source:
+                missing_fields.append('data_source')
+            return {
+                'mode': mode,
+                'account_type': account_type,
+                'data_source': data_source,
+                'missing_fields': missing_fields
+            }
+
     def fetch_missed_signals(self):
         """Fetch missed signals directly from MongoDB (catch-up mode)"""
         if self.mongodb_collection is None:
@@ -236,8 +369,8 @@ class MongoDBWatcher:
                 logger.info(f"📥 Found {len(missed_signals)} missed signals in MongoDB")
 
                 for raw_signal_doc in missed_signals:
-                    # Get signal array
-                    signal_array = raw_signal_doc.get('signal', [])
+                    # Get signal_legs array
+                    signal_array = raw_signal_doc.get('signal_legs', [])
                     if not signal_array or not isinstance(signal_array, list) or len(signal_array) == 0:
                         logger.warning(f"⚠️ Invalid signal array for {raw_signal_doc.get('signalID')}, skipping")
                         continue
@@ -278,6 +411,9 @@ class MongoDBWatcher:
                             continue
                     else:
                         # ENTRY: Create new signal document
+                        # Resolve defaults from strategy if needed
+                        resolved_defaults = self.resolve_signal_defaults(raw_signal_doc)
+                        
                         # Check for duplicate signalID to prevent collisions
                         existing_signal = self.signal_store_collection.find_one({"signal_id": raw_signal_doc['signalID']})
                         if existing_signal:
@@ -286,7 +422,7 @@ class MongoDBWatcher:
                             # Use existing signal's ID instead of creating a new one
                             mathematricks_signal_id = existing_signal['_id']
                         else:
-                            signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
+                            signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array, resolved_defaults)
 
                             # Add first leg (the ENTRY leg)
                             entry_leg = self._build_leg_data(raw_signal_doc, signal_array, 0)
@@ -421,8 +557,8 @@ class MongoDBWatcher:
                             logger.info("⏭️ Skipping document without signalID")
                             continue
 
-                        # Get signal array (new format)
-                        signal_array = raw_signal_doc.get('signal', [])
+                        # Get signal_legs array
+                        signal_array = raw_signal_doc.get('signal_legs', [])
                         if not signal_array or not isinstance(signal_array, list) or len(signal_array) == 0:
                             logger.warning(f"⚠️ Invalid signal array for {raw_signal_doc.get('signalID')}")
                             continue
@@ -486,6 +622,9 @@ class MongoDBWatcher:
                                 continue
                         else:
                             # ENTRY: Create new signal document
+                            # Resolve defaults from strategy if needed
+                            resolved_defaults = self.resolve_signal_defaults(raw_signal_doc)
+                            
                             # Check for duplicate signalID to prevent collisions
                             existing_signal = self.signal_store_collection.find_one({"signal_id": raw_signal_doc['signalID']})
                             if existing_signal:
@@ -494,7 +633,7 @@ class MongoDBWatcher:
                                 # Use existing signal's ID instead of creating a new one
                                 mathematricks_signal_id = existing_signal['_id']
                             else:
-                                signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array)
+                                signal_store_doc = self._build_signal_store_doc(raw_signal_doc, signal_array, resolved_defaults)
 
                                 # Add first leg (the ENTRY leg)
                                 entry_leg = self._build_leg_data(raw_signal_doc, signal_array, 0)

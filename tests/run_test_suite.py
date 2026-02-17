@@ -380,7 +380,7 @@ class TestSuite:
                 print(f"\n   ❌ UNEXPECTED ERROR in {name}: {e}")
                 self.failed.append(name)
     
-    def run_signal_tests(self, environment: str = 'staging', account_type: str = None, data_source: str = 'mock', signal_count: int = None, signals_folder: str = None, signal_file: str = None, clean_before_test: bool = False) -> bool:
+    def run_signal_tests(self, environment: str = 'staging', account_type: str = None, data_source: str = 'mock', signal_count: int = None, signals_folder: str = None, signal_file: str = None, clean_before_test: bool = False, deployment_target: str = 'cloud') -> bool:
         """Run signal tests using run_signal_tests_full.py"""
         self.print_header(f"🧪 Signal Testing")
         
@@ -478,6 +478,7 @@ class TestSuite:
                 '--mode', mode,
                 '--folder', str(signals_folder_path),
                 '--environment', environment,
+                '--deployment-target', deployment_target,
             ]
             
             # Add account_type if specified
@@ -606,6 +607,10 @@ Examples:
                        help='Account type for execution (overrides default based on environment)', default=None)
     parser.add_argument('--data-source', type=str, choices=['mock', 'live'],
                        help='Data source for testing (mock or live market data)', default='mock')
+    parser.add_argument('--local', action='store_true',
+                       help='Send signals to local Docker container (http://localhost:3000)')
+    parser.add_argument('--cloud', action='store_true',
+                       help='Send signals to cloud deployment (https://staging.mathematricks.fund or mathematricks.fund)')
     parser.add_argument('--clean', action='store_true',
                        help='Clean test data: reset balances, clear signals, restart services')
     parser.add_argument('--signal-count', type=int,
@@ -647,6 +652,12 @@ Examples:
     
     # Run signal tests (will clean AFTER validation if --clean flag set)
     if args.signal_testing:
+        # Determine deployment target
+        if args.local and args.cloud:
+            print("❌ ERROR: Cannot specify both --local and --cloud")
+            return 1
+        deployment_target = 'local' if args.local else 'cloud'
+        
         suite.run_signal_tests(
             environment=args.environment,
             account_type=args.account_type,
@@ -654,7 +665,8 @@ Examples:
             signal_count=getattr(args, 'signal_count'),
             signals_folder=args.signals_folder,
             signal_file=args.file,
-            clean_before_test=args.clean  # Pass clean flag to be executed after validation
+            clean_before_test=args.clean,  # Pass clean flag to be executed after validation
+            deployment_target=deployment_target
         )
     
     # Print summary

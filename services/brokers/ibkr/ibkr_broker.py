@@ -825,63 +825,37 @@ class IBKRBroker(AbstractBroker):
             if not self.is_connected():
                 raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
 
-            # Create a temporary connection to query account data
-            # This avoids event loop issues with the existing connection
-            from ib_insync import IB, util
-            import asyncio
+            # Use existing connection instead of creating temporary connections
+            # This prevents accumulating stale client IDs in IB Gateway
+            account_summary = self.ib.accountSummary()
             
-            # Ensure we have an event loop in this thread
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    raise RuntimeError("Loop is closed")
-            except RuntimeError:
-                # No event loop in this thread, start one
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            temp_ib = IB()
-            
-            try:
-                # Connect with a unique client ID
-                import random
-                temp_client_id = random.randint(900, 999)
-                temp_ib.connect(self.host, self.port, clientId=temp_client_id)
-                
-                # Get account summary
-                account_summary = temp_ib.accountSummary()
-                
-                logger.info(f"Account summary items: {len(account_summary)}")
+            logger.info(f"Account summary items: {len(account_summary)}")
 
-                # Extract metrics - IBKR returns values in account's base currency
-                equity = 0.0
-                cash_balance = 0.0
-                margin_used = 0.0
-                margin_available = 0.0
-                buying_power = 0.0
-                unrealized_pnl = 0.0
-                realized_pnl = 0.0
+            # Extract metrics - IBKR returns values in account's base currency
+            equity = 0.0
+            cash_balance = 0.0
+            margin_used = 0.0
+            margin_available = 0.0
+            buying_power = 0.0
+            unrealized_pnl = 0.0
+            realized_pnl = 0.0
 
-                for item in account_summary:
-                    if item.tag == 'NetLiquidation':
-                        equity = float(item.value)
-                        logger.info(f"NetLiquidation: {item.value} {item.currency}")
-                    elif item.tag == 'TotalCashValue':
-                        cash_balance = float(item.value)
-                    elif item.tag == 'MaintMarginReq':
-                        margin_used = float(item.value)
-                    elif item.tag == 'AvailableFunds':
-                        margin_available = float(item.value)
-                    elif item.tag == 'BuyingPower':
-                        buying_power = float(item.value)
-                    elif item.tag == 'UnrealizedPnL':
-                        unrealized_pnl = float(item.value)
-                    elif item.tag == 'RealizedPnL':
-                        realized_pnl = float(item.value)
-                        
-            finally:
-                # Always disconnect the temporary connection
-                temp_ib.disconnect()
+            for item in account_summary:
+                if item.tag == 'NetLiquidation':
+                    equity = float(item.value)
+                    logger.info(f"NetLiquidation: {item.value} {item.currency}")
+                elif item.tag == 'TotalCashValue':
+                    cash_balance = float(item.value)
+                elif item.tag == 'MaintMarginReq':
+                    margin_used = float(item.value)
+                elif item.tag == 'AvailableFunds':
+                    margin_available = float(item.value)
+                elif item.tag == 'BuyingPower':
+                    buying_power = float(item.value)
+                elif item.tag == 'UnrealizedPnL':
+                    unrealized_pnl = float(item.value)
+                elif item.tag == 'RealizedPnL':
+                    realized_pnl = float(item.value)
 
             return {
                 "account_id": account_id or self.account_id,
@@ -1088,15 +1062,16 @@ class IBKRBroker(AbstractBroker):
         try:
             return future.result(timeout=10.0)
         except TimeoutError:
-            # Timeout usually means no market data available (market closed or data permissions issue)
-            logger.warning(f"⏱️ Timeout fetching price for {symbol} - market may be closed or no data permissions")
+            # Timeout usually means no market data available (market closed, data permissions, or invalid symbol)
+            logger.warning(f"⏱️ Timeout fetching price for {symbol} - no data received within 10s")
             raise BrokerAPIError(
-                f"No market data available for {symbol}. Market may be closed or data subscription required.",
+                f"No market data available for {symbol}. Possible reasons: market closed, no data subscription, or invalid symbol.",
                 broker_name="IBKR"
             )
         except Exception as e:
-            logger.error(f"Error fetching price for {symbol}: {e}")
-            raise BrokerAPIError(f"Failed to get market price: {str(e)}", broker_name="IBKR")
+            error_msg = str(e) if str(e) else f"{type(e).__name__}"
+            logger.error(f"Error fetching price for {symbol}: {error_msg}")
+            raise BrokerAPIError(f"Failed to get market price: {error_msg}", broker_name="IBKR")
         finally:
             # Ensure the future is cancelled if it's still pending (cleanup guarantee)
             if not future.done():
@@ -1149,8 +1124,10 @@ class IBKRBroker(AbstractBroker):
         except Exception as e:
             if "BrokerAPIError" in str(type(e)):
                 raise
-            logger.error(f"Error in _fetch_price_async for {symbol}: {e}", exc_info=True)
-            raise BrokerAPIError(f"Failed to fetch price: {str(e)}", broker_name="IBKR")
+            # Provide more detailed error message
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
+            logger.error(f"Error in _fetch_price_async for {symbol}: {error_msg}", exc_info=True)
+            raise BrokerAPIError(f"Failed to fetch price: {error_msg}", broker_name="IBKR")
         finally:
             # CRITICAL: Always cancel market data subscription to avoid accumulating subscriptions
             if ticker is not None and contract is not None:
@@ -1175,12 +1152,19 @@ class IBKRBroker(AbstractBroker):
 
         elif instrument_type == "FOREX":
             # Handle both formats: "EURUSD" or "EUR.USD"
-            if len(symbol) == 6:
-                base = symbol[:3]
-                quote = symbol[3:]
-                pair = f"{base}.{quote}"
+            # IBKR's Forex() class expects exactly 6 characters (e.g., "EURUSD")
+            if '.' in symbol:
+                # Remove dot from "EUR.USD" -> "EURUSD"
+                pair = symbol.replace('.', '')
             else:
                 pair = symbol
+            
+            # Validate length
+            if len(pair) != 6:
+                raise BrokerAPIError(
+                    f"Invalid forex pair format: '{symbol}'. Expected 6-character format like 'EURUSD' or 'EUR.USD'",
+                    broker_name="IBKR"
+                )
             return Forex(pair)
 
         elif instrument_type == "CRYPTO":

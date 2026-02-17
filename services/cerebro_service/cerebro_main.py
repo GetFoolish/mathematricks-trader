@@ -493,16 +493,27 @@ def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict, 
 
         # Update the specific leg's cerebro field and add cerebro timestamp
         now = datetime.utcnow()
+        
+        # Prepare update fields
+        update_fields = {
+            f"legs.{leg_index}.cerebro": decision_doc,
+            f"legs.{leg_index}.processing_timestamps.cerebro_processed": now,
+            "processing_complete": status in ["APPROVED", "RESIZE"],
+            "updated_at": now
+        }
+        
+        # Update signal_status based on cerebro decision
+        if status == "REJECTED":
+            update_fields["signal_status"] = {
+                "status": "rejected",
+                "reason": decision_doc.get("reason"),
+                "rejected_at": now,
+                "rejected_by": "cerebro"
+            }
+        
         signal_store_collection.update_one(
             {"_id": ObjectId(signal_store_id)},
-            {
-                "$set": {
-                    f"legs.{leg_index}.cerebro": decision_doc,
-                    f"legs.{leg_index}.processing_timestamps.cerebro_processed": now,
-                    "processing_complete": status in ["APPROVED", "RESIZE"],
-                    "updated_at": now
-                }
-            }
+            {"$set": update_fields}
         )
         logger.info(f"✅ Updated signal_store {signal_store_id} leg {leg_index} with cerebro (status={status})")
 
@@ -1054,7 +1065,7 @@ def find_and_cancel_pending_entry(strategy_id: str, instrument: str, direction: 
                 "instrument": instrument,
                 "direction": entry_direction,
                 "cerebro_decision.decision": {"$in": ["APPROVE", "APPROVED"]},
-                "position_status": {"$ne": "CLOSED"},
+                "signal_status.status": {"$ne": "closed"},
                 "$or": [
                     {"execution": None},
                     {"execution": {"$exists": False}},
@@ -1104,11 +1115,10 @@ def find_and_cancel_pending_entry(strategy_id: str, instrument: str, direction: 
                     "cerebro.status": "CANCELLED",
                     "cerebro.reason": f"Cancelled: EXIT signal arrived before entry filled",
                     "cerebro.cancelled_at": cancel_timestamp,
-                    "position.status": "CANCELLED",
+                    "signal_status.status": "cancelled",
                     # v1 schema (for backward compat)
                     "cerebro_decision.decision": "CANCELLED",
                     "cerebro_decision.reason": f"Cancelled: EXIT signal arrived before entry filled",
-                    "position_status": "CANCELLED",
                     "updated_at": cancel_timestamp
                 }
             }
@@ -1459,7 +1469,7 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         raw_obj = current_leg.get('raw', {})
         raw_signal_id = str(raw_obj.get('_id')) if raw_obj.get('_id') else None
         raw_signal = raw_obj  # For compatibility with code that uses raw_signal
-        legs = raw_obj.get('legs', [])  # The actual signal legs (BUY/SELL actions)
+        legs = raw_obj.get('signal_legs', [])  # The actual signal legs (BUY/SELL actions)
     else:
         # OLD SCHEMA (v2): signal.raw.legs or signal.signal_data
         raw_obj = signal.get('raw', {})
@@ -1515,12 +1525,41 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         'legs': legs
     }
 
-    # Reject if account_equity missing (required for scaling)
+    # ============================================================================
+    # VALIDATION: Collect all missing required fields before rejecting
+    # ============================================================================
+    validation_errors = []
+    
+    # Check mode
+    mode = signal.get('mode')
+    if not mode:
+        validation_errors.append('MODE_NOT_SET')
+        logger.warning(f"⚠️ Signal {signal_id} is missing 'mode' field")
+    
+    # Check account_type
+    account_type = signal.get('account_type')
+    if not account_type:
+        validation_errors.append('ACCOUNT_TYPE_NOT_SET')
+        logger.warning(f"⚠️ Signal {signal_id} is missing 'account_type' field")
+    
+    # Check data_source
+    data_source = signal.get('data_source')
+    if not data_source:
+        validation_errors.append('DATA_SOURCE_NOT_SET')
+        logger.warning(f"⚠️ Signal {signal_id} is missing 'data_source' field")
+    
+    # Check account_equity (required for ratio-based sizing)
     if normalized_signal.get('account_equity') is None:
-        logger.error(f"❌ Missing account_equity in signal {signal_id} - rejecting")
+        validation_errors.append('MISSING_ACCOUNT_EQUITY')
+        logger.warning(f"⚠️ Signal {signal_id} is missing 'account_equity' field")
+    
+    # If there are validation errors, reject immediately with all errors listed
+    if validation_errors:
+        error_message = " | ".join(validation_errors)
+        logger.error(f"❌ Signal {signal_id} failed validation: {error_message}")
         decision = build_decision_v2(
             status="REJECTED",
-            reason="MISSING_ACCOUNT_EQUITY",
+            reason=error_message,
             signal=signal,
             legs=legs
         )

@@ -186,7 +186,7 @@ class SignalIngestionService:
         if not timestamp and signal_data.get('signal_sent_EPOCH'):
             timestamp = datetime.datetime.fromtimestamp(signal_data['signal_sent_EPOCH'], tz=datetime.timezone.utc).isoformat()
 
-        signal = signal_data.get('signal', {})
+        signal_legs = signal_data.get('signal_legs', {})
         strategy_name = signal_data.get('strategy_name', 'Unknown Strategy')
 
         # Get signal ID from the data
@@ -227,10 +227,10 @@ class SignalIngestionService:
             logger.info(f"⚡ Lag: {delay:.3f}s [Sent: {sent_dt_str}, Recd: {recd_dt_str}]")
 
         # Format signal details dynamically
-        if isinstance(signal, list):
+        if isinstance(signal_legs, list):
             # Multi-leg signal
             logger.info("📋 Signal Details (Multi-leg):")
-            for i, leg in enumerate(signal, 1):
+            for i, leg in enumerate(signal_legs, 1):
                 logger.info(f"  Leg {i}:")
                 for key, value in leg.items():
                     if value is not None and value != '':
@@ -238,7 +238,7 @@ class SignalIngestionService:
         else:
             # Single-leg signal
             logger.info("📋 Signal Details:")
-            for key, value in signal.items():
+            for key, value in signal_legs.items():
                 if value is not None and value != '':
                     logger.info(f"  • {key}: {value}")
 
@@ -251,8 +251,8 @@ class SignalIngestionService:
         # Log to signal_processing.log (unified tracking)
         signal_env = signal_data.get('environment', 'production').upper()
 
-        # Handle signal as array (new format) or dict (legacy)
-        signal_for_log = signal[0] if isinstance(signal, list) else signal
+        # Handle signal_legs as array (new format) or dict (legacy)
+        signal_for_log = signal_legs[0] if isinstance(signal_legs, list) else signal_legs
 
         signal_logger.info(
             f"SIGNAL: {signal_id_from_data} | RECEIVED | Strategy={strategy_name} | "

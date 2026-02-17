@@ -45,7 +45,7 @@ import send_test_signal
 
 def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, delay: int = None,
              output_dir: str = None, signal_count: int = None, pause_and_play: bool = False,
-             file_filter: str = None, environment: str = 'staging', account_type: str = None):
+             file_filter: str = None, environment: str = 'staging', account_type: str = None, deployment_target: str = 'cloud'):
     """
     Run signal test suite from a signal folder for a specific mode
 
@@ -112,7 +112,8 @@ def run_test(mode: str, folder_path: str = "sample_signals", seed: int = None, d
         signals_sent = send_test_signal.process_folder(folder_path, seed, delay_override=delay,
                                                        signal_count=signal_count, pause_and_play=pause_and_play,
                                                        mode=mode, file_filter=file_filter,
-                                                       environment=environment, account_type=account_type)
+                                                       environment=environment, account_type=account_type,
+                                                       deployment_target=deployment_target)
 
         elapsed = time.time() - start_time
 
@@ -279,6 +280,14 @@ Test Results:
         help="Account type for execution (overrides defaults)"
     )
 
+    parser.add_argument(
+        "--deployment-target",
+        dest="deployment_target",
+        choices=["local", "cloud"],
+        default="cloud",
+        help="Where to send signals (local=localhost:3000, cloud=mathematricks.fund)"
+    )
+
     args = parser.parse_args()
     
     # Validate folder exists
@@ -300,7 +309,8 @@ Test Results:
         pause_and_play=args.pause_and_play,
         file_filter=args.file_filter,
         environment=args.environment,
-        account_type=args.account_type
+        account_type=args.account_type,
+        deployment_target=args.deployment_target
     )
     
     sys.exit(exit_code)

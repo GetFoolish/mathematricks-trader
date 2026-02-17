@@ -98,11 +98,24 @@ export const Strategies: React.FC = () => {
   );
 
   const handleToggleStatus = (strategy: Strategy) => {
-    const newStatus = strategy.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
-    updateMutation.mutate({
-      id: strategy.strategy_id,
-      data: { status: newStatus },
-    });
+    // Handle both old format (string) and new format (object)
+    if (typeof strategy.status === 'string') {
+      const newStatus = strategy.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+      updateMutation.mutate({
+        id: strategy.strategy_id,
+        data: { status: newStatus },
+      });
+    } else {
+      // New format: toggle active field
+      const newStatus = {
+        ...strategy.status,
+        active: !strategy.status.active
+      };
+      updateMutation.mutate({
+        id: strategy.strategy_id,
+        data: { status: newStatus },
+      });
+    }
   };
 
   const handleToggleMode = (strategy: Strategy) => {
@@ -193,14 +206,14 @@ export const Strategies: React.FC = () => {
                       onClick={() => handleToggleStatus(strategy)}
                       disabled={updateMutation.isPending}
                       className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                        strategy.status === 'ACTIVE'
+                        (typeof strategy.status === 'string' ? strategy.status : (strategy.status?.active ? 'ACTIVE' : 'INACTIVE')) === 'ACTIVE'
                           ? 'bg-green-900/30 text-green-400 hover:bg-green-900/50'
-                          : strategy.status === 'TESTING'
+                          : (typeof strategy.status === 'string' ? strategy.status : 'INACTIVE') === 'TESTING'
                           ? 'bg-yellow-900/30 text-yellow-400 hover:bg-yellow-900/50'
                           : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
                       }`}
                     >
-                      {strategy.status}
+                      {typeof strategy.status === 'string' ? strategy.status : (strategy.status?.active ? 'ACTIVE' : 'INACTIVE')}
                     </button>
                   </td>
                   <td className="table-cell">
@@ -217,8 +230,11 @@ export const Strategies: React.FC = () => {
                     </button>
                   </td>
                   <td className="table-cell text-sm">
-                    {strategy.accounts && strategy.accounts.length > 0 
-                      ? strategy.accounts.join(', ') 
+                    {strategy.accounts && Object.keys(strategy.accounts).length > 0
+                      ? Object.entries(strategy.accounts)
+                          .filter(([_, ids]) => ids && ids.length > 0)
+                          .map(([mode, ids]) => `${mode}: ${ids.join(', ')}`)
+                          .join(' | ')
                       : 'N/A'}
                   </td>
                   <td className="table-cell">
@@ -330,7 +346,7 @@ const StrategyModal: React.FC<StrategyModalProps> = ({ strategy, onClose, onSave
     status: strategy?.status || 'ACTIVE',
     trading_mode: strategy?.trading_mode || 'PAPER',
     account: strategy?.account || 'IBKR_Main',
-    accounts: strategy?.accounts || [],
+    accounts: strategy?.accounts || { mock: [], paper: [], live: [] },
     include_in_optimization: strategy?.include_in_optimization ?? true,
     risk_limits: strategy?.risk_limits || {},
     developer_contact: strategy?.developer_contact || '',
@@ -440,9 +456,9 @@ const StrategyModal: React.FC<StrategyModalProps> = ({ strategy, onClose, onSave
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">Status</label>
               <select
-                value={formData.status}
+                value={typeof formData.status === 'string' ? formData.status : (formData.status?.active ? 'ACTIVE' : 'INACTIVE')}
                 onChange={(e) =>
-                  setFormData({ ...formData, status: e.target.value as Strategy['status'] })
+                  setFormData({ ...formData, status: e.target.value as 'ACTIVE' | 'INACTIVE' | 'TESTING' })
                 }
                 className="input"
               >
@@ -468,6 +484,88 @@ const StrategyModal: React.FC<StrategyModalProps> = ({ strategy, onClose, onSave
             </div>
           </div>
 
+          {/* Signal Defaults Section */}
+          <div className="mt-6 p-4 bg-gray-800 rounded-lg border border-gray-700">
+            <h3 className="text-sm font-semibold text-gray-200 mb-3">Signal Defaults</h3>
+            <p className="text-xs text-gray-400 mb-4">
+              These defaults are used when signals don't specify mode, account_type, or data_source
+            </p>
+            
+            <div className="grid grid-cols-3 gap-4">
+              {/* Default Mode */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Default Mode</label>
+                <select
+                  value={typeof formData.status === 'object' ? formData.status.mode || '' : ''}
+                  onChange={(e) => {
+                    const currentStatus = typeof formData.status === 'object' ? formData.status : { active: formData.status === 'ACTIVE' };
+                    setFormData({ 
+                      ...formData, 
+                      status: { 
+                        ...currentStatus, 
+                        mode: e.target.value as 'mock_mock' | 'mock_live' | 'paper_live' | 'live_live' 
+                      } 
+                    });
+                  }}
+                  className="input text-sm"
+                >
+                  <option value="">Not Set</option>
+                  <option value="mock_mock">Mock Data + Mock Broker</option>
+                  <option value="mock_live">Mock Data + Live Broker</option>
+                  <option value="paper_live">Paper Account + Live Broker</option>
+                  <option value="live_live">Live Account + Live Broker</option>
+                </select>
+              </div>
+
+              {/* Default Account Type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Default Account Type</label>
+                <select
+                  value={typeof formData.status === 'object' ? formData.status.account_type || '' : ''}
+                  onChange={(e) => {
+                    const currentStatus = typeof formData.status === 'object' ? formData.status : { active: formData.status === 'ACTIVE' };
+                    setFormData({ 
+                      ...formData, 
+                      status: { 
+                        ...currentStatus, 
+                        account_type: e.target.value as 'mock' | 'paper' | 'live' 
+                      } 
+                    });
+                  }}
+                  className="input text-sm"
+                >
+                  <option value="">Not Set</option>
+                  <option value="mock">Mock</option>
+                  <option value="paper">Paper</option>
+                  <option value="live">Live</option>
+                </select>
+              </div>
+
+              {/* Default Data Source */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Default Data Source</label>
+                <select
+                  value={typeof formData.status === 'object' ? formData.status.data_source || '' : ''}
+                  onChange={(e) => {
+                    const currentStatus = typeof formData.status === 'object' ? formData.status : { active: formData.status === 'ACTIVE' };
+                    setFormData({ 
+                      ...formData, 
+                      status: { 
+                        ...currentStatus, 
+                        data_source: e.target.value as 'mock' | 'live' 
+                      } 
+                    });
+                  }}
+                  className="input text-sm"
+                >
+                  <option value="">Not Set</option>
+                  <option value="mock">Mock</option>
+                  <option value="live">Live</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
           {/* Accounts (Multi-select) */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -475,22 +573,38 @@ const StrategyModal: React.FC<StrategyModalProps> = ({ strategy, onClose, onSave
             </label>
             <div className="border border-gray-600 rounded-lg p-3 max-h-48 overflow-y-auto bg-gray-900">
               {allAccounts && allAccounts.length > 0 ? (
-                allAccounts.map((account: any) => (
+                allAccounts.map((account: any) => {
+                  // Helper to check if account is selected in any mode
+                  const accountType = account.account_type || 'mock';
+                  const isChecked = formData.accounts?.[accountType]?.includes(account.account_id) || false;
+                  
+                  return (
                   <label
                     key={account.account_id}
                     className="flex items-center gap-2 py-2 px-2 hover:bg-gray-700 rounded cursor-pointer"
                   >
                     <input
                       type="checkbox"
-                      checked={formData.accounts?.includes(account.account_id) || false}
+                      checked={isChecked}
                       onChange={(e) => {
-                        const accounts = formData.accounts || [];
+                        const accounts = formData.accounts || { mock: [], paper: [], live: [] };
+                        const modeAccounts = accounts[accountType] || [];
+                        
                         if (e.target.checked) {
-                          setFormData({ ...formData, accounts: [...accounts, account.account_id] });
+                          setFormData({ 
+                            ...formData, 
+                            accounts: {
+                              ...accounts,
+                              [accountType]: [...modeAccounts, account.account_id]
+                            }
+                          });
                         } else {
                           setFormData({
                             ...formData,
-                            accounts: accounts.filter((id) => id !== account.account_id),
+                            accounts: {
+                              ...accounts,
+                              [accountType]: modeAccounts.filter((id) => id !== account.account_id)
+                            }
                           });
                         }
                       }}
@@ -501,14 +615,18 @@ const StrategyModal: React.FC<StrategyModalProps> = ({ strategy, onClose, onSave
                       <span className="text-xs text-gray-500 ml-2">({account.broker})</span>
                     </span>
                   </label>
-                ))
+                );
+                })
               ) : (
                 <p className="text-sm text-gray-500">No accounts available</p>
               )}
             </div>
-            {formData.accounts && formData.accounts.length > 0 && (
+            {formData.accounts && Object.keys(formData.accounts).length > 0 && (
               <p className="text-xs text-gray-400 mt-2">
-                Selected: {formData.accounts.join(', ')}
+                Selected: {Object.entries(formData.accounts)
+                  .filter(([_, ids]) => ids && ids.length > 0)
+                  .map(([mode, ids]) => `${mode}: ${ids.join(', ')}`)
+                  .join(' | ')}
               </p>
             )}
           </div>

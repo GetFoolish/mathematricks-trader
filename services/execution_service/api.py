@@ -918,16 +918,39 @@ def update_position_summary(signal_id: str):
         except Exception as e:
             logger.error(f"❌ Exception calling update_account_positions: {e}", exc_info=True)
         
-        # Update signal_store
+        # Update signal_store with signal_status
+        signal_status_map = {
+            'PENDING': 'pending',
+            'OPEN': 'open',
+            'CLOSED': 'closed'
+        }
+        signal_status_value = signal_status_map.get(status, 'pending')
+        
+        # Build signal_status object
+        signal_status = {
+            'status': signal_status_value,
+            'entry_quantity': entry_quantity,
+            'exit_quantity': exit_quantity,
+            'remaining_quantity': entry_quantity - exit_quantity
+        }
+        
+        if pnl:
+            signal_status['pnl'] = pnl
+        
+        if signal_status_value == 'open':
+            signal_status['opened_at'] = datetime.utcnow()
+        elif signal_status_value == 'closed':
+            signal_status['closed_at'] = datetime.utcnow()
+        
         db.signal_store.update_one(
             {'signal_id': signal_id},
             {'$set': {
-                'position': position,
+                'signal_status': signal_status,
                 'updated_at': datetime.utcnow()
             }}
         )
         
-        logger.info(f"✅ Updated position summary for {signal_id}: {status} ({entry_quantity}/{exit_quantity})")
+        logger.info(f"✅ Updated signal_status for {signal_id}: {signal_status_value} ({entry_quantity}/{exit_quantity})")
             
             
     except Exception as e:

@@ -12,7 +12,7 @@ interface SignalStore {
   environment?: string;
   mode?: string;
   legs?: any[];
-  position?: {
+  signal_status?: {
     status?: string;
     entry_quantity?: number;
     exit_quantity?: number;
@@ -104,7 +104,7 @@ export default function SignalStoreTab() {
   };
 
   const getPositionStatus = (signal: SignalStore) => {
-    return signal.position?.status || 'UNKNOWN';
+    return signal.signal_status?.status || 'UNKNOWN';
   };
 
   const getLegsCount = (signal: SignalStore) => {
@@ -182,16 +182,16 @@ export default function SignalStoreTab() {
         signal.environment || '',
         signal.direction || '',
         signal.position?.status || '',
-        signal.position?.entry_quantity || '',
-        signal.position?.exit_quantity || '',
+        signal.signal_status?.entry_quantity || '',
+        signal.signal_status?.exit_quantity || '',
         signal.position?.remaining_quantity || '',
         entryPrice,
         exitPrice,
-        signal.position?.pnl?.gross || '',
-        signal.position?.pnl?.net || '',
-        signal.position?.pnl?.percent || '',
-        signal.position?.pnl?.commission || '',
-        signal.position?.pnl?.holding_seconds || '',
+        signal.signal_status?.pnl?.gross || '',
+        signal.signal_status?.pnl?.net || '',
+        signal.signal_status?.pnl?.percent || '',
+        signal.signal_status?.pnl?.commission || '',
+        signal.signal_status?.pnl?.holding_seconds || '',
         accountId,
         brokerName,
         entryBrokerOrderId,
@@ -354,9 +354,9 @@ export default function SignalStoreTab() {
                 ) : (
                   signals.map((signal) => {
                     const legsCount = getLegsCount(signal);
-                    const entryQty = signal.position?.entry_quantity || 0;
-                    const exitQty = signal.position?.exit_quantity || 0;
-                    const remainingQty = signal.position?.remaining_quantity || 0;
+                    const entryQty = signal.signal_status?.entry_quantity || 0;
+                    const exitQty = signal.signal_status?.exit_quantity || 0;
+                    const remainingQty = signal.signal_status?.remaining_quantity || 0;
                     const isExpanded = expandedSignalId === signal._id;
                     const legs = signal.legs || [];                  
                   // Helper function to calculate lag in seconds from timestamps
@@ -428,7 +428,7 @@ export default function SignalStoreTab() {
                           </td>
                           <td className="px-2 py-3 text-sm">
                             {(() => {
-                              const pnl = signal.position?.pnl?.net;
+                              const pnl = signal.signal_status?.pnl?.net;
                               if (pnl === undefined || pnl === null) return <span className="text-gray-500">-</span>;
                               const pnlClass = pnl >= 0 ? 'text-green-400' : 'text-red-400';
                               return <span className={pnlClass}>${pnl.toFixed(2)}</span>;

@@ -524,13 +524,13 @@ export const Activity: React.FC = () => {
                           </td>
                           <td className="table-cell">
                             <span className={`px-2 py-1 rounded text-xs font-semibold ${
-                              signal.position_status === 'OPEN' ? 'bg-green-900/30 text-green-400' :
-                              signal.position_status === 'CLOSED' ? 'bg-gray-700 text-gray-300' :
-                              signal.position_status === 'PARTIAL' ? 'bg-yellow-900/30 text-yellow-400' :
+                              signal.signal_status?.status === 'open' ? 'bg-green-900/30 text-green-400' :
+                              signal.signal_status?.status === 'closed' ? 'bg-gray-700 text-gray-300' :
+                              signal.signal_status?.status === 'rejected' ? 'bg-red-900/30 text-red-400' :
                               'bg-yellow-900/30 text-yellow-400'
                             }`}>
-                              {signal.position_status || 'PENDING'}
-                              {signal.position_status === 'PARTIAL' && remainingQty > 0 && (
+                              {signal.signal_status?.status || 'pending'}
+                              {signal.signal_status?.status === 'partial' && remainingQty > 0 && (
                                 <span className="ml-1 text-xs">({remainingQty} left)</span>
                               )}
                             </span>

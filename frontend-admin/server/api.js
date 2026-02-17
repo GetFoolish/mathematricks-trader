@@ -125,7 +125,7 @@ app.get('/api/v1/activity/signals', async (req, res) => {
         const raw = leg.raw || {};
         const cerebro = leg.cerebro || null;
         const execution = leg.execution || null;
-        const position = doc.position || {};
+        const signal_status = doc.signal_status || {};
 
         // Get first leg from raw.legs (the actual BUY/SELL actions)
         let firstLeg = {};
@@ -175,8 +175,8 @@ app.get('/api/v1/activity/signals', async (req, res) => {
           executionLagSeconds = (executionCompletedTimestamp.getTime() / 1000) - signalSentEpoch;
         }
 
-        // Get PnL from position
-        const pnl = position.pnl || null;
+        // Get PnL from signal_status
+        const pnl = signal_status?.pnl || null;
 
         // Get final quantity from cerebro.legs or execution
         let finalQuantity = firstLeg.quantity;
@@ -211,7 +211,7 @@ app.get('/api/v1/activity/signals', async (req, res) => {
           execution_lag_seconds: executionLagSeconds,
           signal_type: signalType,
           execution: serializeDocument(execution),
-          position: serializeDocument(position),
+          signal_status: serializeDocument(signal_status),
           pnl: serializeDocument(pnl)
         });
       }
@@ -357,15 +357,15 @@ app.get('/api/v1/activity/positions', async (req, res) => {
     const environment = req.query.environment;
     const status = req.query.status; // 'OPEN' or 'CLOSED'
 
-    // Query for ENTRY signals with position data
+    // Query for ENTRY signals with signal_status data
     const query = {
-      'position.status': { $exists: true }
+      'signal_status.status': { $exists: true }
     };
     if (environment) {
       query.environment = environment;
     }
     if (status) {
-      query['position.status'] = status;
+      query['signal_status.status'] = status;
     }
 
     const entrySignals = await signalStoreCollection
@@ -374,13 +374,13 @@ app.get('/api/v1/activity/positions', async (req, res) => {
           signal_id: 1,
           strategy_id: 1,
           instrument: 1,
-          'position': 1,
+          'signal_status': 1,
           'legs': 1,
           created_at: 1,
           environment: 1
         }
       })
-      .sort({ 'position.opened_at': -1 })
+      .sort({ 'signal_status.opened_at': -1 })
       .limit(limit)
       .toArray();
 
@@ -406,10 +406,10 @@ app.get('/api/v1/activity/positions', async (req, res) => {
       let exitPrice = null;
       let proceeds = null;
 
-      // Fetch exit signals if position is closed
-      if (entrySignal.position.status === 'CLOSED' && entrySignal.position.exit_signals?.length > 0) {
+      // Fetch exit signals if signal_status is closed
+      if (entrySignal.signal_status.status === 'CLOSED' && entrySignal.signal_status.exit_signals?.length > 0) {
         // Get unique exit signal IDs
-        const uniqueExitIds = [...new Set(entrySignal.position.exit_signals.map(id => id.toString()))];
+        const uniqueExitIds = [...new Set(entrySignal.signal_status.exit_signals.map(id => id.toString()))];
 
         exitSignals = await signalStoreCollection
           .find(
@@ -431,16 +431,16 @@ app.get('/api/v1/activity/positions', async (req, res) => {
         strategy_id: strategyId,
         fund_id: fundId,
         instrument: instrument,
-        status: entrySignal.position.status,
+        status: entrySignal.signal_status.status,
         quantity: totalQty,
         entry_price: entryPrice,
         exit_price: exitPrice,
         cost_basis: costBasis,
         proceeds: proceeds,
-        current_value: entrySignal.position.status === 'OPEN' ? costBasis : proceeds, // TODO: calculate unrealized for open
-        pnl: entrySignal.position.pnl || null,
-        opened_at: entrySignal.position.opened_at,
-        closed_at: entrySignal.position.closed_at || null,
+        current_value: entrySignal.signal_status.status === 'OPEN' ? costBasis : proceeds, // TODO: calculate unrealized for open
+        pnl: entrySignal.signal_status.pnl || null,
+        opened_at: entrySignal.signal_status.opened_at,
+        closed_at: entrySignal.signal_status.closed_at || null,
         environment: entrySignal.environment
       });
     }
@@ -486,18 +486,18 @@ app.get('/api/v1/activity/trading-signals', async (req, res) => {
         environment: signal.environment,
 
         // Position info
-        status: signal.position?.status || 'PENDING',
-        opened_at: serializeDocument(signal.position?.opened_at),
-        closed_at: serializeDocument(signal.position?.closed_at),
+        status: signal.signal_status?.status || 'PENDING',
+        opened_at: serializeDocument(signal.signal_status?.opened_at),
+        closed_at: serializeDocument(signal.signal_status?.closed_at),
 
         // P&L info (cumulative for PARTIAL, final for CLOSED)
-        pnl: serializeDocument(signal.position?.pnl),
+        pnl: serializeDocument(signal.signal_status?.pnl),
 
         // Partial exit info
-        partial_exit_count: signal.position?.partial_exit_count,
-        remaining_quantity: signal.position?.remaining_quantity,
-        entry_quantity: signal.position?.entry_quantity,
-        exit_quantity: signal.position?.exit_quantity,
+        partial_exit_count: signal.signal_status?.partial_exit_count,
+        remaining_quantity: signal.signal_status?.remaining_quantity,
+        entry_quantity: signal.signal_status?.entry_quantity,
+        exit_quantity: signal.signal_status?.exit_quantity,
 
         // Legs
         legs: serializeDocument(signal.legs),
@@ -902,7 +902,7 @@ app.get('/api/v1/activity/signal-status', async (req, res) => {
 
     // Transform to status view: one row per signal with summary info
     const statusData = signals.map(doc => {
-      const position = doc.position || {};
+      const signal_status = doc.signal_status || {};
       const legs = doc.legs || [];
       
       // Count ENTRY and EXIT legs
@@ -921,13 +921,13 @@ app.get('/api/v1/activity/signal-status', async (req, res) => {
         instrument: doc.instrument,
         environment: doc.environment,
         mode: doc.mode,
-        position_status: position.status || 'PENDING',
-        entry_quantity: position.entry_quantity || 0,
-        exit_quantity: position.exit_quantity || 0,
-        remaining_quantity: position.remaining_quantity || 0,
-        pnl: position.pnl,
-        opened_at: position.opened_at,
-        closed_at: position.closed_at,
+        position_status: signal_status.status || 'PENDING',
+        entry_quantity: signal_status.entry_quantity || 0,
+        exit_quantity: signal_status.exit_quantity || 0,
+        remaining_quantity: signal_status.remaining_quantity || 0,
+        pnl: signal_status.pnl,
+        opened_at: signal_status.opened_at,
+        closed_at: signal_status.closed_at,
         created_at: doc.created_at,
         updated_at: doc.updated_at,
         entry_legs_count: entryLegs.length,

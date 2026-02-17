@@ -34,12 +34,31 @@ cd mathematricks-trader
 cp .env.example .env
 # Edit .env with your credentials
 
-# Start services
+# Start services (uses local MongoDB by default)
 make start-dev
 
 # Verify system
 python tests/run_test_suite.py --system
 ```
+
+### MongoDB Deployment Options
+
+The system supports two MongoDB deployment targets:
+
+**Local MongoDB (Docker)** - Default for development:
+```bash
+make start              # Start with local MongoDB (default)
+make start-dev          # Dev mode - always uses local MongoDB
+make restart            # Restart with local MongoDB (default)
+```
+
+**Cloud MongoDB (Atlas)** - For production/staging:
+```bash
+make start DEPLOY=cloud    # Start with cloud MongoDB
+make restart DEPLOY=cloud  # Restart with cloud MongoDB
+```
+
+**Note:** `make start-dev` always uses local MongoDB (no cloud option needed for development)
 
 ### Send Your First Signal
 
@@ -48,7 +67,7 @@ python tests/run_test_suite.py --system
 python tests/send_test_signal.py --file tests/sample_signals/simple_stock.json
 
 # View in admin dashboard
-open http://localhost:5173
+open http://localhost:3001
 ```
 
 ---
@@ -284,7 +303,18 @@ Comprehensive test framework with system validation, signal testing, and integra
 
 ### Test Runner
 ##### THIS IS THE TEST WE USE MOST OFTEN: 
-signal_count=4 && echo "Starting comprehensive test with $signal_count signals across 3 modes..." && echo -e "\n=== TEST 1: mock_mock with --clean ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --clean --environment staging --account-type mock --data-source mock --file tests/sample_signals/ibkr/tech_stocks_realistic.json --signal-count $signal_count && echo -e "\n=== TEST 2: mock_live ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --environment staging --account-type mock --data-source live --file tests/sample_signals/ibkr/tech_stocks_realistic.json --signal-count $signal_count && echo -e "\n=== TEST 3: paper_live ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --environment staging --account-type paper --data-source live --file tests/sample_signals/ibkr/tech_stocks_realistic.json --signal-count $signal_count
+
+#### IBKR TEST - Local (Docker)
+signal_count=4 && echo "Starting comprehensive test with $signal_count signals across 3 modes..." && echo -e "\n=== TEST 1: mock_mock with --clean ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --clean --local --environment staging --account-type mock --data-source mock --file tests/sample_signals/ibkr/tech_stocks_realistic.json --signal-count $signal_count && echo -e "\n=== TEST 2: mock_live ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --local --environment staging --account-type mock --data-source live --file tests/sample_signals/ibkr/tech_stocks_realistic.json --signal-count $signal_count && echo -e "\n=== TEST 3: paper_live ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --local --environment staging --account-type paper --data-source live --file tests/sample_signals/ibkr/tech_stocks_realistic.json --signal-count $signal_count
+
+#### IBKR TEST - Cloud (Netlify)
+signal_count=4 && echo "Starting comprehensive test with $signal_count signals across 3 modes..." && echo -e "\n=== TEST 1: mock_mock with --clean ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --clean --cloud --environment staging --account-type mock --data-source mock --file tests/sample_signals/ibkr/tech_stocks_realistic.json --signal-count $signal_count && echo -e "\n=== TEST 2: mock_live ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --cloud --environment staging --account-type mock --data-source live --file tests/sample_signals/ibkr/tech_stocks_realistic.json --signal-count $signal_count && echo -e "\n=== TEST 3: paper_live ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --cloud --environment staging --account-type paper --data-source live --file tests/sample_signals/ibkr/tech_stocks_realistic.json --signal-count $signal_count
+
+#### COINBASE TEST - Local (Docker)
+source .venv/bin/activate && signal_count=4 && echo "Starting Coinbase Crypto test with $signal_count signals across 3 modes..." && echo -e "\n=== TEST 1: mock_mock with --clean ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --clean --local --environment staging --account-type mock --data-source mock --file tests/sample_signals/coinbase/crypto_spot_trading.json --signal-count $signal_count && echo -e "\n=== TEST 2: mock_live ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --local --environment staging --account-type mock --data-source live --file tests/sample_signals/coinbase/crypto_spot_trading.json --signal-count $signal_count && echo -e "\n=== TEST 3: paper_live ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --local --environment staging --account-type paper --data-source live --file tests/sample_signals/coinbase/crypto_spot_trading.json --signal-count $signal_count
+
+#### COINBASE TEST - Cloud (Netlify)
+source .venv/bin/activate && signal_count=4 && echo "Starting Coinbase Crypto test with $signal_count signals across 3 modes..." && echo -e "\n=== TEST 1: mock_mock with --clean ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --clean --cloud --environment staging --account-type mock --data-source mock --file tests/sample_signals/coinbase/crypto_spot_trading.json --signal-count $signal_count && echo -e "\n=== TEST 2: mock_live ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --cloud --environment staging --account-type mock --data-source live --file tests/sample_signals/coinbase/crypto_spot_trading.json --signal-count $signal_count && echo -e "\n=== TEST 3: paper_live ===" && .venv/bin/python tests/run_test_suite.py --signal-testing --cloud --environment staging --account-type paper --data-source live --file tests/sample_signals/coinbase/crypto_spot_trading.json --signal-count $signal_count
 
 **Main test suite:** [`tests/run_test_suite.py`](./tests/run_test_suite.py)
 
@@ -769,7 +799,7 @@ docker-compose logs -f cerebro-service
 
 ### Admin Dashboard
 
-**URL:** http://localhost:5173
+**URL:** http://localhost:3001
 
 **Features:**
 - Real-time signal tracking

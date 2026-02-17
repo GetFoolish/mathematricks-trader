@@ -87,10 +87,14 @@ export interface Strategy {
   name: string;
   asset_class: string;
   instruments: string[];
-  status: 'ACTIVE' | 'INACTIVE' | 'TESTING';
+  status: 'ACTIVE' | 'INACTIVE' | 'TESTING' | StrategyStatus;  // Support both old and new formats
   trading_mode?: 'LIVE' | 'PAPER';
   account?: string; // Legacy field
-  accounts?: string[]; // New field - array of allowed account IDs
+  accounts?: {
+    mock?: string[];
+    paper?: string[];
+    live?: string[];
+  }; // Mode-aware accounts (v5)
   include_in_optimization?: boolean;
   risk_limits?: {
     max_position_size?: number;
@@ -101,6 +105,14 @@ export interface Strategy {
   created_at: string;
   updated_at: string;
   backtest_data?: BacktestData;
+}
+
+// New format for strategy.status field with defaults
+export interface StrategyStatus {
+  active: boolean;
+  mode?: 'mock_mock' | 'mock_live' | 'paper_live' | 'live_live';
+  account_type?: 'mock' | 'paper' | 'live';
+  data_source?: 'mock' | 'live';
 }
 
 export interface BacktestData {
