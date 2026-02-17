@@ -543,8 +543,9 @@ def update_signal_store_with_decision(signal_store_id: str, decision_doc: dict, 
 # SERVICE URLs
 # ============================================================================
 
-ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:8082')
+# Account data is now served by execution-service (consolidated architecture)
 EXECUTION_SERVICE_URL = os.getenv('EXECUTION_SERVICE_URL', 'http://localhost:8083')
+ACCOUNT_DATA_SERVICE_URL = EXECUTION_SERVICE_URL  # Backward compatibility - now points to execution-service
 
 
 # ============================================================================

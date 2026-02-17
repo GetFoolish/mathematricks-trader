@@ -1292,7 +1292,121 @@ def cancel_order(order_id: str):
         raise HTTPException(status_code=500, detail=f"Error cancelling order: {str(e)}")
 
 
-def run_api_server(broker_pool_ref: Dict, ready_flag: bool):
+# ============================================================================
+# ACCOUNT MANAGEMENT ENDPOINTS (migrated from account-data-service)
+# ============================================================================
+
+# Global repository - will be set by execution_main.py
+trading_accounts_repository = None
+
+
+@app.get("/api/v1/accounts")
+def list_accounts(broker: Optional[str] = None, status: str = "ACTIVE"):
+    """
+    List all trading accounts with optional filters
+    
+    Args:
+        broker: Filter by broker name (e.g., "IBKR", "Binance")
+        status: Filter by status (default: "ACTIVE")
+    """
+    try:
+        if trading_accounts_repository is None:
+            raise HTTPException(status_code=503, detail="Service not initialized")
+        
+        accounts = trading_accounts_repository.list_accounts(broker=broker, status=status)
+        
+        # Sanitize ObjectIds
+        for account in accounts:
+            if '_id' in account:
+                account['_id'] = str(account['_id'])
+        
+        return {"accounts": accounts, "count": len(accounts)}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing accounts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/account/{account_name}/state")
+def get_account_state_legacy(account_name: str):
+    """
+    LEGACY: Get account state (backward compatible with old format)
+    Used by CerebroService - DO NOT REMOVE
+    """
+    try:
+        if trading_accounts_repository is None:
+            raise HTTPException(status_code=503, detail="Service not initialized")
+        
+        account = trading_accounts_repository.get_account(account_name)
+        if not account:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Account {account_name} not found"
+            )
+
+        # Transform to old format expected by CerebroService
+        from datetime import datetime
+        state = {
+            "account_id": account.get('account_id', account_name),
+            "account": account.get('account_id', account_name),
+            "broker_id": account.get('broker', 'UNKNOWN'),
+            "timestamp": account.get('balances', {}).get('last_updated', datetime.utcnow()),
+            "equity": account.get('balances', {}).get('equity', 0.0),
+            "cash_balance": account.get('balances', {}).get('cash_balance', 0.0),
+            "margin_used": account.get('balances', {}).get('margin_used', 0.0),
+            "margin_available": account.get('balances', {}).get('margin_available', 0.0),
+            "unrealized_pnl": account.get('balances', {}).get('unrealized_pnl', 0.0),
+            "realized_pnl": account.get('balances', {}).get('realized_pnl', 0.0),
+            "open_positions": account.get('open_positions', []),
+            "holdings": account.get('balances', {}).get('holdings', {}),  # Crypto holdings
+            "open_orders": [],  # Not tracking orders here
+            "created_at": account.get('updated_at', datetime.utcnow())
+        }
+
+        return {"state": state}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting legacy account state: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/account/{account_name}/margin")
+def get_account_margin_legacy(account_name: str):
+    """
+    LEGACY: Get margin info
+    Used by CerebroService - DO NOT REMOVE
+    """
+    try:
+        if trading_accounts_repository is None:
+            raise HTTPException(status_code=503, detail="Service not initialized")
+        
+        account = trading_accounts_repository.get_account(account_name)
+        if not account:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Account {account_name} not found"
+            )
+
+        balances = account.get('balances', {})
+        return {
+            "margin_available": balances.get('margin_available', 0.0),
+            "margin_used": balances.get('margin_used', 0.0),
+            "margin_utilization_pct": balances.get('margin_utilization_pct', 0.0),
+            "equity": balances.get('equity', 0.0)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting margin: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def run_api_server(broker_pool_ref: Dict, ready_flag: bool, repository_ref=None):
     """
     Run FastAPI server in main thread.
     Called by execution_main.py after broker pool is initialized.
@@ -1300,10 +1414,12 @@ def run_api_server(broker_pool_ref: Dict, ready_flag: bool):
     Args:
         broker_pool_ref: Reference to the broker pool dict
         ready_flag: Whether the service is ready
+        repository_ref: Reference to the trading accounts repository
     """
-    global broker_pool, service_ready
+    global broker_pool, service_ready, trading_accounts_repository
     broker_pool = broker_pool_ref
     service_ready = ready_flag
+    trading_accounts_repository = repository_ref
     
     logger.info("🚀 Starting API server on port 8083...")
     uvicorn.run(app, host='0.0.0.0', port=8083, log_level='error')

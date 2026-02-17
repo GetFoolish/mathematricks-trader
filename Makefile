@@ -1,4 +1,4 @@
-.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-account-data logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-account-data restart-portfolio restart-dashboard clean-old-logs export-seed-data reseed-db
+.PHONY: start stop restart status logs clean help logs-signal-ingestion logs-portfolio logs-dashboard logs-mongodb send-test-signal restart-cerebro restart-execution restart-signal-ingestion restart-portfolio restart-dashboard clean-old-logs export-seed-data reseed-db
 
 # Auto-detect timezone from system
 export TZ := $(shell readlink /etc/localtime 2>/dev/null | sed 's|^.*/zoneinfo/||' || echo "UTC")
@@ -38,12 +38,11 @@ help:
 	@echo "make status             - Check status of services"
 	@echo "make logs               - View logs of all services"
 	@echo "make logs-cerebro  - View logs of cerebro-service"
-	@echo "make logs-execution - View logs of execution-service"
-	@echo "make logs-signal-ingestion - View logs of signal-ingestion"
-	@echo "make logs-frontend-admin - View logs of frontend-admin (admin dashboard)"
-	@echo "make logs-frontend - View logs of frontend (website + API)"
-	@echo "make logs-website  - View logs of frontend (website + API)"
-	@echo "make logs-account-data - View logs of account-data-service"
+	echo "make logs-execution - View logs of execution-service (includes account management)"
+	echo "make logs-signal-ingestion - View logs of signal-ingestion"
+	echo "make logs-frontend-admin - View logs of frontend-admin (admin dashboard)"
+	echo "make logs-frontend - View logs of frontend (website + API)"
+	echo "make logs-website  - View logs of frontend (website + API)"
 	@echo "make logs-portfolio - View logs of portfolio-builder"
 	@echo "make logs-dashboard - View logs of dashboard-creator"
 	@echo "make logs-mongodb  - View logs of mongodb"
@@ -67,7 +66,7 @@ start:
 	@echo "Starting core services (production mode - no website/API)..."
 	@echo "📊 MongoDB: $(MONGO_LABEL)"
 	@echo ""
-	docker-compose up -d mongodb cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend-admin
+	docker-compose up -d mongodb cerebro-service execution-service signal-ingestion portfolio-builder dashboard-creator frontend-admin
 	@echo ""
 	@echo "✅ Core services started"
 	@echo "📊 MongoDB: $(MONGO_LABEL)"
@@ -97,17 +96,17 @@ restart:
 	@echo "📊 MongoDB: $(MONGO_LABEL)"
 	@echo ""
 	@echo "Stopping services..."
-	@docker-compose stop mongodb cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend-admin frontend
+	@docker-compose stop mongodb cerebro-service execution-service signal-ingestion portfolio-builder dashboard-creator frontend-admin frontend
 	@echo ""
 	@echo "Stopping and removing IB Gateway containers..."
 	@docker ps -a --filter "name=ib-gateway-" --format "{{.Names}}" | xargs -r docker stop 2>/dev/null || true
 	@docker ps -a --filter "name=ib-gateway-" --format "{{.Names}}" | xargs -r docker rm 2>/dev/null || true
 	@echo ""
 	@echo "Starting and waiting for all services..."
-	@docker-compose up -d --wait mongodb cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend-admin frontend
+	@docker-compose up -d --wait mongodb cerebro-service execution-service signal-ingestion portfolio-builder dashboard-creator frontend-admin frontend
 	@echo ""
 	@echo "=== Service Status ==="
-	@docker-compose ps cerebro-service execution-service account-data-service signal-ingestion portfolio-builder dashboard-creator frontend-admin frontend
+	@docker-compose ps cerebro-service execution-service signal-ingestion portfolio-builder dashboard-creator frontend-admin frontend
 	@echo ""
 	@echo "=== IB Gateway Status ==="
 	@docker ps --filter "name=ib-gateway-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || echo "⚠️  No IB Gateway containers running"
@@ -128,7 +127,7 @@ status:
 	@echo "Website: http://localhost:3000"
 
 logs:
-	docker-compose logs -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator
+	docker-compose logs -f cerebro-service execution-service signal-ingestion portfolio-builder dashboard-creator
 
 logs-cerebro:
 	docker-compose logs -f cerebro-service
@@ -144,9 +143,6 @@ logs-frontend:
 
 logs-signal-ingestion:
 	docker-compose logs -f signal-ingestion
-
-logs-account-data:
-	docker-compose logs -f account-data-service
 
 logs-portfolio:
 	docker-compose logs -f portfolio-builder
@@ -172,9 +168,6 @@ restart-execution:
 restart-signal-ingestion:
 	docker-compose restart signal-ingestion
 
-restart-account-data:
-	docker-compose restart account-data-service
-
 restart-portfolio:
 	docker-compose restart portfolio-builder
 
@@ -194,10 +187,10 @@ clean-old-logs:
 	@echo ""
 	@echo "⚠️  This will restart all containers to clear logs."
 	@echo "Stopping services (preserving MongoDB)..."
-	@docker-compose stop cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator frontend-admin frontend 2>/dev/null || true
+	@docker-compose stop cerebro-service execution-service signal-ingestion portfolio-builder dashboard-creator frontend-admin frontend 2>/dev/null || true
 	@echo ""
 	@echo "Removing service containers (logs will be cleared)..."
-	@docker-compose rm -f cerebro-service execution-service signal-ingestion account-data-service portfolio-builder dashboard-creator frontend-admin frontend 2>/dev/null || true
+	@docker-compose rm -f cerebro-service execution-service signal-ingestion portfolio-builder dashboard-creator frontend-admin frontend 2>/dev/null || true
 	@echo ""
 	@echo "Starting services with fresh logs..."
 	@docker-compose up -d

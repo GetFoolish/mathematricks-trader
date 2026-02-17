@@ -44,12 +44,9 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
-      account-data-service:
-        condition: service_healthy
     environment:
       - TZ=${TZ}
       - MONGODB_URI=${MONGODB_URI}
-      - ACCOUNT_DATA_SERVICE_URL=${ACCOUNT_DATA_SERVICE_URL}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/health').read()"]
@@ -58,30 +55,6 @@ services:
       retries: 20
       start_period: 30s
     command: python -m services.execution_service.execution_main
-
-  account-data-service:
-    build:
-      context: .
-      dockerfile: Dockerfile.python
-      args:
-        SERVICE_NAME: account_data_service
-    volumes:
-      - ./services:/app/services
-    ports:
-      - "8085:8082" # HTTP API endpoint (external:internal)
-    depends_on:
-      mongodb:
-        condition: service_healthy
-    environment:
-      - TZ=${TZ}
-      - MONGODB_URI=${MONGODB_URI}
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/api/v1/accounts').read()"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-    command: python -m services.account_data_service.account_data_main
 
   # Infrastructure Services
   mongodb:

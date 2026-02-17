@@ -16,7 +16,8 @@ from datetime import datetime
 logger = logging.getLogger('cerebro.broker_adapter')
 
 # AccountDataService URL
-ACCOUNT_DATA_SERVICE_URL = "http://localhost:8082"
+# Account data is now served by execution-service on port 8083
+ACCOUNT_DATA_SERVICE_URL = "http://localhost:8083"
 
 
 class CerebroBrokerAdapter:
@@ -369,11 +370,11 @@ class CerebroBrokerAdapter:
         except requests.exceptions.Timeout:
             raise ValueError(
                 f"Timeout waiting for futures margin from IBKR. "
-                f"Ensure TWS/Gateway is running and AccountDataService is available."
+                f"Ensure TWS/Gateway is running and ExecutionService is available."
             )
         except requests.exceptions.ConnectionError:
             raise ValueError(
-                f"Cannot connect to AccountDataService at {ACCOUNT_DATA_SERVICE_URL}. "
+                f"Cannot connect to ExecutionService at {ACCOUNT_DATA_SERVICE_URL}. "
                 f"Ensure the service is running."
             )
         except Exception as e:

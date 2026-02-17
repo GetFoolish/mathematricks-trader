@@ -12,14 +12,14 @@ logger = logging.getLogger(__name__)
 
 def get_account_state(account_name: str, account_data_service_url: str = None, execution_service_url: str = None) -> Optional[Dict[str, Any]]:
     """
-    Query AccountDataService for current account state.
+    Query ExecutionService for current account state.
     
     IMPORTANT: For paper/live modes, this will first sync fresh data from the broker
     via execution-service (balances + positions) to ensure accurate capital calculations.
 
     Args:
         account_name: Name of the trading account (e.g., "IBKR_Main")
-        account_data_service_url: URL of the AccountDataService (e.g., "http://localhost:8002")
+        account_data_service_url: URL of the ExecutionService (e.g., "http://localhost:8083")
         execution_service_url: URL of the ExecutionService (e.g., "http://localhost:8083")
 
     Returns:

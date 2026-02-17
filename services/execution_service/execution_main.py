@@ -1,6 +1,7 @@
 """
 Execution Service - Modern Architecture
 Strategy-driven broker initialization and order execution
+Consolidated service: handles broker connections, order execution, and account data
 """
 import os
 import sys
@@ -26,6 +27,10 @@ from services.execution_service import api
 # Import gateway controller for IB Gateway management
 from services.execution_service.gateway_controller import GatewayController
 
+# Import account management (migrated from account-data-service)
+from services.execution_service.repository import TradingAccountRepository
+from services.execution_service.broker_poller import BrokerPoller
+
 # Load environment
 load_dotenv(os.path.join(PROJECT_ROOT, '.env'))
 
@@ -47,9 +52,12 @@ MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27018')
 mongo_client = MongoClient(MONGODB_URI)
 db = mongo_client['mathematricks_trading']
 
-# Global broker pool and gateway controller
+# Global broker pool, gateway controller, and account repository
 broker_pool: Dict[str, any] = {}
 gateway_controller = GatewayController()
+trading_accounts_collection = db['trading_accounts']
+trading_accounts_repository = TradingAccountRepository(trading_accounts_collection)
+broker_poller = None
 
 
 def get_required_accounts_from_strategies() -> Set[str]:
@@ -300,29 +308,47 @@ def initialize_broker_pool():
 
 def main():
     """Main execution service entry point."""
-    logger.info("🚀 Execution Service Starting")
+    global broker_poller
+    
+    logger.info("🚀 Execution Service Starting (Consolidated with Account Data)")
     logger.info("=" * 80)
     
     # Initialize broker pool
     initialize_broker_pool()
     
+    # Start broker polling service (migrated from account-data-service)
+    logger.info("\n📊 Starting background broker polling...")
+    broker_poller = BrokerPoller(
+        repository=trading_accounts_repository,
+        interval=300,  # Poll every 5 minutes
+        mongodb_url=MONGODB_URI,
+        mongodb_client=mongo_client
+    )
+    broker_poller.start()
+    logger.info("✅ Broker polling started")
+    
     # Start API server in background thread
     logger.info("\n🌐 Starting API Server...")
     api_thread = threading.Thread(
         target=api.run_api_server,
-        args=(broker_pool, True),
+        args=(broker_pool, True, trading_accounts_repository),
         daemon=True
     )
     api_thread.start()
     
     # Keep service running
-    logger.info("\n🎯 Execution Service Ready")
+    logger.info("\n🎯 Execution Service Ready (with Account Management)")
     
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         logger.info("\n🛑 Shutting down Execution Service")
+        
+        # Stop broker poller
+        if broker_poller:
+            broker_poller.stop()
+            logger.info("✅ Stopped broker polling")
         
         # Cleanup brokers
         for account_id, broker in broker_pool.items():
