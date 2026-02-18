@@ -32,7 +32,7 @@ interface SignalStore {
 
 export default function SignalStoreTab() {
   const [signals, setSignals] = useState<SignalStore[]>([]);
-  const [rawSignals, setRawSignals] = useState<{ [signalId: string]: any }>({});
+  const [rawSignals, setRawSignals] = useState<{ [rawSignalId: string]: any }>({});  // Keyed by leg.raw_signal_id
   const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
   const [expandedLegId, setExpandedLegId] = useState<string | null>(null);
   const [showSignalDict, setShowSignalDict] = useState<string | null>(null);
@@ -77,27 +77,32 @@ export default function SignalStoreTab() {
       const data = await api.getSignalStore({ limit: 100 });
       setSignals(data.signals || []);
       
-      // Fetch raw signals from trading_signals_raw using signal_id (or fallback to _id)
-      const rawSignalPromises = (data.signals || []).map(async (signal: SignalStore) => {
-        if (signal.signal_id && !rawSignals[signal.signal_id]) {
-          try {
-            // Try using signal_id first (will match signal_id or signalID or _id in backend)
-            const rawData = await api.getRawSignalById(signal.signal_id);
-            return { signalId: signal.signal_id, rawSignal: rawData.raw_signal };
-          } catch (err) {
-            console.error(`Failed to fetch raw signal for ${signal.signal_id}:`, err);
-            // Fallback to embedded raw_signal if fetch fails
-            return { signalId: signal.signal_id, rawSignal: signal.raw_signal };
+      // Fetch raw signals from trading_signals_raw per leg using raw_signal_id
+      const rawSignalPromises: Promise<{ rawSignalId: string; rawSignal: any } | null>[] = [];
+      (data.signals || []).forEach((signal: SignalStore) => {
+        const signal_legs = signal.signal_legs || [];
+        signal_legs.forEach((leg: any) => {
+          if (leg.raw_signal_id && !rawSignals[leg.raw_signal_id]) {
+            rawSignalPromises.push(
+              (async () => {
+                try {
+                  const rawData = await api.getRawSignalById(leg.raw_signal_id);
+                  return { rawSignalId: leg.raw_signal_id, rawSignal: rawData.raw_signal };
+                } catch (err) {
+                  console.error(`Failed to fetch raw signal for ${leg.raw_signal_id}:`, err);
+                  return null;
+                }
+              })()
+            );
           }
-        }
-        return null;
+        });
       });
       
       const rawSignalResults = await Promise.all(rawSignalPromises);
       const newRawSignals = { ...rawSignals };
       rawSignalResults.forEach((result) => {
         if (result) {
-          newRawSignals[result.signalId] = result.rawSignal;
+          newRawSignals[result.rawSignalId] = result.rawSignal;
         }
       });
       setRawSignals(newRawSignals);
@@ -632,12 +637,14 @@ export default function SignalStoreTab() {
                                             <div className="space-y-2">
                                               <h5 className="text-xs font-semibold text-gray-400">Raw Signal (from trading_signals_raw)</h5>
                                               <div className="bg-gray-900 p-3 rounded text-xs font-mono space-y-1 h-full overflow-auto max-h-96">
-                                                {rawSignals[signal.signal_id] ? (
+                                                {leg.raw_signal_id && rawSignals[leg.raw_signal_id] ? (
                                                   <pre className="text-gray-300 whitespace-pre-wrap">
-                                                    {JSON.stringify(rawSignals[signal.signal_id], null, 2)}
+                                                    {JSON.stringify(rawSignals[leg.raw_signal_id], null, 2)}
                                                   </pre>
                                                 ) : (
-                                                  <div className="text-gray-500 italic">Loading raw signal from trading_signals_raw...</div>
+                                                  <div className="text-gray-500 italic">
+                                                    {leg.raw_signal_id ? 'Loading raw signal from trading_signals_raw...' : 'No raw_signal_id found for this leg'}
+                                                  </div>
                                                 )}
                                               </div>
                                             </div>
@@ -749,6 +756,7 @@ export default function SignalStoreTab() {
                                                       {leg.execution.orders.map((order: any, orderIdx: number) => (
                                                         <div key={orderIdx} className="bg-gray-950 p-2 rounded text-xs">
                                                           <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                                                            <div><span className="text-gray-500">Action:</span> <span className="text-white">{order.action || 'N/A'}</span></div>
                                                             <div><span className="text-gray-500">Fund/Account:</span> <span className="text-white">{order.fund_id}/{order.account_id}</span></div>
                                                             <div><span className="text-gray-500">Exec Broker:</span> <span className="text-white">{order.broker || order.broker_name || 'N/A'}</span></div>
                                                             <div><span className="text-gray-500">Data Source:</span> <span className="text-white">{order.data_source || 'N/A'}</span></div>
@@ -813,6 +821,7 @@ export default function SignalStoreTab() {
                                                         leg.execution.orders.forEach((order: any, idx: number) => {
                                                           text += `\n\nOrder ${idx + 1}:`;
                                                           text += `\n  Order ID: ${order.order_id}`;
+                                                          if (order.action) text += `\n  Action: ${order.action}`;
                                                           if (order.broker_order_id) text += `\n  Broker Order ID: ${order.broker_order_id}`;
                                                           if (order.fund_id) text += `\n  Fund: ${order.fund_id}`;
                                                           if (order.account_id) text += `\n  Account: ${order.account_id}`;
@@ -926,6 +935,7 @@ export default function SignalStoreTab() {
                                                         {leg.execution.orders.map((order: any, orderIdx: number) => (
                                                           <div key={orderIdx} className="bg-gray-950 p-2 rounded">
                                                             <div><span className="text-gray-500">Order ID:</span> <span className="text-white">{order.order_id}</span></div>
+                                                            <div><span className="text-gray-500">Action:</span> <span className="text-white">{order.action || 'N/A'}</span></div>
                                                             <div><span className="text-gray-500">Broker Order ID:</span> <span className="text-white">{order.broker_order_id}</span></div>
                                                             <div><span className="text-gray-500">Fund/Account:</span> <span className="text-white">{order.fund_id}/{order.account_id}</span></div>
                                                             {order.broker && (

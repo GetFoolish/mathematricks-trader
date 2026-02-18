@@ -112,6 +112,7 @@ else:
 db = mongo_client['mathematricks_trading']
 trading_orders_collection = db['trading_orders']
 signal_store_collection = db['signal_store']  # Unified signal storage with embedded cerebro decisions
+trading_signals_raw_collection = db['trading_signals_raw']  # Raw signals for fetching leg-specific data
 portfolio_allocations_collection = db['portfolio_allocations']  # DEPRECATED: Use funds + portfolio_tests instead
 current_allocation_collection = db['current_allocation']  # DEPRECATED: Use funds + portfolio_tests instead
 strategies_collection = db['strategies']
@@ -1486,11 +1487,27 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             logger.debug(f"All legs already have cerebro decisions, skipping signal {signal_id}")
             return
 
-        # Extract raw data from document root (NEW in v4)
-        raw_obj = signal.get('raw_signal', {})
+        # ⭐ CRITICAL FIX: For each leg, fetch its own raw signal data from trading_signals_raw
+        # Each leg has its own raw_signal_id that links to its specific raw signal
+        # BEFORE: We were using signal.raw_signal (from document root), which is always the ENTRY's raw data
+        # AFTER: Fetch the raw signal for the current unprocessed leg
+        current_leg = unprocessed_legs[0]
+        leg_raw_signal_id = current_leg.get('raw_signal_id')
+        
+        if leg_raw_signal_id:
+            # Fetch the actual raw signal for this leg from trading_signals_raw
+            from bson import ObjectId
+            raw_obj = trading_signals_raw_collection.find_one({'_id': ObjectId(leg_raw_signal_id)})
+            if not raw_obj:
+                logger.error(f"❌ Could not find raw signal {leg_raw_signal_id} for leg in signal {signal_id}")
+                raw_obj = signal.get('raw_signal', {})  # Fallback to document root
+        else:
+            # Fallback: Use raw_signal from document root (for old signals)
+            raw_obj = signal.get('raw_signal', {})
+        
         if not raw_obj:
-            # Fallback to old schema (v3) - raw data in first unprocessed leg
-            raw_obj = unprocessed_legs[0].get('raw', {})
+            # Final fallback to old schema (v3) - raw data in first unprocessed leg
+            raw_obj = current_leg.get('raw', {})
         
         raw_signal_id = str(raw_obj.get('_id')) if raw_obj.get('_id') else None
         raw_signal = raw_obj  # For compatibility with code that uses raw_signal
@@ -1501,9 +1518,6 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             logger.info(f"🔗 MULTI-LEG SIGNAL: Processing {len(unprocessed_legs)} legs together for signal {signal_id}")
             for idx, leg in enumerate(unprocessed_legs):
                 logger.info(f"   Leg {idx}: {leg.get('instrument')} ({leg.get('leg_type')})")
-        
-        # Use first unprocessed leg for building normalized signal (compatibility)
-        current_leg = unprocessed_legs[0]
     else:
         # OLD SCHEMA (v2): signal.raw.legs or signal.signal_data
         raw_obj = signal.get('raw', {})

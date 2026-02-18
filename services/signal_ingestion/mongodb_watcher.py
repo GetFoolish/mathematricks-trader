@@ -132,16 +132,13 @@ class MongoDBWatcher:
             # === IDENTITY ===
             "signal_id": signal_id,  # Signal ID from ENTRY leg
             "base_signal_id": signal_id,  # Same as signal_id for ENTRY, used to find parent for EXIT
-            "entry_name": raw_signal_doc.get('entry_name'),  # entry_name for linking EXIT signals
+            "entry_name": raw_signal_doc.get('entry_signal_id') or raw_signal_doc.get('entry_name'),  # entry_name for linking EXIT signals (use entry_signal_id for ENTRY signals)
             "strategy_id": raw_signal_doc['strategy_name'],
             "environment": raw_signal_doc.get('environment', 'production'),
             "account_type": account_type,  # Account type (mock, paper, live) - resolved from strategy if missing
             "mode": mode,  # Trading mode (mock_mock, mock_live, paper_live, live_live) - resolved from strategy if missing
             "data_source": data_source,  # Data source for broker selection (mock or live) - resolved from strategy if missing
             "instrument": instrument,
-
-            # === RAW SIGNAL DATA (stored once at root, not in each leg) ===
-            "raw_signal": None,  # Will be set when creating ENTRY signal
 
             # === SIGNAL LEGS ARRAY (ONE DOCUMENT PER SIGNAL!) ===
             "signal_legs": [],  # Will be appended to
@@ -428,18 +425,6 @@ class MongoDBWatcher:
                                     raw_leg['legs'] = leg['legs']
                                 raw_signal_legs.append(raw_leg)
 
-                            signal_store_doc['raw_signal'] = {
-                                "_id": raw_signal_doc['_id'],
-                                "received_at": raw_signal_doc.get('received_at', datetime.datetime.utcnow()),
-                                "sent_epoch": raw_signal_doc.get('signal_sent_EPOCH'),
-                                "entry_name": raw_signal_doc.get('entry_name'),
-                                "exit_name": raw_signal_doc.get('exit_name'),
-                                "entry_signal_id": raw_signal_doc.get('entry_signal_id'),
-                                "account_equity": raw_signal_doc.get('account_equity'),
-                                "signal_type": raw_signal_doc.get('signal_type', 'ENTRY').upper(),
-                                "signal_legs": raw_signal_legs
-                            }
-
                             # Insert into signal_store
                             result = self.signal_store_collection.insert_one(signal_store_doc)
                             mathematricks_signal_id = result.inserted_id
@@ -683,18 +668,6 @@ class MongoDBWatcher:
                                     if leg.get('legs') and isinstance(leg.get('legs'), list):
                                         raw_leg['legs'] = leg['legs']
                                     raw_signal_legs.append(raw_leg)
-
-                                signal_store_doc['raw_signal'] = {
-                                    "_id": raw_signal_doc['_id'],
-                                    "received_at": raw_signal_doc.get('received_at', datetime.datetime.utcnow()),
-                                    "sent_epoch": raw_signal_doc.get('signal_sent_EPOCH'),
-                                    "entry_name": raw_signal_doc.get('entry_name'),
-                                    "exit_name": raw_signal_doc.get('exit_name'),
-                                    "entry_signal_id": raw_signal_doc.get('entry_signal_id'),
-                                    "account_equity": raw_signal_doc.get('account_equity'),
-                                    "signal_type": raw_signal_doc.get('signal_type', 'ENTRY').upper(),
-                                    "signal_legs": raw_signal_legs
-                                }
 
                                 # Create one processing leg per instrument in the raw signal
                                 # For multi-instrument signals (e.g., AUDUSD + USDCAD), create 2 legs

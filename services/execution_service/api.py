@@ -611,6 +611,12 @@ def update_signal_store_execution(signal_id: str, execution_result: Dict, order_
                 'broker': order_data.get('broker', 'Unknown'),  # Execution broker (where order executes)
                 'data_source': order_data.get('data_source', 'mock'),  # Where data came from (mock/live)
                 'price_broker': order_data.get('_price_broker'),  # Actual broker used for price enrichment (e.g., COINBASE-PAPER)
+                'instrument': order_data.get('instrument'),
+                'instrument_type': order_data.get('instrument_type'),
+                'action': order_data.get('action'),  # BUY or SELL
+                'side': order_data.get('side'),  # BUY or SELL (alias)
+                'direction': order_data.get('direction'),  # LONG or SHORT
+                'order_type': order_data.get('order_type'),  # MARKET, LIMIT, etc.
                 'quantity_filled': quantity_filled,
                 'avg_fill_price': avg_fill_price,
                 'filled_at': None if is_error else datetime.utcnow(),
@@ -624,7 +630,7 @@ def update_signal_store_execution(signal_id: str, execution_result: Dict, order_
         result = db.signal_store.update_one(
             {'signal_id': signal_id},
             {'$set': {
-                f'legs.{leg_index}.execution': execution_obj,
+                f'signal_legs.{leg_index}.execution': execution_obj,
                 'updated_at': datetime.utcnow()
             }}
         )
@@ -792,8 +798,8 @@ def update_account_positions(signal: Dict, status: str, entry_quantity: float, e
         # Get direction from first leg (using cerebro field)
         first_leg = legs[0] if legs else {}
         first_cerebro = first_leg.get('cerebro', {})
-        first_legs_data = first_cerebro.get('legs', [])
-        direction = first_legs_data[0].get('direction', 'LONG') if first_legs_data else 'LONG'
+        created_orders = first_cerebro.get('created_orders', [])
+        direction = created_orders[0].get('direction', 'LONG') if created_orders else 'LONG'
         
         if status == 'OPEN':
             # Create or update position in open_positions array
