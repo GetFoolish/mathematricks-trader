@@ -24,10 +24,14 @@ class TestSuite:
         self.failed = []
         self.warnings = []
     
-    def clean_test_data(self) -> bool:
-        """Clean test data from MongoDB and reset account balances"""
+    def clean_test_data(self, deployment_target: str = 'local') -> bool:
+        """Clean test data from MongoDB and reset account balances
+        
+        Args:
+            deployment_target: 'local' for Docker MongoDB, 'cloud' for MongoDB Atlas
+        """
         print("\n" + "="*80)
-        print("🧹 CLEANING TEST DATA")
+        print(f"🧹 CLEANING TEST DATA ({deployment_target.upper()})")
         print("="*80)
         
         try:
@@ -42,8 +46,17 @@ class TestSuite:
             # Load environment variables
             load_dotenv()
             
-            # Use MONGODB_URI_LOCAL for Mac scripts (port 27018), fallback to MONGODB_URI for Docker
-            mongodb_uri = os.getenv('MONGODB_URI_LOCAL') or os.getenv('MONGODB_URI') or 'mongodb://localhost:27018'
+            # Select MongoDB URI based on deployment target
+            if deployment_target == 'cloud':
+                mongodb_uri = os.getenv('MONGODB_URI_CLOUD')
+                if not mongodb_uri:
+                    print("   ❌ MONGODB_URI_CLOUD not set in .env file")
+                    return False
+            else:
+                # Use MONGODB_URI_LOCAL for Mac scripts (port 27018), fallback to MONGODB_URI for Docker
+                mongodb_uri = os.getenv('MONGODB_URI_LOCAL') or os.getenv('MONGODB_URI') or 'mongodb://localhost:27018'
+            
+            print(f"   📡 Connecting to: {mongodb_uri.split('@')[1] if '@' in mongodb_uri else mongodb_uri}")
             
             # Connect to MongoDB
             client = pymongo.MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
@@ -460,7 +473,7 @@ class TestSuite:
             # NOW clean test data if requested (after validation confirms we should proceed)
             if clean_before_test:
                 print(f"\n{'─'*80}")
-                success = self.clean_test_data()
+                success = self.clean_test_data(deployment_target=deployment_target)
                 if not success:
                     print("\n⚠️  Test aborted due to cleanup failure")
                     return False
@@ -626,7 +639,12 @@ Examples:
     
     # If only --clean was specified (no tests), clean and exit
     if args.clean and not any([args.all, args.system, args.signal_testing]):
-        success = suite.clean_test_data()
+        # Determine deployment target
+        if args.local and args.cloud:
+            print("❌ ERROR: Cannot specify both --local and --cloud")
+            return 1
+        deployment_target = 'cloud' if args.cloud else 'local'
+        success = suite.clean_test_data(deployment_target=deployment_target)
         return 0 if success else 1
     
     # Default to --all if no test args specified
