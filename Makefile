@@ -50,13 +50,15 @@ help:
 	@echo "make rebuild       - Rebuild all containers"
 	@echo "make clean         - Stop and remove all containers and volumes (DATA LOSS!)"
 	@echo "make clean-old-logs - Truncate Docker container logs (keeps containers running)"
-	@echo "make export-seed-data - Export current MongoDB data as seed data"
+	@echo "make export-seed-data - Export current MongoDB data as seed data (LOCAL)"
+	@echo "make export-seed-data DEPLOY=cloud - Export from CLOUD MongoDB as seed data"
 	@echo "make reseed-db     - Restore MongoDB from latest seed data"
 	@echo ""
 	@echo "MongoDB Deployment:"
 	@echo "  Default: Local MongoDB (Docker)"
 	@echo "  Use DEPLOY=cloud for Cloud MongoDB (Atlas)"
 	@echo "  Example: make start DEPLOY=cloud"
+	@echo "  Example: make export-seed-data DEPLOY=cloud"
 	@echo ""
 	@echo "Admin Dashboard @ http://localhost:3001/"
 	@echo "Website + API @ http://localhost:3000/"
@@ -206,7 +208,7 @@ clean:
 	docker-compose down -v
 
 export-seed-data:
-	@bash scripts/export_seed_data.sh
+	@bash scripts/export_seed_data.sh $(DEPLOY)
 
 reseed-db:
 	@bash scripts/restore_seed_data.sh
