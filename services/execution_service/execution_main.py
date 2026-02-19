@@ -317,15 +317,17 @@ def main():
     initialize_broker_pool()
     
     # Start broker polling service (migrated from account-data-service)
+    # CRITICAL: Pass broker_pool to prevent duplicate IBKR connections (competing sessions)
     logger.info("\n📊 Starting background broker polling...")
     broker_poller = BrokerPoller(
         repository=trading_accounts_repository,
         interval=300,  # Poll every 5 minutes
         mongodb_url=MONGODB_URI,
-        mongodb_client=mongo_client
+        mongodb_client=mongo_client,
+        broker_pool=broker_pool  # Reuse execution_service's broker connections
     )
     broker_poller.start()
-    logger.info("✅ Broker polling started")
+    logger.info("✅ Broker polling started (using shared broker pool)")
     
     # Start API server in background thread
     logger.info("\n🌐 Starting API Server...")

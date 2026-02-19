@@ -210,7 +210,7 @@ class MongoPositionWatcher:
 class BrokerPoller:
     """Background service to poll broker accounts"""
 
-    def __init__(self, repository: TradingAccountRepository, interval: int = 300, mongodb_url: Optional[str] = None, mongodb_client=None):
+    def __init__(self, repository: TradingAccountRepository, interval: int = 300, mongodb_url: Optional[str] = None, mongodb_client=None, broker_pool: Optional[Dict] = None):
         """
         Initialize broker poller
 
@@ -219,6 +219,7 @@ class BrokerPoller:
             interval: Polling interval in seconds (default: 300 = 5 minutes)
             mongodb_url: MongoDB connection string for position watching (optional)
             mongodb_client: MongoDB client instance for fund updates (optional)
+            broker_pool: Shared broker connection pool from execution_service (prevents duplicate IBKR connections)
         """
         self.repository = repository
         self.interval = interval
@@ -228,7 +229,9 @@ class BrokerPoller:
         self.running = False
         self.thread = None
         self.position_watcher = None
-        self.broker_instances = {}  # Cache broker connections {account_id: broker}
+        # Use shared broker_pool if provided (prevents IBKR competing sessions)
+        self.broker_instances = broker_pool if broker_pool is not None else {}  # Cache broker connections {account_id: broker}
+        self.shared_broker_pool = broker_pool is not None  # Flag to track if we're using shared pool
         self.last_positions_state = {}  # Track last position state for change detection {account_id: positions_hash}
         self.poll_lock = threading.Lock()  # Prevent concurrent polling of same account
 
@@ -430,16 +433,12 @@ class BrokerPoller:
         # Add authentication details based on broker type
         if account['broker'] == "IBKR":
             # IBKR connection settings from MongoDB authentication_details
-            # NOTE: Use different client_id than execution_service to avoid competing sessions
-            # IBKR Paper accounts only allow 1 live market data subscription
-            # Add 1000 to client_id for account_data_service (e.g., 100 → 1100)
-            base_client_id = auth.get('client_id', 100)
-            service_client_id = base_client_id + 1000
-            
+            # NOTE: When using shared broker_pool, reuse execution_service's connection (same client_id)
+            # This prevents "competing live session" errors from IBKR
             config.update({
                 "host": auth.get('host'),
                 "port": auth.get('port'),
-                "client_id": service_client_id
+                "client_id": auth.get('client_id', 100)  # Use same client_id as execution_service
             })
         elif account['broker'] == "Zerodha":
             config.update({
@@ -553,8 +552,9 @@ class BrokerPoller:
             # Log detailed summary
             self._log_account_summary(account_id, balances, positions, position_changed, poll_type="SCHEDULED")
 
-            # Disconnect
-            broker.disconnect()
+            # Disconnect ONLY if NOT using shared broker_pool (to avoid disconnecting shared connections)
+            if not self.shared_broker_pool:
+                broker.disconnect()
 
         finally:
             # Clean up event loop
@@ -563,6 +563,9 @@ class BrokerPoller:
     def _get_broker(self, account_id: str, config: Dict):
         """
         Get or create broker instance with mode-based routing support.
+        
+        When using shared broker_pool (from execution_service), will reuse existing connections.
+        This is critical for IBKR to avoid \"competing live session\" errors.
 
         Supports 4-mode trading system (account_type × data_source):
         - mock_mock: Create only Mock broker
@@ -577,6 +580,16 @@ class BrokerPoller:
         Returns:
             Broker instance (may be wrapped in BrokerModeAdapter)
         """
+        # If using shared broker_pool, ONLY return from pool (don't create new)
+        if self.shared_broker_pool:
+            if account_id in self.broker_instances:
+                logger.debug(f"Using shared broker connection for {account_id}")
+                return self.broker_instances[account_id]
+            else:
+                logger.warning(f"⚠️ Account {account_id} not found in shared broker_pool - skipping (this prevents IBKR competing sessions)")
+                return None
+        
+        # Legacy mode: Create broker if not in cache (only when NOT using shared pool)
         if account_id not in self.broker_instances:
             logger.debug(f"Creating new broker instance for {account_id}")
 

@@ -543,9 +543,9 @@ class CoinbaseBroker(AbstractBroker):
                     logger.debug(f"Current price for {symbol}: ${price:,.2f}")
                     return price
                 else:
-                    logger.warning(f"Ticker missing price attribute for {symbol}, ticker: {ticker}")
+                    logger.debug(f"Ticker missing price attribute for {symbol}, ticker: {ticker}")
             except Exception as ticker_err:
-                logger.warning(f"Ticker endpoint failed for {symbol}: {ticker_err}")
+                logger.debug(f"Ticker endpoint failed for {symbol}: {ticker_err}")
             
             # Fallback to product endpoint
             product = self.data_client.get_product(product_id=symbol)

@@ -23,7 +23,7 @@ services:
       - USE_MOCK_BROKER=true  # Enable mock broker for staging/testing
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health').read()"]
-      interval: 5s
+      interval: 60s
       timeout: 3s
       retries: 20
       start_period: 60s
@@ -50,7 +50,7 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/health').read()"]
-      interval: 5s
+      interval: 60s
       timeout: 3s
       retries: 20
       start_period: 30s

@@ -61,6 +61,8 @@ def health_check():
     if service_ready:
         # Get broker details
         brokers_info = {}
+        canary_prices = {}
+        
         for account_id, broker in broker_pool.items():
             broker_type = "Unknown"
             is_connected = False
@@ -74,12 +76,104 @@ def health_check():
                 'type': broker_type,
                 'connected': is_connected
             }
+            
+            # Get canary price to validate data is flowing (ALWAYS show result, even if error)
+            if not is_connected:
+                # Not connected - show error for all broker types
+                if broker_type == 'IBKR':
+                    canary_prices[f'{account_id}:AAPL'] = "ERROR: Not connected"
+                    canary_prices[f'{account_id}:EURUSD'] = "ERROR: Not connected"
+                elif broker_type == 'Coinbase':
+                    canary_prices[f'{account_id}:BTC-USD'] = "ERROR: Not connected"
+                elif broker_type == 'Mock':
+                    canary_prices[f'{account_id}:MOCK'] = "ERROR: Not connected"
+                else:
+                    canary_prices[f'{account_id}:UNKNOWN'] = "ERROR: Not connected"
+            else:
+                # Connected - try to get price
+                try:
+                    # IBKR: Try AAPL stock and EURUSD forex
+                    if broker_type == 'IBKR':
+                        if hasattr(broker, 'get_market_price'):
+                            # Check AAPL (US Stocks - validates equity market)
+                            try:
+                                price = broker.get_market_price('AAPL', 'STOCK')
+                                if price and price > 0:
+                                    canary_prices[f'{account_id}:AAPL'] = round(price, 2)
+                                else:
+                                    canary_prices[f'{account_id}:AAPL'] = "Market Closed"
+                            except Exception as e:
+                                error_msg = str(e)
+                                if 'market' in error_msg.lower() or 'closed' in error_msg.lower():
+                                    canary_prices[f'{account_id}:AAPL'] = "Market Closed"
+                                else:
+                                    canary_prices[f'{account_id}:AAPL'] = f"ERROR: {error_msg[:50]}"
+                                logger.debug(f"IBKR canary AAPL failed: {e}")
+                            
+                            # Check EURUSD (Forex - 24/5 market, validates forex data)
+                            try:
+                                price = broker.get_market_price('EURUSD', 'FOREX')
+                                if price and price > 0:
+                                    canary_prices[f'{account_id}:EURUSD'] = round(price, 6)  # Forex needs more decimal places
+                                else:
+                                    canary_prices[f'{account_id}:EURUSD'] = "Market Closed"
+                            except Exception as e:
+                                error_msg = str(e)
+                                if 'market' in error_msg.lower() or 'closed' in error_msg.lower():
+                                    canary_prices[f'{account_id}:EURUSD'] = "Market Closed"
+                                else:
+                                    canary_prices[f'{account_id}:EURUSD'] = f"ERROR: {error_msg[:50]}"
+                                logger.debug(f"IBKR canary EURUSD failed: {e}")
+                        else:
+                            canary_prices[f'{account_id}:AAPL'] = "ERROR: Method not available"
+                            canary_prices[f'{account_id}:EURUSD'] = "ERROR: Method not available"
+                    
+                    # Coinbase: Try BTC-USD
+                    elif broker_type == 'Coinbase':
+                        if hasattr(broker, 'get_current_price'):
+                            try:
+                                price = broker.get_current_price('BTC-USD')
+                                if price and price > 0:
+                                    canary_prices[f'{account_id}:BTC-USD'] = round(price, 2)
+                                else:
+                                    canary_prices[f'{account_id}:BTC-USD'] = "Market Closed"
+                            except Exception as e:
+                                error_msg = str(e)
+                                if 'market' in error_msg.lower() or 'closed' in error_msg.lower():
+                                    canary_prices[f'{account_id}:BTC-USD'] = "Market Closed"
+                                else:
+                                    canary_prices[f'{account_id}:BTC-USD'] = f"ERROR: {error_msg[:50]}"
+                                logger.debug(f"Coinbase canary BTC-USD failed: {e}")
+                        else:
+                            canary_prices[f'{account_id}:BTC-USD'] = "ERROR: Method not available"
+                    
+                    # Mock: Always returns a test price
+                    elif broker_type == 'Mock':
+                        canary_prices[f'{account_id}:MOCK'] = 100.00
+                    
+                    else:
+                        canary_prices[f'{account_id}:UNKNOWN'] = "ERROR: Unknown broker type"
+                        
+                except Exception as e:
+                    # Catch-all for any other errors
+                    error_msg = f"ERROR: {str(e)[:50]}"
+                    if broker_type == 'IBKR':
+                        canary_prices[f'{account_id}:AAPL'] = error_msg
+                        canary_prices[f'{account_id}:EURUSD'] = error_msg
+                    elif broker_type == 'Coinbase':
+                        canary_prices[f'{account_id}:BTC-USD'] = error_msg
+                    elif broker_type == 'Mock':
+                        canary_prices[f'{account_id}:MOCK'] = error_msg
+                    else:
+                        canary_prices[f'{account_id}:UNKNOWN'] = error_msg
+                    logger.debug(f"Canary price failed for {account_id}: {e}")
         
         return {
             'status': 'healthy',
             'ready': True,
             'broker_pool_size': len(broker_pool),
             'brokers': brokers_info,
+            'canary_prices': canary_prices,
             'endpoints': {
                 'health': 'GET /health',
                 'status': 'GET /status',

@@ -120,27 +120,14 @@ class IBKRBroker(AbstractBroker):
                 
                 logger.info("IB thread started, attempting connection...")
                 
-                # CRITICAL: Clean up stale connections before connecting
-                # This prevents "Error 10197: No market data during competing live session"
-                original_client_id = self.client_id
-                logger.info(f"🧹 Cleaning up stale connections for client_id {original_client_id}...")
-                try:
-                    # Force disconnect any existing connection with our target client_id
-                    cleanup_ib = IB()
-                    cleanup_ib.connect(self.host, self.port, clientId=original_client_id, readonly=True, timeout=2)
-                    util.sleep(0.1)
-                    cleanup_ib.disconnect()
-                    util.sleep(0.2)
-                    logger.info(f"✅ Cleaned up stale connection for client_id {original_client_id}")
-                except Exception as e:
-                    # Expected if no stale connection exists
-                    logger.debug(f"No stale connection to clean (normal): {e}")
-                
-                # Connection retry logic (same as before but in this thread)
+                # Connection retry logic - always use same client_id
+                # DO NOT increment client_id on retry - this creates competing sessions!
                 max_retries = 5
+                target_client_id = self.client_id  # Save target client_id
                 
                 for attempt in range(max_retries):
-                    current_client_id = original_client_id + attempt
+                    # Always use the target client_id (no incrementing)
+                    current_client_id = target_client_id
                     
                     try:
                         if attempt > 0:
@@ -148,8 +135,10 @@ class IBKRBroker(AbstractBroker):
                                 self.ib.disconnect()
                             except:
                                 pass
+                            # Wait a bit longer before retry to let previous connection fully clean up
+                            util.sleep(1.0)
                         
-                        logger.info(f"Connecting to IBKR at {self.host}:{self.port} (client_id={current_client_id})")
+                        logger.info(f"Connecting to IBKR at {self.host}:{self.port} (client_id={current_client_id}, attempt {attempt + 1}/{max_retries})")
                         self.ib.connect(self.host, self.port, clientId=current_client_id, readonly=skip_sync)
                         
                         # Use util.sleep to wait in IB's loop
@@ -166,12 +155,12 @@ class IBKRBroker(AbstractBroker):
                             break
                         else:
                             if attempt < max_retries - 1:
-                                logger.warning(f"⚠️ client_id={current_client_id} may be in use, trying next...")
+                                logger.warning(f"⚠️ Connection check failed (client_id={current_client_id}), retrying...")
                                 try:
                                     self.ib.disconnect()
                                 except:
                                     pass
-                                util.sleep(0.5)
+                                util.sleep(1.0)  # Wait longer between retries
                             continue
                             
                     except Exception as e:
@@ -180,12 +169,12 @@ class IBKRBroker(AbstractBroker):
                         is_timeout = isinstance(e, TimeoutError) or "timeout" in error_str
                         
                         if (is_client_id_error or is_timeout) and attempt < max_retries - 1:
-                            logger.warning(f"⚠️ client_id={current_client_id} may be in use, trying {current_client_id + 1}...")
+                            logger.warning(f"⚠️ Connection attempt {attempt + 1} failed (client_id={current_client_id}), retrying...")
                             try:
                                 self.ib.disconnect()
                             except:
                                 pass
-                            util.sleep(0.5)
+                            util.sleep(1.0)  # Wait longer between retries
                             continue
                         
                         connection_result['error'] = str(e)
@@ -1218,7 +1207,7 @@ class IBKRBroker(AbstractBroker):
             ticker = self.ib.reqMktData(contract, '', True, False)  # snapshot=True
 
             # Wait for data using asyncio.sleep() - we're in the right loop now
-            logger.info(f"⏳ Waiting for market data for {symbol}...")
+            logger.debug(f"⏳ Waiting for market data for {symbol}...")
             
             import math
             for i in range(100):  # 100 * 0.1s = 10s max
@@ -1230,13 +1219,13 @@ class IBKRBroker(AbstractBroker):
                 has_last = ticker.last and not math.isnan(ticker.last) and ticker.last > 0
                 
                 if has_bid or has_ask or has_last:
-                    logger.info(f"✅ Market data received after {(i+1)*0.1:.1f}s: bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}")
+                    logger.debug(f"✅ Market data received after {(i+1)*0.1:.1f}s: bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}")
                     break
 
             # Return mid-price if available, otherwise last price
             if ticker.bid and ticker.ask and not math.isnan(ticker.bid) and not math.isnan(ticker.ask) and ticker.bid > 0 and ticker.ask > 0:
                 price = (ticker.bid + ticker.ask) / 2
-                logger.info(f"📊 Market price for {symbol}: ${price:.2f} (bid=${ticker.bid:.2f}, ask=${ticker.ask:.2f})")
+                logger.debug(f"📊 Market price for {symbol}: ${price:.2f} (bid=${ticker.bid:.2f}, ask=${ticker.ask:.2f})")
                 return price
             elif ticker.last and not math.isnan(ticker.last) and ticker.last > 0:
                 logger.warning(f"⚠️ Using last price for {symbol}: ${ticker.last:.2f}")

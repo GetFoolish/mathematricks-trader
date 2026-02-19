@@ -1452,11 +1452,15 @@ def log_detailed_calculation_math(signal: Dict[str, Any], context, decision_obj,
 # SIGNAL PROCESSING
 # ============================================================================
 
-def process_signal_with_constructor(signal: Dict[str, Any]):
+def process_signal_with_constructor(signal: Dict[str, Any], target_leg_index: int = None):
     """
     Process signal using Portfolio Constructor (NEW APPROACH)
 
     Supports both v2 schema (raw.legs[], decision) and v1 schema (signal_data, cerebro_decision)
+    
+    Args:
+        signal: Signal document from signal_store
+        target_leg_index: Specific leg index to process (if None, process first unprocessed leg)
     """
     signal_id = signal.get('signal_id')
     signal_store_id = signal.get('mathematricks_signal_id')  # Extract from Pub/Sub message (mongodb_watcher created this)
@@ -1487,11 +1491,27 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
             logger.debug(f"All legs already have cerebro decisions, skipping signal {signal_id}")
             return
 
-        # ⭐ CRITICAL FIX: For each leg, fetch its own raw signal data from trading_signals_raw
-        # Each leg has its own raw_signal_id that links to its specific raw signal
-        # BEFORE: We were using signal.raw_signal (from document root), which is always the ENTRY's raw data
-        # AFTER: Fetch the raw signal for the current unprocessed leg
-        current_leg = unprocessed_legs[0]
+        # ⭐ CRITICAL FIX: Process the SPECIFIC leg requested by target_leg_index
+        # This prevents batch-processing all unprocessed legs with the first leg's data
+        current_leg = None
+        
+        if target_leg_index is not None:
+            # Find the leg at the specified index
+            for leg in unprocessed_legs:
+                if leg.get('leg_index') == target_leg_index:
+                    current_leg = leg
+                    logger.info(f"🎯 Processing specific leg {target_leg_index} (leg_type: {leg.get('leg_type')})")
+                    break
+            
+            if not current_leg:
+                logger.error(f"❌ Target leg_index {target_leg_index} not found in unprocessed legs")
+                logger.error(f"   Available unprocessed legs: {[l.get('leg_index') for l in unprocessed_legs]}")
+                return
+        else:
+            # Fallback: process first unprocessed leg (for backward compatibility)
+            current_leg = unprocessed_legs[0]
+            logger.info(f"⚠️ No target_leg_index provided, processing first unprocessed leg {current_leg.get('leg_index')}")
+        
         leg_raw_signal_id = current_leg.get('raw_signal_id')
         
         if leg_raw_signal_id:
@@ -1513,11 +1533,11 @@ def process_signal_with_constructor(signal: Dict[str, Any]):
         raw_signal = raw_obj  # For compatibility with code that uses raw_signal
         legs = raw_obj.get('signal_legs', [])  # The actual signal legs (BUY/SELL actions from raw signal)
 
-        # ⭐ MULTI-LEG PROCESSING: Log how many legs we're processing together
-        if len(unprocessed_legs) > 1:
-            logger.info(f"🔗 MULTI-LEG SIGNAL: Processing {len(unprocessed_legs)} legs together for signal {signal_id}")
-            for idx, leg in enumerate(unprocessed_legs):
-                logger.info(f"   Leg {idx}: {leg.get('instrument')} ({leg.get('leg_type')})")
+        # Log which leg we're processing
+        logger.info(f"📍 Processing leg {current_leg.get('leg_index')} of {len(legs_array)} total legs")
+        logger.info(f"   Leg Type: {current_leg.get('leg_type')}")
+        logger.info(f"   Instrument: {current_leg.get('instrument')}")
+        logger.info(f"   Raw Signal ID: {leg_raw_signal_id}")
     else:
         # OLD SCHEMA (v2): signal.raw.legs or signal.signal_data
         raw_obj = signal.get('raw', {})
@@ -2849,7 +2869,8 @@ def process_signal_endpoint(request: ProcessSignalRequest):
                 if signal_data_full:
                     signal_data_full['mathematricks_signal_id'] = str(signal_data_full['_id'])
                     logger.info(f"Processing signal: {signal_id}")
-                    process_signal_with_constructor(signal_data_full)
+                    # ⭐ CRITICAL FIX: Pass leg_index to ensure correct leg is processed
+                    process_signal_with_constructor(signal_data_full, target_leg_index=request.leg_index)
                     service_status['signals_processed'] += 1
                     service_status['last_signal_time'] = datetime.utcnow().isoformat()
                     logger.info(f"✅ Background processing complete for {signal_id}")
