@@ -720,11 +720,30 @@ def update_signal_store_execution(signal_id: str, execution_result: Dict, order_
             'weighted_avg_price': avg_fill_price
         }
         
-        # Update signal_store with execution
+        # Get current leg and update processing timestamps
+        signal_doc = db.signal_store.find_one({'signal_id': signal_id})
+        if signal_doc and 'signal_legs' in signal_doc and leg_index < len(signal_doc['signal_legs']):
+            current_leg = signal_doc['signal_legs'][leg_index]
+            processing_timestamps = current_leg.get('processing_timestamps', {})
+            
+            # Set execution_started if not already set
+            if not processing_timestamps.get('execution_started'):
+                processing_timestamps['execution_started'] = datetime.utcnow()
+            
+            # Always update execution_completed on fill
+            processing_timestamps['execution_completed'] = datetime.utcnow()
+        else:
+            processing_timestamps = {
+                'execution_started': datetime.utcnow(),
+                'execution_completed': datetime.utcnow()
+            }
+        
+        # Update signal_store with execution and timestamps
         result = db.signal_store.update_one(
             {'signal_id': signal_id},
             {'$set': {
                 f'signal_legs.{leg_index}.execution': execution_obj,
+                f'signal_legs.{leg_index}.processing_timestamps': processing_timestamps,
                 'updated_at': datetime.utcnow()
             }}
         )

@@ -63,12 +63,22 @@ class MongoDBWatcher:
         signal_id = raw_signal_doc['signalID']
         leg_id = f"{signal_id}__{leg_type.lower()}_{leg_index}"
 
+        # Extract raw leg data for this specific processing leg
+        raw_leg = signal_array[leg_index] if leg_index < len(signal_array) else {}
+
         now = datetime.datetime.utcnow()
         return {
             "leg_id": leg_id,
             "leg_type": leg_type,
             "leg_index": leg_index,
             "raw_signal_id": raw_signal_doc['_id'],  # Reference to trading_signals_raw
+            
+            # Raw signal data (for display on frontend)
+            "raw_quantity": raw_leg.get('quantity', 0),
+            "raw_instrument": raw_leg.get('instrument'),
+            "raw_action": raw_leg.get('action'),
+            "raw_price": raw_leg.get('price', 0),
+            
             "cerebro": None,  # Will be populated by cerebro
             "execution": None,  # Will be populated by execution service
             "processing_timestamps": {
@@ -455,7 +465,7 @@ class MongoDBWatcher:
                         'signalID': raw_signal_doc.get('signalID'),
                         'signal_sent_EPOCH': raw_signal_doc.get('signal_sent_EPOCH'),
                         'strategy_name': raw_signal_doc.get('strategy_name', 'Unknown Strategy'),
-                        'signal': raw_signal_doc.get('signal', {}),
+                        'signal_legs': raw_signal_doc.get('signal_legs', []),  # Use signal_legs (not legacy "signal")
                         'signal_type': raw_signal_doc.get('signal_type'),
                         'entry_signal_id': raw_signal_doc.get('entry_signal_id'),  # For EXIT signals
                         'account_equity': raw_signal_doc.get('account_equity'),  # For ratio-based position sizing
@@ -791,7 +801,7 @@ class MongoDBWatcher:
                             'signalID': raw_signal_doc.get('signalID'),
                             'signal_sent_EPOCH': raw_signal_doc.get('signal_sent_EPOCH'),
                             'strategy_name': raw_signal_doc.get('strategy_name', 'Unknown Strategy'),
-                            'signal': raw_signal_doc.get('signal', {}),
+                            'signal_legs': raw_signal_doc.get('signal_legs', []),  # Use signal_legs (not legacy "signal")
                             'signal_type': raw_signal_doc.get('signal_type'),
                             'entry_signal_id': raw_signal_doc.get('entry_signal_id'),  # For EXIT signals
                             'account_equity': raw_signal_doc.get('account_equity'),  # For ratio-based position sizing

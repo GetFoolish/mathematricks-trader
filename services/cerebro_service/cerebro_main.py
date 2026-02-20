@@ -1731,7 +1731,7 @@ def process_signal_with_constructor(signal: Dict[str, Any], target_leg_index: in
         used_capital = fund_allocation_data['used_capital']
         available_capital = fund_allocation_data['available_capital']
         
-        logger.info(f"💼 Fund equity: ${fund_equity:,.2f}")
+        logger.info(f"💼 Fund equity (showing cached, allocation uses fresh): ${fund_equity:,.2f}")
         logger.info(f"📊 Allocated to strategy: ${allocated_capital:,.2f}")
         logger.info(f"💵 Used capital: ${used_capital:,.2f}")
         logger.info(f"✅ Available capital: ${available_capital:,.2f}")
@@ -2206,12 +2206,43 @@ def process_signal_with_constructor(signal: Dict[str, Any], target_leg_index: in
                 # Calculate quantity from signal's ratio, then validate margin fits
 
                 try:
-                    # Step 1: Calculate ratio-based quantity for each leg and fetch margin
+                    # Step 1: Filter legs to only the current processing leg's instrument
+                    # For multi-leg signals, each processing leg should only create orders for its own instrument
+                    current_instrument = current_leg.get('instrument') or current_leg.get('raw_instrument')
+                    
+                    if current_instrument:
+                        logger.info(f"🎯 Processing leg {target_leg_index}: instrument={current_instrument}")
+                        
+                        # Filter raw signal legs to match ONLY this instrument
+                        matching_legs = [
+                            leg for leg in legs 
+                            if leg.get('instrument') == current_instrument
+                        ]
+                        
+                        # Validation
+                        if len(matching_legs) != 1:
+                            logger.error(
+                                f"❌ Expected 1 matching leg for {current_instrument}, "
+                                f"found {len(matching_legs)}"
+                            )
+                            for i, leg in enumerate(legs):
+                                logger.error(f"   Raw leg {i}: {leg.get('instrument')}")
+                            raise ValueError(f"Instrument mismatch in multi-leg signal")
+                        
+                        logger.info(f"✅ Found {len(matching_legs)} matching leg(s) for {current_instrument}")
+                        
+                        # Use filtered legs for order creation
+                        legs_to_process = matching_legs
+                    else:
+                        # No filtering needed for single-leg signals
+                        legs_to_process = legs
+                    
+                    # Step 2: Calculate ratio-based quantity for each leg and fetch margin
                     leg_results = []
                     total_margin_required = 0.0
                     total_notional = 0.0
 
-                    for leg_index, leg in enumerate(legs):
+                    for leg_index, leg in enumerate(legs_to_process):
                         # Validate instrument_type exists for this leg
                         leg_instrument_type = leg.get('instrument_type', 'STOCK')
                         if not leg_instrument_type:
@@ -2570,19 +2601,18 @@ def process_signal_with_constructor(signal: Dict[str, Any], target_leg_index: in
             # Replace created_orders with enriched version that includes broker/account info
             decision_doc["created_orders"] = enriched_orders
             
-            # ⭐ MULTI-LEG UPDATE: Update ALL processed legs with the same cerebro decision
+            # ⭐ MULTI-LEG UPDATE: Update ONLY the currently processed leg (not all unprocessed legs)
+            # This prevents batch-marking all legs as processed when only one leg was actually processed
             # Update signal_store with COMPLETE cerebro document
+            current_leg_index = [current_leg.get('leg_index')] if current_leg else None
             update_signal_store_with_decision(
                 signal_store_id, 
                 decision_doc, 
                 raw_signal_id,
-                leg_indices=unprocessed_leg_indices if 'unprocessed_leg_indices' in locals() else None
+                leg_indices=current_leg_index
             )
             decision_written = True
-            if 'unprocessed_leg_indices' in locals() and len(unprocessed_leg_indices) > 1:
-                logger.info(f"✅ Updated signal_store with cerebro for {len(unprocessed_leg_indices)} legs, including {len(enriched_orders)} enriched order(s) with broker info")
-            else:
-                logger.info(f"✅ Updated signal_store with cerebro including {len(enriched_orders)} enriched order(s) with broker info")
+            logger.info(f"✅ Updated signal_store with cerebro for leg {current_leg.get('leg_index')}, including {len(enriched_orders)} enriched order(s) with broker info")
             
             # Now create and send trading orders to execution service
             

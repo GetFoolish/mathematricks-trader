@@ -1,0 +1,35 @@
+[
+  {
+    "strategy_name": "FloridaForex",
+    "signal_type": "ENTRY",
+    "signalID": "AUDCAD_fix_test_001",
+    "signal_sent_EPOCH": 1771524420,
+    "entry_signal_id": "$FloridaForex_AUDCAD_fix_001",
+    "passphrase": "yahoo123",
+    "account_equity": 1000000,
+    "signal_legs": [
+      {
+        "instrument": "AUDUSD",
+        "instrument_type": "FOREX",
+        "action": "SELL",
+        "direction": "SHORT",
+        "quantity": 200000,
+        "order_type": "MARKET",
+        "price": 1,
+        "environment": "staging"
+      },
+      {
+        "instrument": "USDCAD",
+        "instrument_type": "FOREX",
+        "action": "SELL",
+        "direction": "SHORT",
+        "quantity": 200000,
+        "order_type": "MARKET",
+        "price": 1,
+        "environment": "staging"
+      }
+    ],
+    "environment": "staging",
+    "wait": 6
+  }
+]

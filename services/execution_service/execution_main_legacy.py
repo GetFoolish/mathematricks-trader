@@ -1632,13 +1632,13 @@ def update_signal_store_with_rejection(order_data: Dict[str, Any], rejection_rea
         signal_store_collection.update_one(
             {
                 "_id": ObjectId(mathematricks_signal_id),
-                f"legs.{leg_index}.leg_id": current_leg['leg_id']
+                f"signal_legs.{leg_index}.leg_id": current_leg['leg_id']
             },
             {
                 "$set": {
-                    f"legs.{leg_index}.execution": leg_execution,
-                    f"legs.{leg_index}.processing_timestamps": updated_timestamps,
-                    f"legs.{leg_index}.processing_lag": processing_lag,
+                    f"signal_legs.{leg_index}.execution": leg_execution,
+                    f"signal_legs.{leg_index}.processing_timestamps": updated_timestamps,
+                    f"signal_legs.{leg_index}.processing_lag": processing_lag,
                     "updated_at": now
                 }
             }
@@ -1804,13 +1804,13 @@ def update_signal_store_with_execution(order_data: Dict[str, Any], execution_dat
         signal_store_collection.update_one(
             {
                 "_id": ObjectId(mathematricks_signal_id),
-                f"legs.{leg_index}.leg_id": current_leg['leg_id']
+                f"signal_legs.{leg_index}.leg_id": current_leg['leg_id']
             },
             {
                 "$set": {
-                    f"legs.{leg_index}.execution": leg_execution,
-                    f"legs.{leg_index}.processing_timestamps": updated_timestamps,
-                    f"legs.{leg_index}.processing_lag": processing_lag,
+                    f"signal_legs.{leg_index}.execution": leg_execution,
+                    f"signal_legs.{leg_index}.processing_timestamps": updated_timestamps,
+                    f"signal_legs.{leg_index}.processing_lag": processing_lag,
                     "updated_at": now
                 }
             }
@@ -2127,9 +2127,9 @@ def update_signal_store_with_reconciliation(
             {"_id": ObjectId(mathematricks_signal_id)},
             {
                 "$set": {
-                    f"legs.{leg_index}.execution": leg_execution,
-                    f"legs.{leg_index}.processing_timestamps": updated_timestamps,
-                    f"legs.{leg_index}.processing_lag": processing_lag,
+                    f"signal_legs.{leg_index}.execution": leg_execution,
+                    f"signal_legs.{leg_index}.processing_timestamps": updated_timestamps,
+                    f"signal_legs.{leg_index}.processing_lag": processing_lag,
                     "updated_at": now
                 }
             }
@@ -2200,9 +2200,9 @@ def update_signal_store_with_reconciliation_error(
             {"_id": ObjectId(mathematricks_signal_id)},
             {
                 "$set": {
-                    f"legs.{leg_index}.execution": leg_execution,
-                    f"legs.{leg_index}.processing_timestamps": updated_timestamps,
-                    f"legs.{leg_index}.processing_lag": processing_lag,
+                    f"signal_legs.{leg_index}.execution": leg_execution,
+                    f"signal_legs.{leg_index}.processing_timestamps": updated_timestamps,
+                    f"signal_legs.{leg_index}.processing_lag": processing_lag,
                     "updated_at": now
                 }
             }

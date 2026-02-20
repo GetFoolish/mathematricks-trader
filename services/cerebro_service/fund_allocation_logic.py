@@ -94,7 +94,34 @@ def get_strategy_allocation_for_fund(
                 "available_capital": 0.0
             }
         
-        fund_equity = fund_doc.get('total_equity', 0.0)
+        # Get cached fund equity and update timestamp
+        fund_equity_cached = fund_doc.get('total_equity', 0.0)
+        fund_updated_at = fund_doc.get('updated_at')
+        
+        # Get FRESH account equity directly from trading_accounts (for accurate allocation)
+        account_docs = list(trading_accounts_collection.find({
+            "fund_id": fund_id,
+            "status": "ACTIVE"
+        }))
+        
+        fresh_equity = sum(
+            acc.get('balances', {}).get('equity', 0) 
+            for acc in account_docs
+        )
+        
+        # Log comparison for debugging
+        logger.info(f"Fund {fund_id} equity:")
+        logger.info(f"  Cached (fund doc): ${fund_equity_cached:,.2f} (updated: {fund_updated_at})")
+        logger.info(f"  Fresh (accounts): ${fresh_equity:,.2f}")
+        
+        if abs(fresh_equity - fund_equity_cached) > 1000:
+            logger.warning(
+                f"⚠️ Fund equity staleness: ${abs(fresh_equity - fund_equity_cached):,.2f} difference "
+                f"between cached and fresh account balances"
+            )
+        
+        # Use FRESH equity for allocation calculation (most accurate)
+        fund_equity = fresh_equity
 
         if fund_equity <= 0:
             logger.warning(f"Fund {fund_id} has zero or negative equity: ${fund_equity:,.2f}")

@@ -565,7 +565,7 @@ export default function SignalStoreTab() {
                                             <div>
                                               <span className="text-gray-500">Raw Quantity:</span>{' '}
                                               <span className="text-white font-semibold">
-                                                {leg.raw?.quantity || leg.raw?.signal_legs?.[0]?.quantity || 'N/A'}
+                                                {leg.raw_quantity || 'N/A'}
                                               </span>
                                             </div>
                                             <div>
@@ -593,10 +593,18 @@ export default function SignalStoreTab() {
                                                   <tr>
                                                     <td className="px-3 py-2 text-white">Signal Ingestion</td>
                                                     <td className="px-3 py-2 text-gray-300 font-mono">
-                                                      {leg.processing_timestamps?.signal_received ? formatDate(leg.processing_timestamps.signal_received) : (leg.raw?.received_at ? formatDate(leg.raw.received_at) : 'N/A')}
+                                                      {leg.processing_timestamps?.signal_ingestion_processed ? formatDate(leg.processing_timestamps.signal_ingestion_processed) : 'N/A'}
                                                     </td>
                                                     <td className="px-3 py-2 text-gray-300 font-mono">
-                                                      {leg.processing_lag?.service_lags?.signal_ingestion ? `${(leg.processing_lag.service_lags.signal_ingestion / 1000).toFixed(3)}s` : '-'}
+                                                      {(() => {
+                                                        const processedAt = leg.processing_timestamps?.signal_ingestion_processed;
+                                                        const receivedAt = leg.processing_timestamps?.signal_received;
+                                                        if (processedAt && receivedAt) {
+                                                          const lag = (new Date(processedAt).getTime() - new Date(receivedAt).getTime()) / 1000;
+                                                          return lag >= 0 ? `${lag.toFixed(3)}s` : '-';
+                                                        }
+                                                        return '-';
+                                                      })()}
                                                     </td>
                                                     <td className="px-3 py-2">
                                                       <StatusDot status={serviceStatus.ingestion.status} tooltip={serviceStatus.ingestion.tooltip} />
@@ -608,7 +616,15 @@ export default function SignalStoreTab() {
                                                       {leg.processing_timestamps?.cerebro_processed ? formatDate(leg.processing_timestamps.cerebro_processed) : (cerebro.timestamp ? formatDate(cerebro.timestamp) : 'N/A')}
                                                     </td>
                                                     <td className="px-3 py-2 text-gray-300 font-mono">
-                                                      {leg.processing_lag?.service_lags?.cerebro ? `${(leg.processing_lag.service_lags.cerebro / 1000).toFixed(3)}s` : '-'}
+                                                      {(() => {
+                                                        const cerebroAt = leg.processing_timestamps?.cerebro_processed;
+                                                        const ingestionAt = leg.processing_timestamps?.signal_ingestion_processed;
+                                                        if (cerebroAt && ingestionAt) {
+                                                          const lag = (new Date(cerebroAt).getTime() - new Date(ingestionAt).getTime()) / 1000;
+                                                          return lag >= 0 ? `${lag.toFixed(3)}s` : '-';
+                                                        }
+                                                        return '-';
+                                                      })()}
                                                     </td>
                                                     <td className="px-3 py-2">
                                                       <StatusDot status={serviceStatus.cerebro.status} tooltip={serviceStatus.cerebro.tooltip} />
@@ -620,7 +636,15 @@ export default function SignalStoreTab() {
                                                       {leg.processing_timestamps?.execution_completed ? formatDate(leg.processing_timestamps.execution_completed) : (leg.execution?.timestamp ? formatDate(leg.execution.timestamp) : 'N/A')}
                                                     </td>
                                                     <td className="px-3 py-2 text-gray-300 font-mono">
-                                                      {leg.processing_lag?.service_lags?.execution ? `${(leg.processing_lag.service_lags.execution / 1000).toFixed(3)}s` : '-'}
+                                                      {(() => {
+                                                        const executionAt = leg.processing_timestamps?.execution_completed || leg.execution?.timestamp;
+                                                        const cerebroAt = leg.processing_timestamps?.cerebro_processed || cerebro.timestamp;
+                                                        if (executionAt && cerebroAt) {
+                                                          const lag = (new Date(executionAt).getTime() - new Date(cerebroAt).getTime()) / 1000;
+                                                          return lag >= 0 ? `${lag.toFixed(3)}s` : '-';
+                                                        }
+                                                        return '-';
+                                                      })()}
                                                     </td>
                                                     <td className="px-3 py-2">
                                                       <StatusDot status={serviceStatus.execution.status} tooltip={serviceStatus.execution.tooltip} />
@@ -756,8 +780,9 @@ export default function SignalStoreTab() {
                                                       {leg.execution.orders.map((order: any, orderIdx: number) => (
                                                         <div key={orderIdx} className="bg-gray-950 p-2 rounded text-xs">
                                                           <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                                                            <div><span className="text-gray-500">Instrument:</span> <span className="text-white font-semibold">{order.instrument || 'N/A'}</span></div>
                                                             <div><span className="text-gray-500">Action:</span> <span className="text-white">{order.action || 'N/A'}</span></div>
-                                                            <div><span className="text-gray-500">Fund/Account:</span> <span className="text-white">{order.fund_id}/{order.account_id}</span></div>
+                                                            <div className="col-span-2"><span className="text-gray-500">Fund/Account:</span> <span className="text-white">{order.fund_id}/{order.account_id}</span></div>
                                                             <div><span className="text-gray-500">Exec Broker:</span> <span className="text-white">{order.broker || order.broker_name || 'N/A'}</span></div>
                                                             <div><span className="text-gray-500">Data Source:</span> <span className="text-white">{order.data_source || 'N/A'}</span></div>
                                                             <div><span className="text-gray-500">Price Broker:</span> <span className="text-white">{order.price_broker || 'N/A'}</span></div>
