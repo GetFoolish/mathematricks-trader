@@ -3,9 +3,12 @@ Interactive Brokers (IBKR) Broker Implementation
 Uses ib_insync for connection and order management
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
-from ib_insync import IB, Stock, Option, Forex, Future, Crypto, MarketOrder, LimitOrder
+import threading
+import asyncio
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from ib_insync import IB, Stock, Option, Forex, Future as IBFuture, Crypto, MarketOrder, LimitOrder
 
 # Import base classes and exceptions
 import sys
@@ -44,10 +47,22 @@ class IBKRBroker(AbstractBroker):
         """Initialize IBKR broker with configuration"""
         super().__init__(config)
 
-        # Connection settings come ONLY from environment variables
-        self.host = os.getenv("IBKR_HOST", "127.0.0.1")
-        self.port = int(os.getenv("IBKR_PORT", "4002"))
-        self.client_id = int(os.getenv("IBKR_CLIENT_ID", "1"))
+        # Connection settings: require config values (single source of truth)
+        if "host" not in config:
+            raise ValueError("IBKR config missing required field: 'host'")
+        if "port" not in config:
+            raise ValueError("IBKR config missing required field: 'port'")
+        if "client_id" not in config:
+            raise ValueError("IBKR config missing required field: 'client_id'")
+        
+        self.host = config["host"]
+        self.port = int(config["port"])
+        self.client_id = int(config["client_id"])
+        
+        # Market data type preference (optional from config)
+        # 1=Live, 2=Frozen, 3=Delayed, 4=Delayed Frozen
+        # If not specified, will be determined based on port with fallback
+        self.market_data_type_preference = config.get("market_data_type")
 
         # Initialize ib_insync connection object
         self.ib = IB()
@@ -55,17 +70,24 @@ class IBKRBroker(AbstractBroker):
         # Track active trades for order status queries
         self.active_trades = {}  # {order_id: ib_insync.Trade}
 
+        # Event loop for IB operations (runs in dedicated thread)
+        self._ib_loop = None
+        self._ib_thread = None
+
         logger.info(f"Initialized IBKR broker: {self.host}:{self.port} (client_id={self.client_id})")
 
     # ========================================================================
     # CONNECTION MANAGEMENT
     # ========================================================================
 
-    def connect(self) -> bool:
+    def connect(self, skip_sync: bool = False) -> bool:
         """
         Establish connection to Interactive Brokers TWS/Gateway.
 
-        Automatically retries with different client_ids if the initial one is in use.
+        Connection happens in a dedicated thread with its own event loop.
+
+        Args:
+            skip_sync: If True, skip waiting for positions/orders sync
 
         Returns:
             True if connection successful, False otherwise
@@ -73,62 +95,181 @@ class IBKRBroker(AbstractBroker):
         Raises:
             BrokerConnectionError: If connection fails after all retries
         """
-        import time
-
         if self.is_connected():
             logger.info("Already connected to IBKR")
             return True
 
-        # Try multiple client_ids if the first one fails (Error 326)
-        max_retries = 5
-        original_client_id = self.client_id
+        # Start IB thread first, then connect within it
+        self._start_ib_thread_and_connect(skip_sync)
+        
+        return self.is_connected()
 
-        for attempt in range(max_retries):
-            current_client_id = original_client_id + attempt
-
+    def _start_ib_thread_and_connect(self, skip_sync: bool):
+        """Start dedicated thread, create event loop, and connect to IBKR within that thread"""
+        import time
+        from ib_insync import util
+        
+        connection_result = {'success': False, 'error': None}
+        
+        def ib_thread_main():
+            """Main function for IB thread - creates loop and connects"""
             try:
-                logger.info(f"Connecting to IBKR at {self.host}:{self.port} (client_id={current_client_id})")
-                self.ib.connect(self.host, self.port, clientId=current_client_id)
-
-                # Wait briefly to catch Error 326 (client_id already in use)
-                time.sleep(0.5)
-
-                if self.ib.isConnected():
-                    self.client_id = current_client_id  # Update to successful client_id
-                    logger.info(f"✅ Successfully connected to IBKR (client_id={current_client_id})")
-                    return True
-                else:
-                    # Connection was rejected (likely Error 326)
-                    if attempt < max_retries - 1:
-                        logger.warning(f"⚠️ client_id={current_client_id} may be in use, trying next...")
-                        self.ib.disconnect()
-                        time.sleep(0.5)
-                    continue
-
-            except Exception as e:
-                error_str = str(e).lower()
-                # Check if it's a client_id conflict error or timeout (which often follows Error 326)
-                is_client_id_error = "326" in str(e) or "client id" in error_str or "already in use" in error_str
-                is_timeout = isinstance(e, TimeoutError) or "timeout" in error_str
-
-                if (is_client_id_error or is_timeout) and attempt < max_retries - 1:
-                    logger.warning(f"⚠️ client_id={current_client_id} may be in use (Error: {type(e).__name__}), trying {current_client_id + 1}...")
+                # Create event loop for this thread
+                self._ib_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._ib_loop)
+                
+                logger.info("IB thread started, attempting connection...")
+                
+                # Connection retry logic - always use same client_id
+                # DO NOT increment client_id on retry - this creates competing sessions!
+                max_retries = 5
+                target_client_id = self.client_id  # Save target client_id
+                
+                for attempt in range(max_retries):
+                    # Always use the target client_id (no incrementing)
+                    current_client_id = target_client_id
+                    
                     try:
-                        self.ib.disconnect()
-                    except:
-                        pass
-                    time.sleep(0.5)
+                        if attempt > 0:
+                            try:
+                                self.ib.disconnect()
+                            except:
+                                pass
+                            # Wait a bit longer before retry to let previous connection fully clean up
+                            util.sleep(1.0)
+                        
+                        logger.info(f"Connecting to IBKR at {self.host}:{self.port} (client_id={current_client_id}, attempt {attempt + 1}/{max_retries})")
+                        self.ib.connect(self.host, self.port, clientId=current_client_id, readonly=skip_sync)
+                        
+                        # Use util.sleep to wait in IB's loop
+                        util.sleep(0.2 if skip_sync else 0.5)
+                        
+                        if self.ib.isConnected():
+                            self.client_id = current_client_id
+                            logger.info(f"✅ Successfully connected to IBKR (client_id={current_client_id})")
+                            
+                            # Configure market data
+                            self._configure_market_data_type()
+                            
+                            connection_result['success'] = True
+                            break
+                        else:
+                            if attempt < max_retries - 1:
+                                logger.warning(f"⚠️ Connection check failed (client_id={current_client_id}), retrying...")
+                                try:
+                                    self.ib.disconnect()
+                                except:
+                                    pass
+                                util.sleep(1.0)  # Wait longer between retries
+                            continue
+                            
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        is_client_id_error = "326" in str(e) or "client id" in error_str
+                        is_timeout = isinstance(e, TimeoutError) or "timeout" in error_str
+                        
+                        if (is_client_id_error or is_timeout) and attempt < max_retries - 1:
+                            logger.warning(f"⚠️ Connection attempt {attempt + 1} failed (client_id={current_client_id}), retrying...")
+                            try:
+                                self.ib.disconnect()
+                            except:
+                                pass
+                            util.sleep(1.0)  # Wait longer between retries
+                            continue
+                        
+                        connection_result['error'] = str(e)
+                        logger.error(f"Connection failed: {e}")
+                        break
+                
+                if not connection_result['success'] and not connection_result['error']:
+                    connection_result['error'] = f"Failed after {max_retries} attempts"
+                
+                if connection_result['success']:
+                    # Keep loop running to process async tasks
+                    logger.info("IB event loop running...")
+                    self._ib_loop.run_forever()
+                    logger.info("IB event loop stopped")
+                else:
+                    logger.error(f"Connection failed: {connection_result['error']}")
+                    
+            except Exception as e:
+                logger.error(f"Fatal error in IB thread: {e}", exc_info=True)
+                connection_result['error'] = str(e)
+        
+        # Start thread
+        self._ib_thread = threading.Thread(target=ib_thread_main, daemon=True, name="IBThread")
+        self._ib_thread.start()
+        
+        # Wait for connection to complete (max 15s)
+        for i in range(150):  # 150 * 0.1s = 15s
+            time.sleep(0.1)
+            if connection_result['success'] or connection_result['error']:
+                break
+        
+        if connection_result['error']:
+            raise BrokerConnectionError(
+                f"Failed to connect: {connection_result['error']}",
+                broker_name="IBKR",
+                details={"host": self.host, "port": self.port}
+            )
+        
+        if not connection_result['success']:
+            raise BrokerConnectionError(
+                "Connection timeout",
+                broker_name="IBKR",
+                details={"host": self.host, "port": self.port}
+            )
+        
+        logger.info("IB thread connected and running")
+
+    def _configure_market_data_type(self):
+        """
+        Configure market data type with smart defaults and fallback.
+        
+        Priority:
+        1. Use market_data_type from config if specified
+        2. Auto-detect based on port (paper=4, live=1)
+        3. Try type 1 (live) first, fallback to 3, then 4 if rejected
+        
+        Market Data Types:
+        1 = Live (requires subscription)
+        2 = Frozen (delayed 15-20 min, deprecated)
+        3 = Delayed (10-15 min delay)
+        4 = Delayed Frozen (most compatible for paper accounts)
+        """
+        # Determine preferred type
+        if self.market_data_type_preference is not None:
+            # Explicit preference from config
+            preferred_type = int(self.market_data_type_preference)
+            logger.info(f"📊 Using configured market_data_type: {preferred_type}")
+        elif self.port in [4002, 4004, 7497]:  # Paper trading ports
+            # Paper accounts: use delayed frozen (type 4) for compatibility
+            # Live data (type 1) usually fails with Error 10197
+            preferred_type = 4
+            logger.info("📊 Paper account detected - using delayed/frozen market data (type 4)")
+        else:  # Live ports (4001, 4003, 7496)
+            # Live accounts: prefer live data
+            preferred_type = 1
+            logger.info("📊 Live account detected - requesting live market data (type 1)")
+        
+        # Try preferred type with fallback
+        fallback_types = [3, 4]  # Delayed → Delayed Frozen
+        types_to_try = [preferred_type] + [t for t in fallback_types if t != preferred_type]
+        
+        for market_data_type in types_to_try:
+            try:
+                self.ib.reqMarketDataType(market_data_type)
+                logger.info(f"✅ Market data type set to: {market_data_type}")
+                return  # Success!
+            except Exception as e:
+                if market_data_type == types_to_try[-1]:
+                    # Last attempt failed
+                    logger.warning(f"⚠️ All market data types failed. Last error: {e}")
+                    logger.warning("⚠️ Market data may not be available. Will use default.")
+                else:
+                    # Try next type
+                    logger.debug(f"Market data type {market_data_type} rejected: {e}. Trying fallback...")
                     continue
-
-                # Final failure
-                error_msg = f"Failed to connect to IBKR at {self.host}:{self.port}: {str(e)}"
-                logger.error(error_msg)
-                raise BrokerConnectionError(error_msg, broker_name="IBKR", details={"host": self.host, "port": self.port})
-
-        # All retries exhausted
-        error_msg = f"Failed to connect to IBKR after {max_retries} client_id attempts (tried {original_client_id}-{original_client_id + max_retries - 1})"
-        logger.error(error_msg)
-        raise BrokerConnectionError(error_msg, broker_name="IBKR", details={"host": self.host, "port": self.port})
 
     def disconnect(self) -> bool:
         """
@@ -138,6 +279,9 @@ class IBKRBroker(AbstractBroker):
             True if disconnection successful
         """
         try:
+            if self._ib_loop and self._ib_loop.is_running():
+                self._ib_loop.stop()
+            
             if self.is_connected():
                 self.ib.disconnect()
                 logger.info("Disconnected from IBKR")
@@ -160,12 +304,14 @@ class IBKRBroker(AbstractBroker):
     # ORDER MANAGEMENT
     # ========================================================================
 
-    def _translate_direction_to_side(self, direction: str) -> str:
+    def _translate_direction_to_side(self, direction: str, instrument: str = None, account_id: str = None) -> str:
         """
         Translate internal direction to IBKR side.
 
         Args:
-            direction: Internal direction ("LONG" or "SHORT")
+            direction: Internal direction ("LONG", "SHORT", or "CLOSE")
+            instrument: Symbol (required if direction is "CLOSE")
+            account_id: Account ID (required if direction is "CLOSE")
 
         Returns:
             IBKR side ("BUY" or "SELL")
@@ -175,6 +321,29 @@ class IBKRBroker(AbstractBroker):
             'SHORT': 'SELL'
         }
         direction_upper = direction.upper() if direction else ''
+        
+        # Handle CLOSE direction - need to determine opposite side from position
+        if direction_upper == 'CLOSE':
+            if not instrument or not account_id:
+                logger.warning(f"CLOSE direction requires instrument and account_id, but got instrument={instrument}, account_id={account_id}")
+                return 'BUY'  # Default fallback
+                
+            try:
+                # Get positions from account state
+                positions = self.get_open_positions(account_id)
+                for pos in positions:
+                    if pos.get('instrument') == instrument:
+                        pos_direction = pos.get('direction', '').upper()
+                        # Close LONG position = SELL, Close SHORT position = BUY
+                        return 'SELL' if pos_direction == 'LONG' else 'BUY'
+                
+                # No position found - default to BUY (safest for closing shorts)
+                logger.warning(f"No position found for {instrument} in account {account_id}, defaulting CLOSE to BUY")
+                return 'BUY'
+            except Exception as e:
+                logger.error(f"Error determining side for CLOSE order: {e}")
+                return 'BUY'  # Default fallback
+        
         return mapping.get(direction_upper, direction_upper)
 
     def _translate_order(self, internal_order: Dict[str, Any]) -> Dict[str, Any]:
@@ -225,8 +394,12 @@ class IBKRBroker(AbstractBroker):
             # Rename 'instrument' to 'symbol' and uppercase
             'symbol': internal_order.get('instrument', '').upper(),
 
-            # Translate 'direction' to 'side' (LONG→BUY, SHORT→SELL)
-            'side': self._translate_direction_to_side(internal_order.get('direction', '')),
+            # Translate 'direction' to 'side' (LONG→BUY, SHORT→SELL, CLOSE→depends on position)
+            'side': self._translate_direction_to_side(
+                internal_order.get('direction', ''),
+                instrument=internal_order.get('instrument', ''),
+                account_id=internal_order.get('account_id', '')
+            ),
 
             # Quantity - pass through as float, precision should be applied before reaching here
             'quantity': float(internal_order.get('quantity', 0)),
@@ -270,6 +443,8 @@ class IBKRBroker(AbstractBroker):
         """
         Place an order with IBKR.
 
+        Thread-safe: Submits async task to IB's dedicated event loop thread.
+
         This method accepts orders in the internal standard format and automatically
         translates them to IBKR-specific format before placement.
 
@@ -309,14 +484,41 @@ class IBKRBroker(AbstractBroker):
             InvalidSymbolError: If symbol is invalid
             BrokerAPIError: For other broker API errors
         """
+        if not self.is_connected():
+            raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+
+        if not self._ib_loop:
+            raise BrokerAPIError("IB event loop not started", broker_name="IBKR")
+
+        # Submit async task to IB's event loop from any thread
+        future = asyncio.run_coroutine_threadsafe(
+            self._place_order_async(order),
+            self._ib_loop
+        )
+        
+        # Wait for result with timeout
         try:
-            # Ensure connected
-            if not self.is_connected():
-                raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+            return future.result(timeout=30.0)  # 30s timeout for order placement
+        except TimeoutError:
+            logger.error(f"⏱️ Timeout placing order")
+            raise BrokerTimeoutError("Timeout placing order", broker_name="IBKR")
+        except Exception as e:
+            logger.error(f"Error in place_order future: {e}", exc_info=True)
+            raise
+        finally:
+            if not future.done():
+                future.cancel()
+
+    async def _place_order_async(self, order: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Async coroutine to place order - runs in IB's event loop thread.
+        """
+        try:
 
             # Step 1: Translate internal order format to IBKR format
             order = self._translate_order(order)
             logger.info(f"Order translated for IBKR: {order.get('symbol')} {order.get('side')} {order.get('quantity')}")
+            logger.info(f"🔍 DEBUG place_order Step 1: Order translated successfully")
 
             # Step 2: Validate required fields (now in IBKR format)
             symbol = order.get("symbol", "").strip()
@@ -324,6 +526,7 @@ class IBKRBroker(AbstractBroker):
             quantity = order.get("quantity", 0)
             order_type = order.get("order_type", "MARKET").upper()
             instrument_type = order.get("instrument_type", "STOCK").upper()
+            logger.info(f"🔍 DEBUG place_order Step 2: Extracted fields - symbol={symbol}, side={side}, qty={quantity}, type={order_type}, instrument_type={instrument_type}")
 
             if not symbol and instrument_type != "OPTION":
                 raise ValueError("Missing required field: 'symbol'")
@@ -334,12 +537,16 @@ class IBKRBroker(AbstractBroker):
             if quantity <= 0:
                 raise ValueError(f"Invalid quantity: {quantity}. Must be > 0")
 
+            logger.info(f"🔍 DEBUG place_order Step 3: Validation passed, creating contracts...")
             # Create contract(s)
             contracts = self._create_contracts(order)
+            logger.info(f"🔍 DEBUG place_order Step 4: Created {len(contracts)} contract(s)")
 
             # Submit orders (may be multiple legs for options)
             trades = []
-            for contract_item in contracts:
+            logger.info(f"🔍 DEBUG place_order Step 5: Starting loop through {len(contracts)} contract(s)")
+            for i, contract_item in enumerate(contracts, 1):
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}: Processing contract {i}/{len(contracts)}")
                 contract = contract_item['contract']
                 leg_action = contract_item['action']
                 # Apply broker precision to quantity
@@ -350,20 +557,16 @@ class IBKRBroker(AbstractBroker):
                     leg_quantity = int(round(raw_quantity))
                 else:
                     leg_quantity = round(raw_quantity, precision)
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}a: Quantity adjusted - raw={raw_quantity} → final={leg_quantity}")
 
-                # Qualify contract with IBKR
-                qualified_contracts = self.ib.qualifyContracts(contract)
-                if not qualified_contracts:
-                    raise InvalidSymbolError(
-                        f"Failed to qualify contract: {contract}",
-                        broker_name="IBKR",
-                        symbol=str(contract)
-                    )
-
-                qualified_contract = qualified_contracts[0]
-                logger.info(f"✅ Contract qualified: {qualified_contract}")
+                # Skip contract qualification to avoid hanging
+                # For SMART exchange, IBKR handles routing without pre-qualification
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}b: Using contract directly (skipping qualification): {contract}")
+                qualified_contract = contract
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}c: Contract ready for placement")
 
                 # Create IBKR order
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}f: Creating IB order object (type={order_type})")
                 if order_type == "MARKET":
                     ib_order = MarketOrder(leg_action, 0)  # Set totalQuantity to 0, will set below
                 elif order_type == "LIMIT":
@@ -374,40 +577,62 @@ class IBKRBroker(AbstractBroker):
                 else:
                     # Default to market
                     ib_order = MarketOrder(leg_action, 0)
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}g: IB order object created")
 
                 # For CRYPTO, IBKR requires cashQty (USD amount) instead of totalQuantity
                 if instrument_type == "CRYPTO":
+                    logger.info(f"🔍 DEBUG place_order Step 5.{i}h: CRYPTO order - calculating cash quantity")
                     price = order.get("limit_price") or order.get("price", 0)
                     if price <= 0:
                         raise ValueError("CRYPTO orders require a price to calculate cash quantity")
                     cash_amount = round(leg_quantity * price, 2)  # USD amount
                     ib_order.cashQty = cash_amount
-                    # IBKR crypto requires explicit TIF - use IOC for market, GTC for limit
-                    ib_order.tif = "IOC" if order_type == "MARKET" else "GTC"
                     logger.info(f"📤 Placing CRYPTO order: {leg_action} ${cash_amount:.2f} USD of {qualified_contract.symbol}")
                 else:
+                    logger.info(f"🔍 DEBUG place_order Step 5.{i}h: Setting totalQuantity={leg_quantity}")
                     ib_order.totalQuantity = leg_quantity
                     logger.info(f"📤 Placing order: {leg_action} {leg_quantity} {qualified_contract.symbol}")
+                
+                # Set TIF for all order types - IBKR requires explicit TIF
+                # IOC (Immediate or Cancel) for market orders, GTC (Good till Cancel) for limit orders
+                ib_order.tif = "IOC" if order_type == "MARKET" else "GTC"
+                
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}i: Connection status before placeOrder: {self.is_connected()}")
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}j: About to call ib.placeOrder()")
                 trade = self.ib.placeOrder(qualified_contract, ib_order)
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}k: ib.placeOrder() RETURNED! Trade object: {trade}")
                 trades.append(trade)
+                logger.info(f"🔍 DEBUG place_order Step 5.{i}l: Trade added to list (total trades: {len(trades)})")
 
             # Wait for order acknowledgment
-            self.ib.sleep(2)
+            logger.info(f"🔍 DEBUG place_order Step 6: All contracts processed, waiting 2s for acknowledgment...")
+            await asyncio.sleep(2)
+            logger.info(f"🔍 DEBUG place_order Step 7: Sleep complete, checking order status...")
 
             # Check if any legs were rejected
             rejected_count = 0
+            rejection_messages = []
             for i, trade in enumerate(trades, 1):
                 status = trade.orderStatus.status
                 if status in ['Cancelled', 'ApiCancelled', 'PendingCancel', 'Inactive']:
                     logger.error(f"❌ Leg {i} rejected by IBKR: {status}")
                     logger.error(f"   Trade log: {trade.log}")
                     rejected_count += 1
+                    
+                    # Extract error messages from trade log
+                    for log_entry in trade.log:
+                        if log_entry.message and ('Error' in log_entry.message or 'rejected' in log_entry.message.lower()):
+                            # Clean up HTML tags from IBKR error messages
+                            clean_msg = log_entry.message.replace('<br>', ' ').replace('  ', ' ').strip()
+                            rejection_messages.append(clean_msg)
 
             if rejected_count > 0:
+                # Use the actual IBKR error message if available, otherwise fallback
+                rejection_detail = "; ".join(rejection_messages) if rejection_messages else "Order rejected by IBKR (check logs for details)"
                 raise OrderRejectedError(
                     f"{rejected_count}/{len(trades)} order legs rejected by IBKR",
                     broker_name="IBKR",
-                    rejection_reason=f"Check logs for details"
+                    rejection_reason=rejection_detail
                 )
 
             # Determine overall status
@@ -473,6 +698,8 @@ class IBKRBroker(AbstractBroker):
         """
         Cancel an open order.
 
+        Thread-safe: Runs in IB's dedicated event loop thread via call_soon_threadsafe.
+
         Args:
             broker_order_id: Broker's order ID
 
@@ -483,47 +710,67 @@ class IBKRBroker(AbstractBroker):
             OrderNotFoundError: If order doesn't exist
             BrokerAPIError: For API errors
         """
+        if not self.is_connected():
+            raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+        
+        if not self._ib_loop:
+            raise BrokerAPIError("IB event loop not started", broker_name="IBKR")
+        
+        # Use Future to pass result from IB thread back to calling thread
+        future = Future()
+        
+        def run_in_ib_thread():
+            try:
+                # Check if we have this order in our tracking
+                if broker_order_id not in self.active_trades:
+                    future.set_exception(OrderNotFoundError(
+                        f"Order {broker_order_id} not found in active orders",
+                        broker_name="IBKR",
+                        broker_order_id=broker_order_id
+                    ))
+                    return
+
+                trades = self.active_trades[broker_order_id]
+                logger.info(f"🚫 Cancelling order {broker_order_id} ({len(trades)} legs)...")
+
+                cancelled_count = 0
+                for i, trade in enumerate(trades, 1):
+                    try:
+                        status = trade.orderStatus.status
+                        if status in ['Filled', 'Cancelled', 'ApiCancelled', 'Inactive']:
+                            logger.info(f"   Leg {i} already {status} - skipping")
+                            continue
+
+                        self.ib.cancelOrder(trade.order)
+                        cancelled_count += 1
+                        logger.info(f"   ✓ Cancelled leg {i}")
+
+                    except Exception as e:
+                        logger.error(f"   ✗ Error cancelling leg {i}: {e}")
+
+                # Wait for cancellation to process
+                self.ib.sleep(0.5)
+
+                # Remove from tracking
+                del self.active_trades[broker_order_id]
+                logger.info(f"✅ Order {broker_order_id} cancelled ({cancelled_count}/{len(trades)} legs)")
+
+                future.set_result(cancelled_count > 0)
+            except Exception as e:
+                logger.error(f"Error cancelling order {broker_order_id}: {e}", exc_info=True)
+                future.set_exception(BrokerAPIError(f"Failed to cancel order: {str(e)}", broker_name="IBKR"))
+        
+        # Submit to IB thread and wait for result
+        self._ib_loop.call_soon_threadsafe(run_in_ib_thread)
+        
         try:
-            # Check if we have this order in our tracking
-            if broker_order_id not in self.active_trades:
-                raise OrderNotFoundError(
-                    f"Order {broker_order_id} not found in active orders",
-                    broker_name="IBKR",
-                    broker_order_id=broker_order_id
-                )
-
-            trades = self.active_trades[broker_order_id]
-            logger.info(f"🚫 Cancelling order {broker_order_id} ({len(trades)} legs)...")
-
-            cancelled_count = 0
-            for i, trade in enumerate(trades, 1):
-                try:
-                    status = trade.orderStatus.status
-                    if status in ['Filled', 'Cancelled', 'ApiCancelled', 'Inactive']:
-                        logger.info(f"   Leg {i} already {status} - skipping")
-                        continue
-
-                    self.ib.cancelOrder(trade.order)
-                    cancelled_count += 1
-                    logger.info(f"   ✓ Cancelled leg {i}")
-
-                except Exception as e:
-                    logger.error(f"   ✗ Error cancelling leg {i}: {e}")
-
-            # Wait for cancellation to process
-            self.ib.sleep(0.5)
-
-            # Remove from tracking
-            del self.active_trades[broker_order_id]
-            logger.info(f"✅ Order {broker_order_id} cancelled ({cancelled_count}/{len(trades)} legs)")
-
-            return cancelled_count > 0
-
-        except OrderNotFoundError:
-            raise
+            return future.result(timeout=10.0)
+        except FuturesTimeoutError:
+            logger.error(f"⏱️ Timeout cancelling order {broker_order_id}")
+            raise BrokerTimeoutError(f"Timeout cancelling order {broker_order_id}", broker_name="IBKR")
         except Exception as e:
-            logger.error(f"Error cancelling order {broker_order_id}: {e}", exc_info=True)
-            raise BrokerAPIError(f"Failed to cancel order: {str(e)}", broker_name="IBKR")
+            # Exception was already set by run_in_ib_thread
+            raise
 
     def get_order_status(self, broker_order_id: str) -> Dict[str, Any]:
         """
@@ -616,6 +863,8 @@ class IBKRBroker(AbstractBroker):
         """
         Get account balance and equity.
 
+        Thread-safe: Submits async task to IB's dedicated event loop thread.
+
         Args:
             account_id: Optional account ID (uses default from config if not provided)
 
@@ -630,30 +879,68 @@ class IBKRBroker(AbstractBroker):
                 "timestamp": "2025-01-07T12:00:00Z"
             }
         """
+        if not self.is_connected():
+            raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+        
+        if not self._ib_loop:
+            raise BrokerAPIError("IB event loop not started", broker_name="IBKR")
+        
+        # Submit async task to IB's event loop from any thread
+        future = asyncio.run_coroutine_threadsafe(
+            self._get_account_balance_async(account_id),
+            self._ib_loop
+        )
+        
+        # Wait for result with timeout
         try:
-            if not self.is_connected():
-                raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+            return future.result(timeout=10.0)
+        except FuturesTimeoutError:
+            logger.error(f"⏱️ Timeout getting account balance")
+            raise BrokerTimeoutError("Timeout getting account balance", broker_name="IBKR")
+        except Exception as e:
+            logger.error(f"Error in get_account_balance future: {e}", exc_info=True)
+            raise
+        finally:
+            if not future.done():
+                future.cancel()
 
-            account_values = self.ib.accountSummary()
+    async def _get_account_balance_async(self, account_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Async coroutine to get account balance - runs in IB's event loop thread.
+        Uses accountSummaryAsync() which is safe for already-running event loops.
+        """
+        try:
+            # Use async version since event loop is already running
+            # accountSummary() calls run_until_complete() internally which fails
+            account_summary = await self.ib.accountSummaryAsync()
+            
+            logger.info(f"Account summary items: {len(account_summary)}")
 
-            # Extract metrics
+            # Extract metrics - IBKR returns values in account's base currency
             equity = 0.0
             cash_balance = 0.0
             margin_used = 0.0
             margin_available = 0.0
             buying_power = 0.0
+            unrealized_pnl = 0.0
+            realized_pnl = 0.0
 
-            for value in account_values:
-                if value.tag == 'NetLiquidation':
-                    equity = float(value.value)
-                elif value.tag == 'TotalCashValue':
-                    cash_balance = float(value.value)
-                elif value.tag == 'MaintMarginReq':
-                    margin_used = float(value.value)
-                elif value.tag == 'AvailableFunds':
-                    margin_available = float(value.value)
-                elif value.tag == 'BuyingPower':
-                    buying_power = float(value.value)
+            for item in account_summary:
+                if item.tag == 'NetLiquidation':
+                    equity = float(item.value)
+                    logger.info(f"NetLiquidation: {item.value} {item.currency}")
+                elif item.tag == 'TotalCashValue':
+                    cash_balance = float(item.value)
+                elif item.tag == 'MaintMarginReq':
+                    margin_used = float(item.value)
+                elif item.tag == 'AvailableFunds':
+                    margin_available = float(item.value)
+                elif item.tag == 'BuyingPower':
+                    buying_power = float(item.value)
+                elif item.tag == 'UnrealizedPnL':
+                    unrealized_pnl = float(item.value)
+                elif item.tag == 'RealizedPnL':
+                    realized_pnl = float(item.value)
 
             return {
                 "account_id": account_id or self.account_id,
@@ -662,18 +949,20 @@ class IBKRBroker(AbstractBroker):
                 "margin_used": margin_used,
                 "margin_available": margin_available,
                 "buying_power": buying_power,
+                "unrealized_pnl": unrealized_pnl,
+                "realized_pnl": realized_pnl,
                 "timestamp": datetime.utcnow().isoformat() + "Z"
             }
 
-        except BrokerConnectionError:
-            raise
         except Exception as e:
-            logger.error(f"Error getting account balance: {e}", exc_info=True)
+            logger.error(f"Error in _get_account_balance_async: {e}", exc_info=True)
             raise BrokerAPIError(f"Failed to get account balance: {str(e)}", broker_name="IBKR")
 
     def get_open_positions(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get all open positions.
+
+        Thread-safe: Submits async task to IB's dedicated event loop thread.
 
         Args:
             account_id: Optional account ID
@@ -692,10 +981,41 @@ class IBKRBroker(AbstractBroker):
                 }
             ]
         """
+        if not self.is_connected():
+            raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+        
+        if not self._ib_loop:
+            raise BrokerAPIError("IB event loop not started", broker_name="IBKR")
+        
+        # Submit async task to IB's event loop from any thread
+        future = asyncio.run_coroutine_threadsafe(
+            self._get_open_positions_async(account_id),
+            self._ib_loop
+        )
+        
+        # Wait for result with timeout
         try:
-            if not self.is_connected():
-                raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+            return future.result(timeout=10.0)
+        except FuturesTimeoutError:
+            logger.error(f"⏱️ Timeout getting open positions")
+            raise BrokerTimeoutError("Timeout getting open positions", broker_name="IBKR")
+        except Exception as e:
+            logger.error(f"Error in get_open_positions future: {e}", exc_info=True)
+            raise
+        finally:
+            if not future.done():
+                future.cancel()
 
+    async def _get_open_positions_async(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Async coroutine to get open positions - runs in IB's event loop thread.
+        Uses reqPositionsAsync() which is safe for already-running event loops.
+        """
+        try:
+            # Use async version since event loop is already running
+            # positions() calls run_until_complete() internally which fails
+            # Request positions and wait for them
+            await self.ib.reqPositionsAsync()
             positions = self.ib.positions()
             open_positions = []
 
@@ -706,31 +1026,15 @@ class IBKRBroker(AbstractBroker):
                 # avgCost in IBKR is already the average price per share
                 avg_price = abs(pos.avgCost)
 
-                # Request live market data for current price
-                current_price = 0
-                market_value = 0
-                unrealized_pnl = 0
-
-                try:
-                    # Request market data snapshot
-                    self.ib.reqMktData(pos.contract, snapshot=True)
-                    self.ib.sleep(0.5)  # Brief wait for data
-
-                    ticker = self.ib.ticker(pos.contract)
-                    if ticker and ticker.marketPrice():
-                        current_price = ticker.marketPrice()
-                        market_value = current_price * quantity
-                        unrealized_pnl = (current_price - avg_price) * quantity * (1 if side == "LONG" else -1)
-                    else:
-                        # Fallback: use avg_price if no market data available
-                        market_value = avg_price * quantity
-
-                except Exception as e:
-                    logger.warning(f"Could not fetch market data for {pos.contract.symbol}: {e}")
-                    market_value = avg_price * quantity
+                # NOTE: Disabled live market data requests to avoid competing with execution service
+                # IBKR Paper accounts only allow 1 concurrent live data subscription
+                # Account data service doesn't need real-time prices - use average cost instead
+                current_price = avg_price  # Use avg_price instead of requesting live data
+                market_value = avg_price * quantity
+                unrealized_pnl = 0  # Cannot calculate without current price
 
                 open_positions.append({
-                    "symbol": pos.contract.symbol,
+                    "instrument": pos.contract.symbol,
                     "quantity": quantity,
                     "side": side,
                     "avg_price": avg_price,
@@ -742,8 +1046,6 @@ class IBKRBroker(AbstractBroker):
 
             return open_positions
 
-        except BrokerConnectionError:
-            raise
         except Exception as e:
             logger.error(f"Error getting open positions: {e}", exc_info=True)
             raise BrokerAPIError(f"Failed to get open positions: {str(e)}", broker_name="IBKR")
@@ -836,6 +1138,174 @@ class IBKRBroker(AbstractBroker):
         except Exception as e:
             logger.error(f"Error getting open orders: {e}", exc_info=True)
             raise BrokerAPIError(f"Failed to get open orders: {str(e)}", broker_name="IBKR")
+
+    # ========================================================================
+    # MARKET DATA (for paper_live mode pricing)
+    # ========================================================================
+
+    def get_market_price(self, symbol: str, instrument_type: str) -> float:
+        """
+        Get current market price for an instrument.
+
+        Thread-safe: Submits async task to IB's dedicated event loop thread.
+
+        Args:
+            symbol: Asset symbol (e.g., "AAPL", "EURUSD", "BTC")
+            instrument_type: Type of instrument ("STOCK", "FOREX", "CRYPTO", "FUTURE", "OPTION")
+
+        Returns:
+            Current market price (mid-price or last traded price)
+
+        Raises:
+            BrokerConnectionError: If not connected
+            BrokerAPIError: If no market data available
+        """
+        if not self.is_connected():
+            raise BrokerConnectionError("Not connected to IBKR", broker_name="IBKR")
+        
+        if not self._ib_loop:
+            raise BrokerAPIError("IB event loop not started", broker_name="IBKR")
+        
+        # Submit async task to IB's event loop from any thread
+        future = asyncio.run_coroutine_threadsafe(
+            self._fetch_price_async(symbol, instrument_type),
+            self._ib_loop
+        )
+        
+        # Wait for result with timeout, ensuring cleanup on all error paths
+        try:
+            return future.result(timeout=10.0)
+        except TimeoutError:
+            # Timeout usually means no market data available (market closed, data permissions, or invalid symbol)
+            logger.warning(f"⏱️ Timeout fetching price for {symbol} - no data received within 10s")
+            raise BrokerAPIError(
+                f"No market data available for {symbol}. Possible reasons: market closed, no data subscription, or invalid symbol.",
+                broker_name="IBKR"
+            )
+        except Exception as e:
+            error_msg = str(e) if str(e) else f"{type(e).__name__}"
+            logger.error(f"Error fetching price for {symbol}: {error_msg}")
+            raise BrokerAPIError(f"Failed to get market price: {error_msg}", broker_name="IBKR")
+        finally:
+            # Ensure the future is cancelled if it's still pending (cleanup guarantee)
+            if not future.done():
+                logger.debug(f"🧹 Cancelling pending future for {symbol} price fetch")
+                future.cancel()
+
+    async def _fetch_price_async(self, symbol: str, instrument_type: str) -> float:
+        """
+        Async coroutine to fetch price - runs in IB's event loop thread.
+        """
+        contract = None
+        ticker = None
+        
+        try:
+            # Create contract
+            contract = self._create_contract_for_pricing(symbol, instrument_type)
+
+            # Request market data (snapshot=True for one-time data, avoids subscription conflicts)
+            ticker = self.ib.reqMktData(contract, '', True, False)  # snapshot=True
+
+            # Wait for data using asyncio.sleep() - we're in the right loop now
+            logger.debug(f"⏳ Waiting for market data for {symbol}...")
+            
+            import math
+            for i in range(100):  # 100 * 0.1s = 10s max
+                await asyncio.sleep(0.1)
+                
+                # Check if we have valid (not nan) data
+                has_bid = ticker.bid and not math.isnan(ticker.bid) and ticker.bid > 0
+                has_ask = ticker.ask and not math.isnan(ticker.ask) and ticker.ask > 0
+                has_last = ticker.last and not math.isnan(ticker.last) and ticker.last > 0
+                
+                if has_bid or has_ask or has_last:
+                    logger.debug(f"✅ Market data received after {(i+1)*0.1:.1f}s: bid={ticker.bid}, ask={ticker.ask}, last={ticker.last}")
+                    break
+
+            # Return mid-price if available, otherwise last price
+            if ticker.bid and ticker.ask and not math.isnan(ticker.bid) and not math.isnan(ticker.ask) and ticker.bid > 0 and ticker.ask > 0:
+                price = (ticker.bid + ticker.ask) / 2
+                logger.debug(f"📊 Market price for {symbol}: ${price:.2f} (bid=${ticker.bid:.2f}, ask=${ticker.ask:.2f})")
+                return price
+            elif ticker.last and not math.isnan(ticker.last) and ticker.last > 0:
+                logger.warning(f"⚠️ Using last price for {symbol}: ${ticker.last:.2f}")
+                return ticker.last
+            else:
+                raise BrokerAPIError(
+                    f"No market data available for {symbol} ({instrument_type})",
+                    broker_name="IBKR"
+                )
+        except Exception as e:
+            if "BrokerAPIError" in str(type(e)):
+                raise
+            # Provide more detailed error message
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
+            logger.error(f"Error in _fetch_price_async for {symbol}: {error_msg}", exc_info=True)
+            raise BrokerAPIError(f"Failed to fetch price: {error_msg}", broker_name="IBKR")
+        finally:
+            # CRITICAL: Always cancel market data subscription to avoid accumulating subscriptions
+            if ticker is not None and contract is not None:
+                try:
+                    self.ib.cancelMktData(contract)
+                    logger.debug(f"🧹 Cleaned up market data subscription for {symbol}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup market data for {symbol}: {cleanup_error}")
+
+    def _create_contract_for_pricing(self, symbol: str, instrument_type: str):
+        """
+        Create a simple IBKR contract for market data requests.
+
+        This is a simplified version that creates contracts suitable for pricing queries.
+        """
+        from ib_insync import Stock, Forex, Crypto, Future as IBFuture
+
+        instrument_type = instrument_type.upper()
+
+        if instrument_type == "STOCK" or instrument_type == "ETF":
+            return Stock(symbol, 'SMART', 'USD')
+
+        elif instrument_type == "FOREX":
+            # Handle both formats: "EURUSD" or "EUR.USD"
+            # IBKR's Forex() class expects exactly 6 characters (e.g., "EURUSD")
+            if '.' in symbol:
+                # Remove dot from "EUR.USD" -> "EURUSD"
+                pair = symbol.replace('.', '')
+            else:
+                pair = symbol
+            
+            # Validate length
+            if len(pair) != 6:
+                raise BrokerAPIError(
+                    f"Invalid forex pair format: '{symbol}'. Expected 6-character format like 'EURUSD' or 'EUR.USD'",
+                    broker_name="IBKR"
+                )
+            return Forex(pair)
+
+        elif instrument_type == "CRYPTO":
+            # For crypto, IBKR uses PAXOS exchange
+            return Crypto(symbol, 'PAXOS', 'USD')
+
+        elif instrument_type == "FUTURE":
+            # For futures, we need more info, but try a basic contract
+            # In production, this should be enhanced with expiry/exchange from order data
+            logger.warning(f"Creating basic future contract for {symbol} - may need enhancement")
+            return IBFuture(symbol, exchange='SMART')
+
+        elif instrument_type == "OPTION":
+            # Options require strike/expiry - should not be called for options
+            # In paper_live mode, option pricing should come from order data
+            logger.warning(f"get_market_price() called for OPTION {symbol} - returning 0")
+            raise BrokerAPIError(
+                f"Cannot get market price for OPTIONS without strike/expiry. "
+                f"Use order data for option pricing.",
+                broker_name="IBKR"
+            )
+
+        else:
+            raise BrokerAPIError(
+                f"Unsupported instrument type for pricing: {instrument_type}",
+                broker_name="IBKR"
+            )
 
     # ========================================================================
     # HELPER METHODS
@@ -955,10 +1425,10 @@ class IBKRBroker(AbstractBroker):
 
     def get_quantity_precision(self, symbol: str, instrument_type: str) -> int:
         """
-        Get the number of decimal places allowed for quantity from IBKR.
+        Get the number of decimal places allowed for quantity.
 
-        Uses reqContractDetails to get the contract's minSize and sizeIncrement
-        to determine precision.
+        Uses static defaults to avoid blocking calls to IBKR during order placement.
+        Previous implementation queried IBKR's qualifyContracts() which could hang.
 
         Args:
             symbol: Asset symbol (e.g., "AAPL", "EURUSD")
@@ -967,77 +1437,9 @@ class IBKRBroker(AbstractBroker):
         Returns:
             int: Number of decimal places (0 for integers)
         """
-        try:
-            if not self.is_connected():
-                logger.warning("Not connected to IBKR, using default precision")
-                return self._get_default_precision(instrument_type)
-
-            # Create contract for query
-            instrument_type_upper = instrument_type.upper()
-
-            if instrument_type_upper == "STOCK":
-                contract = Stock(symbol=symbol, exchange='SMART', currency='USD')
-            elif instrument_type_upper == "FOREX":
-                # For forex, symbol is like "EURUSD", need to split into pair
-                if len(symbol) == 6:
-                    base = symbol[:3]
-                    quote = symbol[3:]
-                    contract = Forex(pair=f"{base}{quote}")
-                else:
-                    contract = Forex(symbol=symbol)
-            elif instrument_type_upper == "FUTURE":
-                # For futures, we'd need expiry - use default for now
-                logger.debug(f"Futures precision query requires expiry, using default")
-                return 0
-            elif instrument_type_upper == "OPTION":
-                # Options are always integer contracts
-                return 0
-            elif instrument_type_upper == "CRYPTO":
-                # Crypto typically has high precision
-                return 8
-            else:
-                return self._get_default_precision(instrument_type)
-
-            # Qualify the contract first
-            qualified_contracts = self.ib.qualifyContracts(contract)
-            if not qualified_contracts:
-                logger.warning(f"Could not qualify contract for {symbol}, using default precision")
-                return self._get_default_precision(instrument_type)
-
-            qualified_contract = qualified_contracts[0]
-
-            # Get contract details
-            details_list = self.ib.reqContractDetails(qualified_contract)
-            if not details_list:
-                logger.warning(f"No contract details for {symbol}, using default precision")
-                return self._get_default_precision(instrument_type)
-
-            details = details_list[0]
-
-            # Determine precision from minSize/sizeIncrement
-            # For stocks, minSize is typically 1.0, sizeIncrement is 1.0 → precision 0
-            # For forex, minSize might be 1.0 but positions are in units → precision 0
-            # For crypto, could have fractional sizes
-
-            min_size = getattr(details, 'minSize', 1.0)
-            size_increment = getattr(details, 'sizeIncrement', 1.0)
-
-            # Calculate precision from size increment
-            # e.g., size_increment = 0.001 → precision = 3
-            if size_increment >= 1.0:
-                precision = 0
-            else:
-                # Count decimal places in size_increment
-                precision = len(str(size_increment).split('.')[-1].rstrip('0'))
-
-            logger.info(f"IBKR precision for {symbol} ({instrument_type}): {precision} decimals "
-                       f"(minSize={min_size}, sizeIncrement={size_increment})")
-
-            return precision
-
-        except Exception as e:
-            logger.warning(f"Error querying IBKR for precision: {e}")
-            return self._get_default_precision(instrument_type)
+        # Use default precision values to avoid hanging during order placement
+        # IBKR qualifyContracts() and reqContractDetails() can block indefinitely
+        return self._get_default_precision(instrument_type)
 
     def _get_default_precision(self, instrument_type: str) -> int:
         """

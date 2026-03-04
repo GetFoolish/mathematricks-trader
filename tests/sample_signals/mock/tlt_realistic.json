@@ -1,0 +1,262 @@
+[
+  {
+    "strategy_name": "TLT",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735988000,
+    "signalID": "sig_tlt_001",
+    "entry_name": "$TLT_1",
+    "account_equity": 78000,
+    "signal_legs": [
+      {
+        "instrument": "TLT",
+        "instrument_type": "BOND",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 100,
+        "order_type": "MARKET",
+        "price": 92.0,
+        "secType": "STK",
+        "exchange": "NASDAQ",
+        "currency": "USD",
+        "stop_loss": 90.0,
+        "take_profit": 95.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "TLT",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735988060,
+    "signalID": "sig_tlt_002",
+    "entry_name": "$TLT_2",
+    "account_equity": 57000,
+    "signal_legs": [
+      {
+        "instrument": "TLT",
+        "instrument_type": "BOND",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 75,
+        "order_type": "MARKET",
+        "price": 92.5,
+        "secType": "STK",
+        "exchange": "NASDAQ",
+        "currency": "USD",
+        "stop_loss": 90.0,
+        "take_profit": 96.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "TLT",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735988180,
+    "signalID": "sig_tlt_003",
+    "entry_signal_id": "$TLT_1",
+    "account_equity": 67000,
+    "signal_legs": [
+      {
+        "instrument": "TLT",
+        "instrument_type": "BOND",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 100,
+        "order_type": "MARKET",
+        "price": 94.0,
+        "secType": "STK",
+        "exchange": "NASDAQ",
+        "currency": "USD"
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "TLT",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735988240,
+    "signalID": "sig_tlt_004",
+    "entry_signal_id": "$TLT_2",
+    "account_equity": 192000,
+    "signal_legs": [
+      {
+        "instrument": "TLT",
+        "instrument_type": "BOND",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 75,
+        "order_type": "MARKET",
+        "price": 94.75,
+        "secType": "STK",
+        "exchange": "NASDAQ",
+        "currency": "USD"
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "TLT",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735988330,
+    "signalID": "sig_tlt_005",
+    "entry_name": "$TLT_3",
+    "account_equity": 81000,
+    "signal_legs": [
+      {
+        "instrument": "IEF",
+        "instrument_type": "BOND",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 80,
+        "order_type": "MARKET",
+        "price": 87.5,
+        "secType": "STK",
+        "exchange": "NYSE",
+        "currency": "USD",
+        "stop_loss": 85.5,
+        "take_profit": 90.5
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "TLT",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735988390,
+    "signalID": "sig_tlt_006",
+    "entry_name": "$TLT_4",
+    "account_equity": 60000,
+    "signal_legs": [
+      {
+        "instrument": "IEF",
+        "instrument_type": "BOND",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 50,
+        "order_type": "MARKET",
+        "price": 88.0,
+        "secType": "STK",
+        "exchange": "NYSE",
+        "currency": "USD",
+        "stop_loss": 85.5,
+        "take_profit": 91.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "TLT",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735988510,
+    "signalID": "sig_tlt_007",
+    "entry_signal_id": "$TLT_3",
+    "account_equity": 65000,
+    "signal_legs": [
+      {
+        "instrument": "IEF",
+        "instrument_type": "BOND",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 80,
+        "order_type": "MARKET",
+        "price": 89.5,
+        "secType": "STK",
+        "exchange": "NYSE",
+        "currency": "USD"
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "TLT",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735988570,
+    "signalID": "sig_tlt_008",
+    "entry_signal_id": "$TLT_4",
+    "account_equity": 69000,
+    "signal_legs": [
+      {
+        "instrument": "IEF",
+        "instrument_type": "BOND",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 50,
+        "order_type": "MARKET",
+        "price": 90.0,
+        "secType": "STK",
+        "exchange": "NYSE",
+        "currency": "USD"
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "TLT",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735988660,
+    "signalID": "sig_tlt_009",
+    "entry_name": "$TLT_5",
+    "account_equity": 80000,
+    "signal_legs": [
+      {
+        "instrument": "BND",
+        "instrument_type": "STOCK",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 120,
+        "order_type": "MARKET",
+        "price": 79.0,
+        "secType": "STK",
+        "exchange": "NYSE",
+        "currency": "USD",
+        "stop_loss": 77.5,
+        "take_profit": 82.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "TLT",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735988780,
+    "signalID": "sig_tlt_010",
+    "entry_signal_id": "$TLT_5",
+    "account_equity": 84000,
+    "signal_legs": [
+      {
+        "instrument": "BND",
+        "instrument_type": "BOND",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 120,
+        "order_type": "MARKET",
+        "price": 81.0,
+        "secType": "STK",
+        "exchange": "NYSE",
+        "currency": "USD"
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 0
+  }
+]

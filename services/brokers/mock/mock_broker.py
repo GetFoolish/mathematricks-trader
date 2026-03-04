@@ -55,14 +55,21 @@ class MockBroker(AbstractBroker):
     - Instant order fills (no waiting for market data)
     - Supports all instrument types (stocks, forex, options, futures, commodities)
     - Supports MARKET and LIMIT orders
-    - Returns mock account data
-    - No external dependencies
+    - Uses MongoDB as single source of truth for account data
+    - No cached values - all balances read from database
+
+    Architecture:
+    - Account balances are stored in MongoDB trading_accounts collection
+    - get_account_balance() reads from MongoDB, not cached values
+    - get_margin_info() reads from MongoDB, not cached values
+    - get_open_positions() reads from MongoDB, not cached values
+    - This ensures consistency after clear_test_data.py resets
 
     Example config:
     {
         "broker": "Mock",
         "account_id": "Mock_Paper",
-        "initial_equity": 100000  # Optional, defaults to 100k
+        "initial_equity": 100000  # Used only for initial account creation
     }
     """
 
@@ -73,12 +80,18 @@ class MockBroker(AbstractBroker):
         self.broker_name = "Mock"
         self.account_id = config.get("account_id", "Mock_Paper")
         self.initial_equity = config.get("initial_equity", 1000000.0)
+        
+        # Read-only mode: prevents MongoDB config overwrites when used as secondary broker in BrokerModeAdapter
+        self.read_only = config.get("read_only", False)
 
         # In-memory storage
         self.mock_orders = {}  # {broker_order_id: order_data}
         self.connected = False
 
-        logger.info(f"Mock Broker initialized for account {self.account_id} (instant fills for testing)")
+        if self.read_only:
+            logger.info(f"Mock Broker initialized for account {self.account_id} (read-only mode - no MongoDB writes)")
+        else:
+            logger.info(f"Mock Broker initialized for account {self.account_id} (instant fills for testing)")
 
     # ========================================================================
     # CONNECTION MANAGEMENT
@@ -107,8 +120,45 @@ class MockBroker(AbstractBroker):
         """
         Ensure Mock account exists in trading_accounts collection with proper schema.
         Replaces existing account to ensure fresh state on each connection.
+        Skips in read_only mode (when used as secondary broker in BrokerModeAdapter).
+        
+        CRITICAL: Only updates balances/positions, NEVER overwrites broker/mode/auth_details
+        to prevent corrupting IBKR accounts that are temporarily using Mock broker.
         """
+        # Skip if read_only - this Mock broker is secondary in a hybrid setup
+        if self.read_only:
+            logger.debug(f"Mock broker in read-only mode - skipping account creation for {self.account_id}")
+            return
+            
         trading_accounts = get_trading_accounts_collection()
+        
+        # Check if account already exists
+        existing_account = trading_accounts.find_one({"account_id": self.account_id})
+        
+        if existing_account:
+            # Account exists - ONLY update balances and positions, never broker/mode/auth
+            logger.debug(f"Mock broker: Account {self.account_id} exists - updating balances only (preserving broker config)")
+            trading_accounts.update_one(
+                {"account_id": self.account_id},
+                {"$set": {
+                    "balances.equity": self.initial_equity,
+                    "balances.cash": self.initial_equity / 2,
+                    "balances.cash_balance": self.initial_equity / 2,
+                    "balances.margin_used": 0.0,
+                    "balances.margin_available": self.initial_equity / 2,
+                    "balances.buying_power": self.initial_equity * 2,
+                    "balances.unrealized_pnl": 0.0,
+                    "balances.realized_pnl": 0.0,
+                    "balances.last_updated": datetime.utcnow(),
+                    "open_positions": [],
+                    "updated_at": datetime.utcnow()
+                }}
+            )
+            logger.debug(f"   Updated balances: Equity=${self.initial_equity:,.2f}, Buying Power=${self.initial_equity * 2:,.2f}")
+            return
+        
+        # Account doesn't exist - create it (only for pure Mock accounts)
+        logger.debug(f"Mock broker: Creating new account {self.account_id}")
         if trading_accounts is None:
             logger.warning("Cannot create account document - MongoDB not available")
             return
@@ -141,39 +191,18 @@ class MockBroker(AbstractBroker):
         }
 
         try:
-            # Only update broker-specific fields,  preserving fund_id and other config
-            result = trading_accounts.update_one(
-                {"account_id": self.account_id},
-                {
-                    "$set": {
-                        "account_name": mock_account["account_name"],
-                        "broker": mock_account["broker"],
-                        "account_number": mock_account["account_number"],
-                        "account_type": mock_account["account_type"],
-                        "authentication_details": mock_account["authentication_details"],
-                        "balances": mock_account["balances"],
-                        "open_positions": mock_account["open_positions"],
-                        "status": mock_account["status"],
-                        "updated_at": mock_account["updated_at"]
-                    },
-                    "$setOnInsert": {
-                        "created_at": mock_account["created_at"]
-                        # fund_id will be preserved if it exists, or omitted on new inserts
-                    }
-                },
-                upsert=True
-            )
-
-            if result.upserted_id:
-                logger.info(f"✅ Created fresh {self.account_id} account in database")
-            else:
-                logger.info(f"✅ Updated existing {self.account_id} account with fresh balances")
-
+            # Insert only if doesn't exist (this path should only run for new Mock-only accounts)
+            trading_accounts.insert_one(mock_account)
+            logger.info(f"✅ Created fresh {self.account_id} Mock account")
             logger.info(f"   Initial Equity: ${mock_account['balances']['equity']:,.2f}")
             logger.info(f"   Buying Power: ${mock_account['balances']['buying_power']:,.2f}")
 
         except Exception as e:
-            logger.error(f"Failed to create/update account document: {e}")
+            if 'duplicate key' in str(e).lower():
+                # Race condition - account was created by another process
+                logger.debug(f"Account {self.account_id} already exists (race condition)")
+            else:
+                logger.error(f"Failed to create Mock account: {e}")
 
     def disconnect(self) -> bool:
         """
@@ -216,14 +245,34 @@ class MockBroker(AbstractBroker):
         # Determine fill price based on order type
         order_type = order.get('order_type', 'MARKET')
         quantity = order.get('quantity', 0)
+        instrument = order.get('instrument', 'UNKNOWN')
 
         if order_type == 'LIMIT':
             # Use limit price for LIMIT orders
-            fill_price = order.get('limit_price', 100.0)
+            fill_price = order.get('limit_price')
+            if fill_price is None:
+                raise ValueError(f"LIMIT order for {instrument} missing 'limit_price' field")
         else:
-            # MARKET order - use simple mock price
-            # In a more sophisticated version, could use actual market data
-            fill_price = order.get('price', 100.0)  # Use suggested price if available
+            # MARKET order - MUST have price from BrokerModeAdapter (paper_live) or signal
+            fill_price = order.get('price')
+            if fill_price is None:
+                # Check if this came from paper_live mode enrichment
+                price_source = order.get('_price_source')
+                if price_source:
+                    logger.critical(
+                        f"⚠️ CRITICAL: {instrument} MARKET order has _price_source={price_source} "
+                        f"but 'price' field is None! BrokerModeAdapter enrichment failed."
+                    )
+                else:
+                    logger.critical(
+                        f"⚠️ CRITICAL: {instrument} MARKET order missing 'price' field! "
+                        f"For paper_live mode, BrokerModeAdapter should enrich with live price. "
+                        f"For paper_mock mode, signal should include price."
+                    )
+                raise ValueError(
+                    f"MARKET order for {instrument} missing 'price' field. "
+                    f"Cannot execute without a price (no fallback pricing)."
+                )
 
         # Store order in memory
         self.mock_orders[broker_order_id] = {
@@ -323,7 +372,7 @@ class MockBroker(AbstractBroker):
 
     def get_account_balance(self, account_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Return mock account balance.
+        Return account balance from MongoDB (single source of truth).
 
         Args:
             account_id: Account ID (optional, uses self.account_id if not provided)
@@ -333,17 +382,70 @@ class MockBroker(AbstractBroker):
         """
         account = account_id or self.account_id
 
-        return {
-            "account_id": account,
-            "equity": self.initial_equity,
-            "cash_balance": self.initial_equity * 0.5,  # 50% cash
-            "margin_used": 0.0,
-            "margin_available": self.initial_equity * 0.5,
-            "buying_power": self.initial_equity * 2.0,  # 2x leverage
-            "unrealized_pnl": 0.0,
-            "realized_pnl": 0.0,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        }
+        try:
+            # Get MongoDB collection (lazy-loaded)
+            trading_accounts_collection = get_trading_accounts_collection()
+            if trading_accounts_collection is None:
+                logger.warning("MongoDB not available, returning fallback balances")
+                # Fallback only if MongoDB is unavailable
+                return {
+                    "account_id": account,
+                    "equity": self.initial_equity,
+                    "cash_balance": self.initial_equity * 0.5,
+                    "margin_used": 0.0,
+                    "margin_available": self.initial_equity * 0.5,
+                    "buying_power": self.initial_equity * 2.0,
+                    "unrealized_pnl": 0.0,
+                    "realized_pnl": 0.0,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            # Fetch account document from MongoDB
+            account_doc = trading_accounts_collection.find_one({"account_id": account})
+
+            if not account_doc or 'balances' not in account_doc:
+                logger.warning(f"Account {account} not found in MongoDB, returning fallback balances")
+                # Fallback only if account doesn't exist yet
+                return {
+                    "account_id": account,
+                    "equity": self.initial_equity,
+                    "cash_balance": self.initial_equity * 0.5,
+                    "margin_used": 0.0,
+                    "margin_available": self.initial_equity * 0.5,
+                    "buying_power": self.initial_equity * 2.0,
+                    "unrealized_pnl": 0.0,
+                    "realized_pnl": 0.0,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            # Return balances from MongoDB (single source of truth)
+            balances = account_doc['balances']
+            return {
+                "account_id": account,
+                "equity": balances.get('equity', 0.0),
+                "cash_balance": balances.get('cash_balance', 0.0),
+                "margin_used": balances.get('margin_used', 0.0),
+                "margin_available": balances.get('margin_available', 0.0),
+                "buying_power": balances.get('buying_power', 0.0),
+                "unrealized_pnl": balances.get('unrealized_pnl', 0.0),
+                "realized_pnl": balances.get('realized_pnl', 0.0),
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching account balance from MongoDB: {e}", exc_info=True)
+            # Fallback on error
+            return {
+                "account_id": account,
+                "equity": self.initial_equity,
+                "cash_balance": self.initial_equity * 0.5,
+                "margin_used": 0.0,
+                "margin_available": self.initial_equity * 0.5,
+                "buying_power": self.initial_equity * 2.0,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
 
     def get_open_positions(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -395,7 +497,7 @@ class MockBroker(AbstractBroker):
 
     def get_margin_info(self, account_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Return mock margin information.
+        Return margin information from MongoDB (single source of truth).
 
         Args:
             account_id: Account ID (optional)
@@ -403,15 +505,73 @@ class MockBroker(AbstractBroker):
         Returns:
             Dict with margin_used, margin_available, etc.
         """
-        return {
-            "margin_used": 0.0,
-            "margin_available": self.initial_equity * 0.5,
-            "margin_requirement": 0.0,
-            "excess_liquidity": self.initial_equity * 0.5,
-            "leverage": 2.0,
-            "margin_utilization_pct": 0.0,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
-        }
+        account = account_id or self.account_id
+
+        try:
+            # Get MongoDB collection (lazy-loaded)
+            trading_accounts_collection = get_trading_accounts_collection()
+            if trading_accounts_collection is None:
+                logger.warning("MongoDB not available, returning fallback margin info")
+                # Fallback only if MongoDB is unavailable
+                return {
+                    "margin_used": 0.0,
+                    "margin_available": self.initial_equity * 0.5,
+                    "margin_requirement": 0.0,
+                    "excess_liquidity": self.initial_equity * 0.5,
+                    "leverage": 2.0,
+                    "margin_utilization_pct": 0.0,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            # Fetch account document from MongoDB
+            account_doc = trading_accounts_collection.find_one({"account_id": account})
+
+            if not account_doc or 'balances' not in account_doc:
+                logger.warning(f"Account {account} not found in MongoDB, returning fallback margin info")
+                # Fallback only if account doesn't exist yet
+                return {
+                    "margin_used": 0.0,
+                    "margin_available": self.initial_equity * 0.5,
+                    "margin_requirement": 0.0,
+                    "excess_liquidity": self.initial_equity * 0.5,
+                    "leverage": 2.0,
+                    "margin_utilization_pct": 0.0,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+
+            # Calculate from MongoDB balances (single source of truth)
+            balances = account_doc['balances']
+            margin_used = balances.get('margin_used', 0.0)
+            margin_available = balances.get('margin_available', 0.0)
+            equity = balances.get('equity', 0.0)
+
+            # Calculate margin utilization percentage
+            margin_utilization_pct = 0.0
+            if equity > 0:
+                margin_utilization_pct = (margin_used / equity) * 100.0
+
+            return {
+                "margin_used": margin_used,
+                "margin_available": margin_available,
+                "margin_requirement": margin_used,  # For mock, requirement = used
+                "excess_liquidity": margin_available,
+                "leverage": 2.0,  # Mock broker uses 2x leverage
+                "margin_utilization_pct": margin_utilization_pct,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching margin info from MongoDB: {e}", exc_info=True)
+            # Fallback on error
+            return {
+                "margin_used": 0.0,
+                "margin_available": self.initial_equity * 0.5,
+                "margin_requirement": 0.0,
+                "excess_liquidity": self.initial_equity * 0.5,
+                "leverage": 2.0,
+                "margin_utilization_pct": 0.0,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
 
     def get_open_orders(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -441,6 +601,29 @@ class MockBroker(AbstractBroker):
             Mock price (100.0 for simplicity)
         """
         # Simple mock price - could be enhanced to return realistic prices
+        return 100.0
+
+    def get_ticker_price(self, symbol: str, signal_price: Optional[float] = None) -> float:
+        """
+        Get ticker price for margin calculation and order execution.
+        
+        For Mock broker: Returns signal's intended price for testing purposes.
+        This allows testing the full signal flow with realistic prices.
+        Real brokers (like IBKR) fetch actual market data and ignore signal_price.
+        
+        Args:
+            symbol: Instrument symbol
+            signal_price: Intended price from signal (for testing)
+        
+        Returns:
+            Price to use (signal_price if provided, otherwise 100.0 default)
+        """
+        if signal_price is not None and signal_price > 0:
+            logger.debug(f"Mock Broker: Using signal price ${signal_price:.2f} for {symbol}")
+            return signal_price
+        
+        # Fallback: Return default mock price
+        logger.debug(f"Mock Broker: No signal price provided, using default $100.00 for {symbol}")
         return 100.0
 
     # ========================================================================

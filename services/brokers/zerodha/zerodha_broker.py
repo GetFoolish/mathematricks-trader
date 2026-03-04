@@ -635,7 +635,7 @@ class ZerodhaBroker(AbstractBroker):
         Returns:
             [
                 {
-                    "symbol": "RELIANCE",
+                    "instrument": "RELIANCE",
                     "quantity": 100,
                     "side": "LONG" | "SHORT",
                     "avg_price": 2500.00,
@@ -668,7 +668,7 @@ class ZerodhaBroker(AbstractBroker):
                 pnl = pos.get("pnl", 0)
 
                 open_positions.append({
-                    "symbol": pos.get("tradingsymbol", ""),
+                    "instrument": pos.get("tradingsymbol", ""),
                     "quantity": abs(quantity),
                     "side": side,
                     "avg_price": avg_price,

@@ -1,0 +1,36 @@
+[
+  {
+    "strategy_name": "IBKR_Live_Test_TSLA",
+    "passphrase": "test_password_123",
+    "signal_type": "ENTRY",
+    "entry_name": "$TSLA_LIVE_TEST",
+    "account_equity": 1000000,
+    "signal_legs": [{
+      "instrument": "TSLA",
+      "instrument_type": "STOCK",
+      "action": "BUY",
+      "direction": "LONG",
+      "quantity": 5,
+      "price": 100.0,
+      "order_type": "MARKET",
+      "environment": "staging"
+    }],
+    "wait": 30
+  },
+  {
+    "strategy_name": "IBKR_Live_Test_TSLA",
+    "passphrase": "test_password_123",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$TSLA_LIVE_TEST",
+    "signal_legs": [{
+      "instrument": "TSLA",
+      "instrument_type": "STOCK",
+      "action": "SELL",
+      "direction": "SHORT",
+      "quantity": 5,
+      "price": 105.0,
+      "order_type": "MARKET",
+      "environment": "staging"
+    }]
+  }
+]

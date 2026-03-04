@@ -1,0 +1,232 @@
+[
+  {
+    "strategy_name": "Com3-Mkt",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735982000,
+    "signalID": "sig_com3_mkt_001",
+    "entry_name": "$COM3_MKT_1",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "CL",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 2,
+        "order_type": "MARKET",
+        "price": 78.0,
+        "stop_loss": 76.5,
+        "take_profit": 80.5
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com3-Mkt",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735982060,
+    "signalID": "sig_com3_mkt_002",
+    "entry_name": "$COM3_MKT_2",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "CL",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 1,
+        "order_type": "MARKET",
+        "price": 78.2,
+        "stop_loss": 76.5,
+        "take_profit": 81.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com3-Mkt",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735982180,
+    "signalID": "sig_com3_mkt_003",
+    "entry_signal_id": "$COM3_MKT_1",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "CL",
+        "instrument_type": "FUTURE",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 2,
+        "order_type": "MARKET",
+        "price": 79.75
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com3-Mkt",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735982240,
+    "signalID": "sig_com3_mkt_004",
+    "entry_signal_id": "$COM3_MKT_2",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "CL",
+        "instrument_type": "FUTURE",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 1,
+        "order_type": "MARKET",
+        "price": 79.85
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com3-Mkt",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735982330,
+    "signalID": "sig_com3_mkt_005",
+    "entry_name": "$COM3_MKT_3",
+    "account_equity": 17000,
+    "signal_legs": [
+      {
+        "instrument": "GC",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 1,
+        "order_type": "MARKET",
+        "price": 2050.0,
+        "stop_loss": 2040.0,
+        "take_profit": 2065.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com3-Mkt",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735982390,
+    "signalID": "sig_com3_mkt_006",
+    "entry_name": "$COM3_MKT_4",
+    "account_equity": 29000,
+    "signal_legs": [
+      {
+        "instrument": "GC",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 1,
+        "order_type": "MARKET",
+        "price": 2052.0,
+        "stop_loss": 2040.0,
+        "take_profit": 2070.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com3-Mkt",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735982510,
+    "signalID": "sig_com3_mkt_007",
+    "entry_signal_id": "$COM3_MKT_3",
+    "account_equity": 45000,
+    "signal_legs": [
+      {
+        "instrument": "GC",
+        "instrument_type": "FUTURE",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 1,
+        "order_type": "MARKET",
+        "price": 2060.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com3-Mkt",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735982570,
+    "signalID": "sig_com3_mkt_008",
+    "entry_signal_id": "$COM3_MKT_4",
+    "account_equity": 21000,
+    "signal_legs": [
+      {
+        "instrument": "GC",
+        "instrument_type": "FUTURE",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 1,
+        "order_type": "MARKET",
+        "price": 2062.0
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com3-Mkt",
+    "signal_type": "ENTRY",
+    "signal_sent_EPOCH": 1735982660,
+    "signalID": "sig_com3_mkt_009",
+    "entry_name": "$COM3_MKT_5",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "NG",
+        "instrument_type": "FUTURE",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 3,
+        "order_type": "MARKET",
+        "price": 3.15,
+        "stop_loss": 3.05,
+        "take_profit": 3.35
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 6
+  },
+  {
+    "strategy_name": "Com3-Mkt",
+    "signal_type": "EXIT",
+    "signal_sent_EPOCH": 1735982780,
+    "signalID": "sig_com3_mkt_010",
+    "entry_signal_id": "$COM3_MKT_5",
+    "account_equity": 10000,
+    "signal_legs": [
+      {
+        "instrument": "NG",
+        "instrument_type": "FUTURE",
+        "action": "SELL",
+        "direction": "LONG",
+        "quantity": 3,
+        "order_type": "MARKET",
+        "price": 3.28
+      }
+    ],
+    "environment": "staging",
+    "staging": true,
+    "wait": 0
+  }
+]

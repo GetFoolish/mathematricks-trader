@@ -55,6 +55,22 @@ body {
   .table-cell {
     @apply px-4 py-3 text-sm text-gray-100;
   }
+
+  .table-sticky-header {
+    @apply sticky top-0 z-10 bg-gray-800 shadow-md;
+  }
+
+  .table-row-hover {
+    @apply hover:bg-gray-700/50 transition-colors;
+  }
+
+  .synthetic-column {
+    @apply text-gray-400 italic;
+  }
+
+  .formula-tooltip {
+    @apply bg-purple-900/20 border border-purple-700 rounded-lg p-3 mt-2;
+  }
 }
 
 @layer utilities {
@@ -79,5 +95,20 @@ body {
 
   .animate-fade-in-out {
     animation: fade-in-out 1s ease-in-out;
+  }
+
+  @keyframes expand {
+    from {
+      opacity: 0;
+      max-height: 0;
+    }
+    to {
+      opacity: 1;
+      max-height: 200px;
+    }
+  }
+
+  .animate-expand {
+    animation: expand 0.3s ease-out;
   }
 }

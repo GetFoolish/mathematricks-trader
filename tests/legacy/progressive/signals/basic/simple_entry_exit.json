@@ -1,0 +1,19 @@
+{
+  "signal_id": "test_simple_entry_exit_{{timestamp}}",
+  "strategy_id": "test_strategy_1",
+  "account_id": "IBKR-TESTING-ACCOUNT",
+  "instrument": "AAPL",
+  "instrument_type": "STOCK",
+  "signal_type": "ENTRY",
+  "direction": "LONG",
+  "signal_time": "{{current_time}}",
+  "entry_price": null,
+  "quantity": 1,
+  "stop_loss": null,
+  "take_profit": null,
+  "metadata": {
+    "test_name": "simple_entry_exit",
+    "test_category": "basic",
+    "description": "Basic entry and exit test for a single stock"
+  }
+}

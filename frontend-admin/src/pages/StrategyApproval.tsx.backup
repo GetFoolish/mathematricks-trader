@@ -1,0 +1,848 @@
+import React, { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { apiClient } from '../services/api';
+import { CheckCircle, XCircle, Eye, Filter, Clock, CheckCheck, Ban, Upload } from 'lucide-react';
+import type { StrategySubmission, ApproveSubmissionRequest } from '../types';
+
+export const StrategyApproval: React.FC = () => {
+  const queryClient = useQueryClient();
+  const [statusFilter, setStatusFilter] = useState<string>('PENDING_APPROVAL');
+  const [selectedSubmission, setSelectedSubmission] = useState<StrategySubmission | null>(null);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [showRejectionModal, setShowRejectionModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+
+  // Fetch submissions
+  const { data: submissions, isLoading } = useQuery({
+    queryKey: ['strategy-submissions', statusFilter],
+    queryFn: () => apiClient.getStrategySubmissions(statusFilter),
+  });
+
+  // Approve mutation
+  const approveMutation = useMutation({
+    mutationFn: ({ submissionId, data }: { submissionId: string; data: ApproveSubmissionRequest }) =>
+      apiClient.approveSubmission(submissionId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['strategy-submissions'] });
+      queryClient.invalidateQueries({ queryKey: ['strategies'] });
+      setShowApprovalModal(false);
+      setSelectedSubmission(null);
+    },
+  });
+
+  // Reject mutation
+  const rejectMutation = useMutation({
+    mutationFn: ({ submissionId, reason }: { submissionId: string; reason: string }) =>
+      apiClient.rejectSubmission(submissionId, { rejection_reason: reason }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['strategy-submissions'] });
+      setShowRejectionModal(false);
+      setSelectedSubmission(null);
+    },
+  });
+
+  // Upload mutation
+  const uploadMutation = useMutation({
+    mutationFn: async (formData: FormData) => {
+      const response = await fetch('http://localhost:8003/api/v1/public/submit-strategy', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Upload failed');
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['strategy-submissions'] });
+      setShowUploadModal(false);
+    },
+  });
+
+  const handleViewDetails = (submission: StrategySubmission) => {
+    setSelectedSubmission(submission);
+  };
+
+  const handleApprove = (submission: StrategySubmission) => {
+    setSelectedSubmission(submission);
+    setShowApprovalModal(true);
+  };
+
+  const handleReject = (submission: StrategySubmission) => {
+    setSelectedSubmission(submission);
+    setShowRejectionModal(true);
+  };
+
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr).toLocaleString();
+  };
+
+  const formatNumber = (num: number, decimals: number = 2) => {
+    return num.toFixed(decimals);
+  };
+
+  const getStatusBadge = (status: string) => {
+    const styles = {
+      PENDING_APPROVAL: 'bg-yellow-900 text-yellow-300',
+      APPROVED: 'bg-green-900 text-green-300',
+      REJECTED: 'bg-red-900 text-red-300',
+    };
+    return styles[status as keyof typeof styles] || 'bg-gray-700 text-gray-300';
+  };
+
+  const getStatusIcon = (status: string) => {
+    if (status === 'PENDING_APPROVAL') return <Clock className="h-4 w-4" />;
+    if (status === 'APPROVED') return <CheckCheck className="h-4 w-4" />;
+    if (status === 'REJECTED') return <Ban className="h-4 w-4" />;
+    return null;
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Fresh Strategies</h2>
+          <p className="text-gray-400 mt-1">Review and approve strategy submissions from developers</p>
+        </div>
+        <button
+          onClick={() => setShowUploadModal(true)}
+          className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+        >
+          <Upload className="h-5 w-5" />
+          <span>Upload Strategy</span>
+        </button>
+      </div>
+
+      {/* Status Filter */}
+      <div className="flex items-center space-x-4">
+        <Filter className="h-5 w-5 text-gray-400" />
+        <div className="flex space-x-2">
+          {['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'ALL'].map((status) => (
+            <button
+              key={status}
+              onClick={() => setStatusFilter(status === 'ALL' ? '' : status)}
+              className={`px-4 py-2 rounded-lg transition-colors ${
+                (status === 'ALL' && statusFilter === '') || statusFilter === status
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              {status.replace('_', ' ')}
+            </button>
+          ))}
+        </div>
+        {submissions && (
+          <span className="text-gray-400 ml-4">
+            {submissions.length} {submissions.length === 1 ? 'submission' : 'submissions'}
+          </span>
+        )}
+      </div>
+
+      {/* Submissions Table */}
+      {isLoading ? (
+        <div className="text-center py-12 text-gray-400">Loading submissions...</div>
+      ) : !submissions || submissions.length === 0 ? (
+        <div className="text-center py-12 bg-gray-800 rounded-lg border border-gray-700">
+          <Clock className="h-12 w-12 text-gray-600 mx-auto mb-4" />
+          <p className="text-gray-400">No submissions found</p>
+          <p className="text-gray-500 text-sm mt-2">
+            {statusFilter === 'PENDING_APPROVAL'
+              ? 'Check back later for new strategy submissions'
+              : 'Try changing the filter'}
+          </p>
+        </div>
+      ) : (
+        <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-gray-750 border-b border-gray-700">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Status
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Strategy Name
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Developer
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Key Metrics
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Submitted
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-700">
+              {submissions.map((submission) => (
+                <tr key={submission.submission_id} className="hover:bg-gray-750 transition-colors">
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span
+                      className={`inline-flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-medium ${getStatusBadge(
+                        submission.status
+                      )}`}
+                    >
+                      {getStatusIcon(submission.status)}
+                      <span>{submission.status.replace('_', ' ')}</span>
+                    </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-white font-medium">{submission.strategy_name}</div>
+                    <div className="text-gray-400 text-sm">ID: {submission.submission_id}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-white">{submission.developer_info.name}</div>
+                    <div className="text-gray-400 text-sm">{submission.developer_info.email}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex space-x-4 text-sm">
+                      <div>
+                        <span className="text-gray-400">CAGR:</span>
+                        <span className="text-white ml-1 font-medium">
+                          {formatNumber(submission.metrics.cagr)}%
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-400">Sharpe:</span>
+                        <span className="text-white ml-1 font-medium">
+                          {formatNumber(submission.metrics.sharpe_ratio, 2)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-400">Calmar:</span>
+                        <span className="text-white ml-1 font-medium">
+                          {formatNumber(submission.metrics.calmar_ratio, 2)}
+                        </span>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-gray-300 text-sm whitespace-nowrap">
+                    {formatDate(submission.submitted_at)}
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => handleViewDetails(submission)}
+                        className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                        title="View Details"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                      {submission.status === 'PENDING_APPROVAL' && (
+                        <>
+                          <button
+                            onClick={() => handleApprove(submission)}
+                            className="p-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+                            title="Approve"
+                          >
+                            <CheckCircle className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleReject(submission)}
+                            className="p-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                            title="Reject"
+                          >
+                            <XCircle className="h-4 w-4" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Details Modal */}
+      {selectedSubmission && !showApprovalModal && !showRejectionModal && (
+        <DetailsModal submission={selectedSubmission} onClose={() => setSelectedSubmission(null)} />
+      )}
+
+      {/* Approval Modal */}
+      {showApprovalModal && selectedSubmission && (
+        <ApprovalModal
+          submission={selectedSubmission}
+          onApprove={(data) => {
+            approveMutation.mutate({ submissionId: selectedSubmission.submission_id, data });
+          }}
+          onClose={() => {
+            setShowApprovalModal(false);
+            setSelectedSubmission(null);
+          }}
+          isLoading={approveMutation.isPending}
+        />
+      )}
+
+      {/* Rejection Modal */}
+      {showRejectionModal && selectedSubmission && (
+        <RejectionModal
+          submission={selectedSubmission}
+          onReject={(reason) => {
+            rejectMutation.mutate({ submissionId: selectedSubmission.submission_id, reason });
+          }}
+          onClose={() => {
+            setShowRejectionModal(false);
+            setSelectedSubmission(null);
+          }}
+          isLoading={rejectMutation.isPending}
+        />
+      )}
+
+      {/* Upload Modal */}
+      {showUploadModal && (
+        <UploadModal
+          onUpload={(formData) => {
+            uploadMutation.mutate(formData);
+          }}
+          onClose={() => setShowUploadModal(false)}
+          isLoading={uploadMutation.isPending}
+        />
+      )}
+    </div>
+  );
+};
+
+// Details Modal Component
+const DetailsModal: React.FC<{
+  submission: StrategySubmission;
+  onClose: () => void;
+}> = ({ submission, onClose }) => {
+  const formatNumber = (num: number, decimals: number = 2) => num.toFixed(decimals);
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 bg-gray-800 border-b border-gray-700 px-6 py-4 flex items-center justify-between">
+          <h3 className="text-xl font-bold text-white">Submission Details</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-white transition-colors"
+          >
+            <XCircle className="h-6 w-6" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* Strategy Info */}
+          <div>
+            <h4 className="text-lg font-semibold text-white mb-3">Strategy Information</h4>
+            <div className="grid grid-cols-2 gap-4 bg-gray-750 p-4 rounded-lg">
+              <div>
+                <p className="text-gray-400 text-sm">Strategy Name</p>
+                <p className="text-white font-medium">{submission.strategy_name}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 text-sm">Submission ID</p>
+                <p className="text-white font-mono text-sm">{submission.submission_id}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 text-sm">Status</p>
+                <p className="text-white">{submission.status}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 text-sm">Submitted</p>
+                <p className="text-white text-sm">{new Date(submission.submitted_at).toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Developer Info */}
+          <div>
+            <h4 className="text-lg font-semibold text-white mb-3">Developer Information</h4>
+            <div className="bg-gray-750 p-4 rounded-lg space-y-2">
+              <div>
+                <p className="text-gray-400 text-sm">Name</p>
+                <p className="text-white">{submission.developer_info.name}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 text-sm">Email</p>
+                <p className="text-white">{submission.developer_info.email}</p>
+              </div>
+              {submission.developer_info.note && (
+                <div>
+                  <p className="text-gray-400 text-sm">Notes</p>
+                  <p className="text-white">{submission.developer_info.note}</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Performance Metrics */}
+          <div>
+            <h4 className="text-lg font-semibold text-white mb-3">Performance Metrics</h4>
+            <div className="grid grid-cols-3 gap-4">
+              <MetricCard label="CAGR" value={`${formatNumber(submission.metrics.cagr)}%`} />
+              <MetricCard label="Sharpe Ratio" value={formatNumber(submission.metrics.sharpe_ratio, 2)} />
+              <MetricCard label="Calmar Ratio" value={formatNumber(submission.metrics.calmar_ratio, 2)} />
+              <MetricCard label="Max Drawdown" value={`${formatNumber(submission.metrics.max_drawdown)}%`} />
+              <MetricCard label="Total Return" value={`${formatNumber(submission.metrics.total_return)}%`} />
+              <MetricCard label="Win Rate" value={`${formatNumber(submission.metrics.win_rate)}%`} />
+              <MetricCard label="Volatility (Ann.)" value={`${formatNumber(submission.metrics.volatility_annual)}%`} />
+              <MetricCard label="Sortino Ratio" value={formatNumber(submission.metrics.sortino_ratio, 2)} />
+              <MetricCard label="Profit Factor" value={formatNumber(submission.metrics.profit_factor, 2)} />
+            </div>
+          </div>
+
+          {/* Backtest Period */}
+          <div>
+            <h4 className="text-lg font-semibold text-white mb-3">Backtest Period</h4>
+            <div className="grid grid-cols-3 gap-4 bg-gray-750 p-4 rounded-lg">
+              <div>
+                <p className="text-gray-400 text-sm">Start Date</p>
+                <p className="text-white">{submission.metrics.start_date}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 text-sm">End Date</p>
+                <p className="text-white">{submission.metrics.end_date}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 text-sm">Total Days</p>
+                <p className="text-white">{submission.metrics.num_days}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Synthetic Data Warning */}
+          {submission.synthetic_data.columns_generated.length > 0 && (
+            <div className="bg-yellow-900 bg-opacity-20 border border-yellow-700 rounded-lg p-4">
+              <p className="text-yellow-300 font-medium mb-2">⚠️ Synthetic Data Generated</p>
+              <p className="text-yellow-200 text-sm mb-2">
+                The following columns were generated synthetically:
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {submission.synthetic_data.columns_generated.map((col) => (
+                  <span key={col} className="px-2 py-1 bg-yellow-800 text-yellow-100 text-xs rounded">
+                    {col}
+                  </span>
+                ))}
+              </div>
+              <p className="text-yellow-200 text-sm mt-2">
+                For more accurate optimization, request real data for these columns.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Approval Modal Component
+const ApprovalModal: React.FC<{
+  submission: StrategySubmission;
+  onApprove: (data: ApproveSubmissionRequest) => void;
+  onClose: () => void;
+  isLoading: boolean;
+}> = ({ submission, onApprove, onClose, isLoading }) => {
+  const [formData, setFormData] = useState<ApproveSubmissionRequest>({
+    strategy_id: '',
+    asset_class: 'equity',
+    instruments: [],
+    accounts: [],
+    status: 'ACTIVE',
+    trading_mode: 'PAPER',
+    include_in_optimization: true,
+    notes: '',
+  });
+
+  const [instrumentInput, setInstrumentInput] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onApprove(formData);
+  };
+
+  const addInstrument = () => {
+    if (instrumentInput.trim() && !formData.instruments.includes(instrumentInput.trim())) {
+      setFormData({
+        ...formData,
+        instruments: [...formData.instruments, instrumentInput.trim()],
+      });
+      setInstrumentInput('');
+    }
+  };
+
+  const removeInstrument = (instrument: string) => {
+    setFormData({
+      ...formData,
+      instruments: formData.instruments.filter((i) => i !== instrument),
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 bg-gray-800 border-b border-gray-700 px-6 py-4 flex items-center justify-between">
+          <h3 className="text-xl font-bold text-white">Approve Strategy</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
+            <XCircle className="h-6 w-6" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Strategy ID <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="text"
+              required
+              value={formData.strategy_id}
+              onChange={(e) => setFormData({ ...formData, strategy_id: e.target.value })}
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              placeholder="e.g., SPX_Momentum_V2"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Asset Class <span className="text-red-400">*</span>
+            </label>
+            <select
+              required
+              value={formData.asset_class}
+              onChange={(e) => setFormData({ ...formData, asset_class: e.target.value })}
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="equity">Equity</option>
+              <option value="options">Options</option>
+              <option value="futures">Futures</option>
+              <option value="forex">Forex</option>
+              <option value="crypto">Crypto</option>
+              <option value="commodities">Commodities</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Instruments <span className="text-red-400">*</span>
+            </label>
+            <div className="flex space-x-2 mb-2">
+              <input
+                type="text"
+                value={instrumentInput}
+                onChange={(e) => setInstrumentInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addInstrument())}
+                className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+                placeholder="e.g., SPX, SPY"
+              />
+              <button
+                type="button"
+                onClick={addInstrument}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+              >
+                Add
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {formData.instruments.map((instrument) => (
+                <span
+                  key={instrument}
+                  className="px-3 py-1 bg-gray-700 text-white rounded-full text-sm flex items-center space-x-2"
+                >
+                  <span>{instrument}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeInstrument(instrument)}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">Status</label>
+              <select
+                value={formData.status}
+                onChange={(e) => setFormData({ ...formData, status: e.target.value as 'ACTIVE' | 'TESTING' })}
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="ACTIVE">ACTIVE</option>
+                <option value="TESTING">TESTING</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">Trading Mode</label>
+              <select
+                value={formData.trading_mode}
+                onChange={(e) => setFormData({ ...formData, trading_mode: e.target.value as 'PAPER' | 'LIVE' })}
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="PAPER">PAPER</option>
+                <option value="LIVE">LIVE</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={formData.include_in_optimization}
+                onChange={(e) => setFormData({ ...formData, include_in_optimization: e.target.checked })}
+                className="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm text-gray-300">Include in portfolio optimization</span>
+            </label>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">Notes</label>
+            <textarea
+              value={formData.notes}
+              onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+              rows={3}
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              placeholder="Optional approval notes..."
+            />
+          </div>
+
+          <div className="flex justify-end space-x-3 pt-4 border-t border-gray-700">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isLoading || formData.instruments.length === 0}
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isLoading ? 'Approving...' : 'Approve Strategy'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// Rejection Modal Component
+const RejectionModal: React.FC<{
+  submission: StrategySubmission;
+  onReject: (reason: string) => void;
+  onClose: () => void;
+  isLoading: boolean;
+}> = ({ submission, onReject, onClose, isLoading }) => {
+  const [reason, setReason] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onReject(reason);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 rounded-lg max-w-lg w-full">
+        <div className="bg-gray-800 border-b border-gray-700 px-6 py-4 flex items-center justify-between">
+          <h3 className="text-xl font-bold text-white">Reject Strategy</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
+            <XCircle className="h-6 w-6" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <p className="text-gray-300">
+            Are you sure you want to reject the strategy "{submission.strategy_name}"?
+          </p>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Rejection Reason <span className="text-red-400">*</span>
+            </label>
+            <textarea
+              required
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={4}
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              placeholder="e.g., Insufficient backtest history (need at least 2 years)"
+            />
+          </div>
+
+          <div className="flex justify-end space-x-3 pt-4 border-t border-gray-700">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isLoading || !reason.trim()}
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isLoading ? 'Rejecting...' : 'Reject Strategy'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// Upload Modal Component
+const UploadModal: React.FC<{
+  onUpload: (formData: FormData) => void;
+  onClose: () => void;
+  isLoading: boolean;
+}> = ({ onUpload, onClose, isLoading }) => {
+  const [file, setFile] = useState<File | null>(null);
+  const [developerName, setDeveloperName] = useState('');
+  const [developerEmail, setDeveloperEmail] = useState('');
+  const [note, setNote] = useState('');
+  const [startingCapital, setStartingCapital] = useState('1000000');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('strategy_name', file.name.replace('.csv', ''));
+    formData.append('developer_name', developerName);
+    formData.append('developer_email', developerEmail);
+    formData.append('developer_note', note);
+    formData.append('starting_capital', startingCapital);
+
+    onUpload(formData);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <form onSubmit={handleSubmit} className="p-6 space-y-6">
+          <div className="flex items-center justify-between pb-4 border-b border-gray-700">
+            <h3 className="text-xl font-bold text-white">Upload Strategy</h3>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-gray-400 hover:text-white"
+            >
+              <XCircle className="h-6 w-6" />
+            </button>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              CSV File <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="file"
+              accept=".csv"
+              required
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700"
+            />
+            <p className="text-gray-400 text-sm mt-1">
+              Required columns: Date, Daily_Return_Pct
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Developer Name <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="text"
+              required
+              value={developerName}
+              onChange={(e) => setDeveloperName(e.target.value)}
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              placeholder="e.g., John Doe"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Developer Email <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="email"
+              required
+              value={developerEmail}
+              onChange={(e) => setDeveloperEmail(e.target.value)}
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              placeholder="e.g., john@example.com"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Description / Note
+            </label>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={3}
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              placeholder="Optional description of the strategy..."
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Starting Capital
+            </label>
+            <input
+              type="number"
+              value={startingCapital}
+              onChange={(e) => setStartingCapital(e.target.value)}
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-blue-500"
+              placeholder="1000000"
+            />
+          </div>
+
+          <div className="flex justify-end space-x-3 pt-4 border-t border-gray-700">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isLoading}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isLoading || !file}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+            >
+              {isLoading ? (
+                <>
+                  <span>Uploading...</span>
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4" />
+                  <span>Upload Strategy</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// Metric Card Component
+const MetricCard: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div className="bg-gray-750 p-4 rounded-lg">
+    <p className="text-gray-400 text-sm mb-1">{label}</p>
+    <p className="text-white text-lg font-semibold">{value}</p>
+  </div>
+);

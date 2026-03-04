@@ -11,6 +11,7 @@ from generators.client_dashboard import generate_client_dashboard
 from generators.signal_sender_dashboard import generate_all_signal_sender_dashboards
 from generators.fund_balances_widget import generate_fund_balances_widget
 from generators.account_statement_widget import generate_account_statement_widget
+from generators.system_health_widget import generate_system_health_widget
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,15 @@ def generate_all_widget_data(mongo_client: MongoClient):
                 "fund_id": None,
                 "timestamp": datetime.utcnow().isoformat()
             })
+
+            # Generate system health widget (refreshed every 30s)
+            generate_system_health_widget(mongo_client, fund_id=None)
+            emit_widget_update_event({
+                "widget_type": "SystemHealth",
+                "fund_id": None,
+                "timestamp": datetime.utcnow().isoformat()
+            })
+
         except Exception as e:
             logger.error(f"Failed to generate combined widgets: {e}")
 

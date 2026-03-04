@@ -1,1274 +1,366 @@
 """
-Execution Service - MVP
-Connects to IBKR broker, executes orders, and reports back execution confirmations and account state.
+Execution Service - Modern Architecture
+Strategy-driven broker initialization and order execution
+Consolidated service: handles broker connections, order execution, and account data
 """
 import os
 import sys
 import logging
-import json
-import argparse
+import threading
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, List, Optional, Set
 from pymongo import MongoClient
 from dotenv import load_dotenv
-import threading
 import time
-import queue
-import requests
 
-# Add services directory to path so we can import brokers package
+# Add services to path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-SERVICES_PATH = os.path.join(PROJECT_ROOT, 'services')
-sys.path.insert(0, SERVICES_PATH)
+sys.path.insert(0, os.path.join(PROJECT_ROOT, 'services'))
 
 # Import broker library
-from brokers import BrokerFactory, OrderSide, OrderType, OrderStatus
-from brokers.exceptions import (
-    BrokerConnectionError,
-    OrderRejectedError,
-    BrokerAPIError,
-    InvalidSymbolError
-)
+from brokers import BrokerFactory
+from services.utils.encryption import decrypt_dict
 
-# Load environment variables from project root
-env_path = os.path.join(PROJECT_ROOT, '.env')
-load_dotenv(env_path)
+# Import API server
+from services.execution_service import api
+
+# Import gateway controller for IB Gateway management
+from services.execution_service.gateway_controller import GatewayController
+
+# Import account management (migrated from account-data-service)
+from services.execution_service.repository import TradingAccountRepository
+from services.execution_service.broker_poller import BrokerPoller
+
+# Load environment
+load_dotenv(os.path.join(PROJECT_ROOT, '.env'))
 
 # Configure logging
 LOG_DIR = os.path.join(PROJECT_ROOT, 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# Create custom formatter matching Cerebro format
-custom_formatter = logging.Formatter('|%(levelname)s|%(message)s|%(asctime)s|file:%(filename)s:line No.%(lineno)d')
-
-# Create file handler with custom format
+formatter = logging.Formatter('|%(levelname)s|%(message)s|%(asctime)s|file:%(filename)s:line No.%(lineno)d')
 file_handler = logging.FileHandler(os.path.join(LOG_DIR, 'execution_service.log'))
-file_handler.setFormatter(custom_formatter)
-
-# Create console handler with same format
+file_handler.setFormatter(formatter)
 console_handler = logging.StreamHandler()
-console_handler.setFormatter(custom_formatter)
+console_handler.setFormatter(formatter)
 
-# Configure root logger
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=[file_handler, console_handler]
-)
+logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
 logger = logging.getLogger(__name__)
 
-# Signal processing log handler - unified log for complete signal journey
-signal_processing_handler = logging.FileHandler(os.path.join(LOG_DIR, 'signal_processing.log'))
-signal_processing_handler.setLevel(logging.INFO)
-signal_processing_formatter = logging.Formatter(
-    '%(asctime)s | [EXECUTION] | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-signal_processing_handler.setFormatter(signal_processing_formatter)
-# Only log signal-related events to this file (filtered later)
-signal_processing_handler.addFilter(lambda record: 'SIGNAL:' in record.getMessage() or 'ORDER:' in record.getMessage())
-
-# Add signal processing handler
-signal_logger = logging.getLogger('signal_processing')
-signal_logger.addHandler(signal_processing_handler)
-signal_logger.setLevel(logging.INFO)
-
-# ========================================================================
-# COMMAND-LINE ARGUMENTS
-# ========================================================================
-
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description='Execution Service - Order Execution Engine')
-parser.add_argument('--use-mock-broker', action='store_true',
-                    help='Use Mock broker for all orders (testing mode, overrides strategy account routing)')
-args = parser.parse_args()
-
-# Log mode
-if args.use_mock_broker:
-    logger.warning("=" * 80)
-    logger.warning("🧪 MOCK MODE ENABLED: All orders will be routed to Mock_Paper broker")
-    logger.warning("=" * 80)
-
-# ========================================================================
-# DATABASE INITIALIZATION
-# ========================================================================
-
-# Initialize MongoDB
-mongo_uri = os.getenv('MONGODB_URI')
-if not mongo_uri:
-    raise ValueError("MONGODB_URI environment variable is not set - check .env file")
-
-# Only use TLS for remote MongoDB Atlas connections (not localhost)
-use_tls = 'mongodb+srv' in mongo_uri or 'mongodb.net' in mongo_uri
-if use_tls:
-    mongo_client = MongoClient(
-        mongo_uri,
-        tls=True,
-        tlsAllowInvalidCertificates=True  # For development only
-    )
-else:
-    mongo_client = MongoClient(mongo_uri)  # No TLS for localhost
+# MongoDB connection
+MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27018')
+mongo_client = MongoClient(MONGODB_URI)
 db = mongo_client['mathematricks_trading']
-# execution_confirmations collection removed - execution data stored in signal_store.execution field
-trading_orders_collection = db['trading_orders']
-trading_accounts_collection = db['trading_accounts']  # For position tracking
-signal_store_collection = db['signal_store']  # For updating execution data
 
-# Pub/Sub removed - using MongoDB Change Streams instead
-# All event-driven communication now via MongoDB
-
-# Account Data Service Configuration
-ACCOUNT_DATA_SERVICE_URL = os.getenv('ACCOUNT_DATA_SERVICE_URL', 'http://localhost:8082')
-
-# IBKR Configuration (fallback for backward compatibility)
-IBKR_HOST = os.getenv('IBKR_HOST', '127.0.0.1')
-IBKR_PORT = int(os.getenv('IBKR_PORT', '7497'))  # 7497 for TWS, 4002 for IB Gateway
-IBKR_CLIENT_ID = int(os.getenv('IBKR_CLIENT_ID', '1'))
+# Global broker pool, gateway controller, and account repository
+broker_pool: Dict[str, any] = {}
+gateway_controller = GatewayController()
+trading_accounts_collection = db['trading_accounts']
+trading_accounts_repository = TradingAccountRepository(trading_accounts_collection)
+broker_poller = None
 
 
-def log_open_positions(account_id: str, label: str):
+def get_required_accounts_from_strategies() -> Set[str]:
     """
-    Log open positions for an account to help debug position tracking.
+    Analyze all strategies to determine which accounts are needed.
+    Returns set of account_ids that should be initialized.
+    """
+    logger.info("📊 Analyzing strategies to determine required accounts...")
+    
+    # Get all strategies from MongoDB
+    strategies = list(db.strategies.find({}, {"strategy_id": 1, "accounts": 1, "_id": 0}))
+    logger.info(f"Found {len(strategies)} strategies in database")
+    
+    # Collect all unique account_ids across all routing modes
+    required_accounts = set()
+    
+    for strategy in strategies:
+        strategy_id = strategy.get('strategy_id')
+        accounts = strategy.get('accounts', {})
+        
+        # Add accounts from all routing modes (mock, paper, live)
+        for mode, account_list in accounts.items():
+            if account_list:  # Skip empty lists
+                required_accounts.update(account_list)
+                logger.debug(f"  {strategy_id} -> {mode}: {account_list}")
+    
+    logger.info(f"✅ Required accounts: {sorted(required_accounts)}")
+    return required_accounts
 
-    Args:
-        account_id: Account ID to query
-        label: Label for the log message (e.g., "BEFORE ORDER", "AFTER ORDER")
+
+def get_account_details(account_id: str) -> Optional[Dict]:
+    """Fetch account details from MongoDB."""
+    return db.trading_accounts.findOne({"account_id": account_id})
+
+
+def decrypt_auth_details(auth_details: Dict, broker_name: str) -> Dict:
+    """Decrypt authentication details based on broker type."""
+    if not auth_details:
+        return {}
+    
+    # Define which fields to decrypt per broker
+    decrypt_fields_map = {
+        'IBKR': ['password', 'username', 'totp_secret'],
+        'Coinbase': ['api_key_name', 'api_key'],
+        'Binance': ['api_key', 'api_secret'],
+        'Bybit': ['api_key', 'api_secret'],
+        'Alpaca': ['api_key', 'api_secret'],
+        'Oanda': ['api_key'],
+        'Mock': []
+    }
+    
+    fields_to_decrypt = decrypt_fields_map.get(broker_name, [])
+    
+    if fields_to_decrypt:
+        return decrypt_dict(auth_details, fields_to_decrypt)
+    return auth_details
+
+
+def build_broker_config(broker_name: str, account_id: str, auth_details: Dict) -> Dict:
+    """Build broker configuration from account details."""
+    config = {"broker": broker_name, "account_id": account_id}
+    
+    if broker_name == 'IBKR':
+        config.update({
+            "host": auth_details.get('host', 'host.docker.internal'),
+            "port": auth_details.get('port', 4004),
+            "client_id": auth_details.get('client_id', 100)
+        })
+        if 'market_data_type' in auth_details:
+            config['market_data_type'] = auth_details['market_data_type']
+    
+    elif broker_name in ['Binance', 'Bybit']:
+        config.update({
+            "api_key": auth_details.get('api_key'),
+            "api_secret": auth_details.get('api_secret'),
+            "testnet": auth_details.get('testnet', False)
+        })
+    
+    elif broker_name == 'Alpaca':
+        config.update({
+            "api_key": auth_details.get('api_key'),
+            "api_secret": auth_details.get('api_secret'),
+            "paper": auth_details.get('paper', True)
+        })
+    
+    elif broker_name == 'Oanda':
+        config.update({
+            "api_key": auth_details.get('api_key'),
+            "practice": auth_details.get('practice', True)
+        })
+
+    elif broker_name == 'Coinbase':
+        config.update({
+            "api_key": auth_details.get('api_key_name') or auth_details.get('api_key'),
+            "api_secret": auth_details.get('api_key'),
+            "sandbox": auth_details.get('sandbox', True)
+        })
+    
+    elif broker_name == 'Mock':
+        config.update(auth_details)
+    
+    else:
+        config.update(auth_details)
+    
+    return config
+
+
+def initialize_broker(account_id: str) -> Optional[any]:
+    """
+    Initialize a single broker for the given account.
+    Returns broker instance or None if initialization failed.
     """
     try:
-        account = trading_accounts_collection.find_one({"account_id": account_id})
-        if account:
-            all_positions = account.get('open_positions', [])
-            # Filter to only show OPEN positions (not CLOSED)
-            open_positions = [p for p in all_positions if p.get('status') == 'OPEN']
-            if open_positions:
-                logger.info(f"📊 OPEN POSITIONS [{label}] for {account_id}:")
-                for pos in open_positions:
-                    symbol = pos.get('instrument', '?')
-                    qty = pos.get('quantity', 0)
-                    avg_price = pos.get('avg_entry_price', 0)
-                    strategy = pos.get('strategy_id', '?')
-                    logger.info(f"   - {symbol}: {qty} shares @ ${avg_price:.2f} | Strategy: {strategy}")
+        # Get account from MongoDB
+        account = db.trading_accounts.find_one({"account_id": account_id})
+        
+        if not account:
+            logger.error(f"❌ Broker {account_id}: Account not found in database")
+            return None
+        
+        broker_name = account.get('broker')
+        auth_details = account.get('authentication_details', {})
+        
+        # Decrypt sensitive fields
+        auth_details = decrypt_auth_details(auth_details, broker_name)
+        
+        # Build broker config
+        config = build_broker_config(broker_name, account_id, auth_details)
+        
+        # Create broker instance
+        broker = BrokerFactory.create_broker(config)
+        
+        logger.info(f"✅ Broker {account_id}: Started ({broker_name})")
+        return broker
+        
+    except Exception as e:
+        logger.error(f"❌ Broker {account_id}: Error: {str(e)}")
+        return None
+
+
+def connect_brokers():
+    """Connect all initialized brokers."""
+    logger.info("\n🔌 Connecting Brokers...")
+    
+    connected = 0
+    for account_id, broker in broker_pool.items():
+        try:
+            if hasattr(broker, 'connect'):
+                broker.connect()
+                if broker.is_connected():
+                    logger.info(f"✅ Connected: {account_id}")
+                    connected += 1
+                else:
+                    logger.warning(f"⚠️  Failed to connect: {account_id}")
             else:
-                logger.info(f"📊 OPEN POSITIONS [{label}] for {account_id}: (none)")
-        else:
-            logger.warning(f"📊 OPEN POSITIONS [{label}]: Account {account_id} not found in database")
-    except Exception as e:
-        logger.error(f"Error logging open positions: {e}")
-
-# ========================================================================
-# BROKER POOL - Multi-Broker Architecture
-# ========================================================================
-
-# Broker pool: {account_id: broker_instance}
-broker_pool = {}
+                logger.info(f"✅ No connection needed: {account_id}")
+                connected += 1
+        except Exception as e:
+            logger.error(f"❌ Connection error for {account_id}: {e}")
+    
+    logger.info(f"\n✅ Connected: {connected}/{len(broker_pool)} brokers")
 
 
-def get_active_accounts_from_service() -> List[Dict[str, Any]]:
+def start_ibkr_gateways():
     """
-    Query AccountDataService for all active accounts.
-
-    Returns:
-        List of active account dictionaries
+    Start IB Gateway containers for all IBKR accounts in the broker pool.
+    This ensures IB Gateway is running before trying to connect brokers.
     """
-    try:
-        response = requests.get(f"{ACCOUNT_DATA_SERVICE_URL}/api/v1/accounts")
-        response.raise_for_status()
-        accounts_data = response.json()
-
-        # Filter for ACTIVE accounts only
-        active_accounts = [
-            acc for acc in accounts_data.get('accounts', [])
-            if acc.get('status') == 'ACTIVE'
-        ]
-
-        logger.info(f"Found {len(active_accounts)} active accounts from AccountDataService")
-        return active_accounts
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to get accounts from AccountDataService: {str(e)}")
-        logger.warning("Falling back to single IBKR broker configuration")
-        return []
-    except Exception as e:
-        logger.error(f"Unexpected error getting accounts: {str(e)}")
-        return []
+    logger.info("\n🚀 Starting IB Gateway containers for IBKR accounts...")
+    
+    ibkr_accounts = []
+    
+    # Find all IBKR accounts in broker pool
+    for account_id, broker in broker_pool.items():
+        if hasattr(broker, 'broker_name') and broker.broker_name == 'IBKR':
+            # Get account details from MongoDB
+            account = db.trading_accounts.find_one({'account_id': account_id})
+            if account:
+                # CRITICAL: Decrypt auth details before passing to gateway controller
+                auth_details = account.get('authentication_details', {})
+                decrypted_auth = decrypt_auth_details(auth_details, 'IBKR')
+                
+                # Update account with decrypted auth
+                account_copy = account.copy()
+                account_copy['authentication_details'] = decrypted_auth
+                
+                ibkr_accounts.append(account_copy)
+    
+    if not ibkr_accounts:
+        logger.info("No IBKR accounts found - skipping gateway startup")
+        return
+    
+    logger.info(f"Found {len(ibkr_accounts)} IBKR account(s)")
+    
+    # Start gateway for each IBKR account
+    for account in ibkr_accounts:
+        account_id = account['account_id']
+        try:
+            success = gateway_controller.create_gateway_for_account(account)
+            if success:
+                logger.info(f"✅ IB Gateway ready for {account_id}")
+                
+                # Wait for gateway to fully initialize and log in (takes ~60s)
+                logger.info(f"⏳ Waiting 60s for {account_id} gateway to fully log in...")
+                time.sleep(60)
+            else:
+                logger.error(f"❌ Failed to start gateway for {account_id}")
+        except Exception as e:
+            logger.error(f"❌ Error starting gateway for {account_id}: {e}")
+    
+    logger.info("✅ IB Gateway startup complete")
 
 
 def initialize_broker_pool():
-    """
-    Initialize broker pool by creating broker instances for all active accounts.
-    Requires AccountDataService to provide accounts - no fallback broker created.
-    """
+    """Initialize all required brokers based on active strategies."""
     global broker_pool
-
-    logger.info("Initializing broker pool from AccountDataService...")
-
-    # Get active accounts
-    accounts = get_active_accounts_from_service()
-
-    if not accounts:
-        # No fallback - require AccountDataService to provide accounts
-        logger.warning("⚠️ No accounts from AccountDataService - broker pool will be empty")
-        logger.warning("⚠️ Execution service will not be able to execute orders until accounts are configured")
+    
+    logger.info("🚀 Initializing Broker Pool")
+    logger.info("=" * 80)
+    
+    # Step 1: Determine which accounts are needed
+    required_accounts = get_required_accounts_from_strategies()
+    
+    if not required_accounts:
+        logger.warning("⚠️  No accounts required - broker pool will be empty")
         return
-
-    # Create broker instance for each active account
-    for account in accounts:
-        account_id = account.get('account_id')
-        broker_name = account.get('broker')
-        auth_details = account.get('authentication_details', {})
-
-        try:
-            # Build broker config
-            broker_config = {
-                "broker": broker_name,
-                "account_id": account_id,
-                **auth_details  # Spread auth details (host, port, client_id, etc.)
-            }
-
-            # Create broker instance
-            broker_instance = BrokerFactory.create_broker(broker_config)
-            broker_pool[account_id] = broker_instance
-
-            logger.info(f"✅ Created {broker_name} broker for account: {account_id}")
-
-        except Exception as e:
-            logger.error(f"❌ Failed to create {broker_name} broker for account {account_id}: {str(e)}")
-            continue
-
-    logger.info(f"Broker pool initialized with {len(broker_pool)} broker(s)")
-
-
-def get_broker_for_account(account_id: str) -> Optional['AbstractBroker']:
-    """
-    Get broker instance for specific account.
-
-    Args:
-        account_id: Account ID (e.g., "IBKR_Paper", "Mock_Paper")
-
-    Returns:
-        Broker instance, or None if not found
-    """
-    if account_id not in broker_pool:
-        logger.error(f"❌ No broker found for account: {account_id}")
-        logger.error(f"   Available accounts: {list(broker_pool.keys())}")
-        return None
-
-    return broker_pool[account_id]
-
-
-# Initialize broker pool on startup
-initialize_broker_pool()
-
-# Order queue for threading safety
-# MongoDB Change Stream watcher runs in thread, orders are processed in main thread
-order_queue = queue.Queue()
-
-# Track active IBKR orders by order_id for cancellation
-active_ibkr_orders = {}  # {order_id: broker_order_id}
-
-# 🚨 CRITICAL FAILSAFE: Track processed signal IDs to prevent duplicate execution
-processed_signal_ids = set()  # In-memory deduplication
-SIGNAL_ID_EXPIRY_HOURS = 24  # Keep signal IDs for 24 hours
-
-
-def connect_all_brokers():
-    """
-    Connect to all brokers in the broker pool.
-    In mock mode, only connect to Mock broker (skip real brokers like IBKR).
-    """
-    logger.info(f"Connecting to {len(broker_pool)} broker(s)...")
-
-    success_count = 0
-    for account_id, broker_instance in broker_pool.items():
-        # In mock mode, skip non-Mock brokers to avoid unnecessary connection attempts
-        if args.use_mock_broker and broker_instance.broker_name != "Mock":
-            logger.info(f"⏭️ Skipping {broker_instance.broker_name} connection for {account_id} (mock mode)")
-            continue
-
-        try:
-            if not broker_instance.is_connected():
-                logger.info(f"Connecting to {broker_instance.broker_name} for account {account_id}...")
-                success = broker_instance.connect()
-                if success:
-                    logger.info(f"✅ Connected to {broker_instance.broker_name} for {account_id}")
-                    success_count += 1
-                else:
-                    logger.error(f"❌ Failed to connect to {broker_instance.broker_name} for {account_id}")
-            else:
-                logger.info(f"Already connected to {broker_instance.broker_name} for {account_id}")
-                success_count += 1
-
-        except BrokerConnectionError as e:
-            logger.error(f"❌ Broker connection error for {account_id}: {str(e)}")
-        except Exception as e:
-            logger.error(f"❌ Unexpected error connecting {account_id}: {str(e)}")
-
-    logger.info(f"Broker pool connection complete: {success_count}/{len(broker_pool)} connected")
-    return success_count > 0
-
-
-def submit_order_to_broker(order_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Submit order to broker using broker pool (multi-broker routing).
-
-    Routes order to correct broker based on order['account'] field.
-    In mock mode (--use-mock-broker), overrides all routing to Mock_Paper.
-    """
-    try:
-        # Get account from order
-        account_id = order_data.get('account')
-        if not account_id:
-            logger.error(f"❌ Order {order_data.get('order_id')} missing 'account' field - cannot route to broker")
-            return None
-
-        # MOCK MODE OVERRIDE: Route all orders to Mock_Paper if flag set
-        if args.use_mock_broker:
-            original_account = account_id
-            account_id = 'Mock_Paper'
-            logger.debug(f"MOCK MODE: Overriding account {original_account} → Mock_Paper")
-
-        # Get broker instance for this account
-        broker = get_broker_for_account(account_id)
-        if not broker:
-            logger.error(f"❌ No broker found for account {account_id} - order {order_data.get('order_id')} cannot be executed")
-            return None
-
-        # Ensure broker is connected
-        if not broker.is_connected():
-            logger.debug(f"Connecting to {broker.broker_name} for account {account_id}...")
-            if not broker.connect():
-                logger.error(f"❌ Failed to connect to {broker.broker_name} for {account_id}")
-                return None
-
-        logger.debug(f"Submitting order {order_data.get('order_id')} to {broker.broker_name} (account: {account_id})")
-
-        # Use broker library's place_order method
-        # The broker library handles all contract creation, qualification, and submission
-        result = broker.place_order(order_data)
-
-        if not result:
-            logger.error(f"❌ Broker rejected order {order_data.get('order_id')}")
-            return None
-
-        # Track active orders for cancellation
-        order_id = order_data['order_id']
-        broker_order_id = result.get('broker_order_id')
-        broker_confirmation_id = result.get('broker_confirmation_id')
-        active_ibkr_orders[order_id] = broker_order_id
-
-        # Log confirmation ID prominently
-        logger.info(f"📋 Order {order_id} submitted to broker")
-        logger.info(f"   Broker Order ID: {broker_order_id}")
-        logger.info(f"   IBKR Confirmation ID: {broker_confirmation_id}")
-        logger.info(f"   Status: {result.get('status')}")
-
-        # Return result with fill data from broker (Mock broker fills instantly, real broker updates later)
-        return {
-            "order_id": order_data['order_id'],
-            "ib_order_id": broker_order_id,
-            "broker_confirmation_id": broker_confirmation_id,
-            "status": result.get('status'),
-            "filled": result.get('filled', 0),
-            "remaining": result.get('remaining', order_data.get('quantity', 0)),
-            "avg_fill_price": result.get('avg_fill_price', 0),
-            "fills": result.get('fills', []),
-            "num_legs": 1
-        }
-
-    except OrderRejectedError as e:
-        logger.error(f"❌ Order {order_data.get('order_id')} rejected: {e.rejection_reason}")
-        return None
-    except InvalidSymbolError as e:
-        logger.error(f"❌ Invalid symbol in order {order_data.get('order_id')}: {str(e)}")
-        return None
-    except BrokerAPIError as e:
-        logger.error(f"❌ Broker API error for order {order_data.get('order_id')}: {e.error_code} - {str(e)}")
-        return None
-    except Exception as e:
-        logger.error(f"Error submitting order {order_data.get('order_id')}: {str(e)}", exc_info=True)
-        return None
-
-
-# Pub/Sub removed - execution confirmations stored directly in MongoDB
-# No need for separate publishing functions - all data in signal_store and trading_orders
-
-
-def is_mock_broker(account_id: str) -> bool:
-    """
-    Check if account is a mock broker account.
-
-    Mock brokers need manual balance updates when trades close with P&L.
-    Real brokers handle this automatically and we fetch updated balances.
-    """
-    return 'MOCK' in account_id.upper() or account_id.startswith('Mock_')
-
-
-def update_mock_broker_balance(
-    account_id: str,
-    realized_pnl: float,
-    quantity_closed: float,
-    exit_price: float
-):
-    """
-    Update mock broker account balance after trade close.
-
-    For mock brokers:
-    - Add realized P&L to cash_balance
-    - Reduce margin_used (position closed, capital freed)
-    - Update equity
-
-    Real brokers handle this automatically via their APIs.
-
-    Args:
-        account_id: Mock broker account ID
-        realized_pnl: Net P&L from the trade (after commission)
-        quantity_closed: Quantity that was closed
-        exit_price: Exit price per unit
-    """
-    try:
-        account = trading_accounts_collection.find_one({"account_id": account_id})
-        if not account:
-            logger.warning(f"⚠️ Account {account_id} not found for balance update")
-            return
-
-        # Current balances (nested under 'balances' object)
-        balances = account.get('balances', {})
-        current_cash = balances.get('cash_balance', account.get('cash_balance', 0.0))
-        current_margin = balances.get('margin_used', account.get('margin_used', 0.0))
-        current_equity = balances.get('equity', account.get('equity', 0.0))
-
-        # Calculate updates
-        # Add realized P&L to cash
-        new_cash = current_cash + realized_pnl
-
-        # Reduce margin (freed up capital from closed position)
-        # Estimate margin as 10% of notional for futures/options
-        freed_margin = (quantity_closed * exit_price) * 0.10
-        new_margin = max(0.0, current_margin - freed_margin)
-
-        # Update equity (cash + unrealized P&L + margin)
-        new_equity = current_equity + realized_pnl
-
-        # Update account document (balances are nested under 'balances')
-        update_result = trading_accounts_collection.update_one(
-            {"account_id": account_id},
-            {
-                "$set": {
-                    "balances.cash_balance": new_cash,
-                    "balances.cash": new_cash,
-                    "balances.margin_used": new_margin,
-                    "balances.equity": new_equity,
-                    "balances.last_updated": datetime.utcnow()
-                }
-            }
-        )
-
-        if update_result.modified_count > 0:
-            logger.info(
-                f"✅ Updated mock broker {account_id} balance: "
-                f"Cash: ${current_cash:.2f} → ${new_cash:.2f} "
-                f"(+${realized_pnl:.2f} P&L), "
-                f"Equity: ${current_equity:.2f} → ${new_equity:.2f}"
-            )
-
-            # IMMEDIATELY update fund total_equity (Single Source of Truth)
-            fund_id = account.get('fund_id')
-            if fund_id:
-                update_fund_total_equity(fund_id)
-        else:
-            logger.warning(f"⚠️ No account balance updated for {account_id}")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to update mock broker balance for {account_id}: {e}", exc_info=True)
-
-
-def update_fund_total_equity(fund_id: str) -> float:
-    """
-    Update funds.total_equity by summing all account equities for this fund.
-
-    THIS IS THE SINGLE SOURCE OF TRUTH for fund equity calculation.
-    Called immediately after any account balance change in Execution Service.
-
-    All other services (broker_poller, cerebro, dashboard) are READ-ONLY consumers.
-
-    Args:
-        fund_id: Fund ID to update
-
-    Returns:
-        Total equity across all accounts in the fund
-    """
-    try:
-        if not fund_id:
-            logger.warning("⚠️ No fund_id provided for equity update")
-            return 0.0
-
-        # Get all accounts for this fund
-        accounts = list(trading_accounts_collection.find(
-            {"fund_id": fund_id},
-            {"balances.equity": 1, "account_id": 1}
-        ))
-
-        if not accounts:
-            logger.warning(f"⚠️ No accounts found for fund {fund_id}")
-            return 0.0
-
-        # Sum equity across all accounts (from nested balances.equity)
-        total_equity = sum(
-            acc.get('balances', {}).get('equity', 0.0)
-            for acc in accounts
-        )
-
-        # Get funds collection
-        funds_collection = mongo_client['mathematricks_trading']['funds']
-
-        # Update fund document with new total_equity
-        update_result = funds_collection.update_one(
-            {"fund_id": fund_id},
-            {
-                "$set": {
-                    "total_equity": total_equity,
-                    "updated_at": datetime.utcnow()
-                }
-            },
-            upsert=True  # Create if doesn't exist
-        )
-
-        if update_result.modified_count > 0 or update_result.upserted_id:
-            logger.info(
-                f"💰 Updated fund {fund_id} total_equity: ${total_equity:,.2f} "
-                f"(from {len(accounts)} accounts)"
-            )
-        else:
-            logger.debug(f"Fund {fund_id} total_equity unchanged: ${total_equity:,.2f}")
-
-        return total_equity
-
-    except Exception as e:
-        logger.error(f"❌ Failed to update fund total_equity for {fund_id}: {e}", exc_info=True)
-        return 0.0
-
-
-def update_signal_store_with_execution(order_data: Dict[str, Any], execution_data: Dict[str, Any]):
-    """
-    Update signal_store with execution results and calculate PnL for EXIT signals.
-
-    CONSOLIDATED SCHEMA (v3):
-    - signal_store has ONE document per signal with legs[] array
-    - Each leg has its own execution data: legs[i].execution
-    - Position status calculated from ALL legs: position.status (PENDING → OPEN → PARTIAL → CLOSED)
-
-    Args:
-        order_data: Original order data from trading order
-        execution_data: Execution results (quantity_filled, avg_fill_price, fills, etc.)
-    """
-    try:
-        from bson import ObjectId
-
-        mathematricks_signal_id = order_data.get('mathematricks_signal_id')
-        if not mathematricks_signal_id:
-            logger.error(f"❌ No mathematricks_signal_id in order_data - cannot update signal_store | OrderID: {order_data.get('order_id')}")
-            logger.error(f"   Order data keys: {list(order_data.keys())}")
-            return
-
-        logger.debug(f"Updating signal_store for mathematricks_signal_id: {mathematricks_signal_id}")
-
-        # Use signal_type to determine ENTRY vs EXIT vs SCALE
-        signal_type = order_data.get('signal_type') or 'ENTRY'
-        signal_type = signal_type.upper()
-        is_exit_or_scale_out = signal_type in ['EXIT', 'SCALE_OUT']
-        signal_id = order_data.get('signal_id')  # Base signal ID for this leg
-
-        # Get the parent signal document (CONSOLIDATED SCHEMA)
-        signal_doc = signal_store_collection.find_one({"_id": ObjectId(mathematricks_signal_id)})
-        if not signal_doc:
-            logger.error(f"❌ Signal document {mathematricks_signal_id} not found")
-            return
-
-        # Find the leg matching this signal_id
-        legs = signal_doc.get('legs', [])
-        leg_index = None
-        current_leg = None
-
-        logger.debug(f"Looking for leg in signal document with {len(legs)} legs")
-        logger.debug(f"Looking for signal_type={signal_type}, raw_signal_mongodb_id={order_data.get('raw_signal_mongodb_id')}")
-
-        for idx, leg in enumerate(legs):
-            logger.debug(f"Leg {idx}: leg_type={leg.get('leg_type')}, raw._id={leg.get('raw', {}).get('_id')}")
-
-            if leg.get('raw', {}).get('_id') == order_data.get('raw_signal_mongodb_id'):
-                leg_index = idx
-                current_leg = leg
-                logger.debug(f"✅ Matched leg by raw._id at index {idx}")
-                break
-            # Fallback: match by leg_type if we can't find by _id
-            if leg_index is None and leg.get('leg_type') == signal_type:
-                if signal_type == 'ENTRY' or (is_exit_or_scale_out and idx > 0):
-                    leg_index = idx
-                    current_leg = leg
-                    logger.debug(f"✅ Matched leg by leg_type at index {idx}")
-                    break
-
-        if leg_index is None:
-            logger.error(f"❌ Could not find leg for signal_type={signal_type} in signal document")
-            logger.error(f"   Signal doc has {len(legs)} legs:")
-            for idx, leg in enumerate(legs):
-                logger.error(f"   Leg {idx}: type={leg.get('leg_type')}, leg_id={leg.get('leg_id')}")
-            return
-
-        # Build order document
-        order_doc = {
-            "order_id": order_data.get('order_id'),
-            "broker_order_id": execution_data.get('broker_order_id'),
-            "fund_id": order_data.get('fund_id'),
-            "account_id": order_data.get('account_id'),
-            "quantity_requested": order_data.get('quantity', 0),
-            "quantity_filled": execution_data['quantity_filled'],
-            "avg_fill_price": execution_data['avg_fill_price'],
-            "filled_at": datetime.utcnow(),
-            "fills": execution_data.get('fills', [])
-        }
-
-        # Build/update execution for this leg
-        existing_leg_execution = current_leg.get('execution')
-        if existing_leg_execution and existing_leg_execution.get('orders'):
-            # Append to existing orders
-            existing_orders = existing_leg_execution.get('orders', [])
-            existing_orders.append(order_doc)
-            total_filled = sum(o.get('quantity_filled', 0) for o in existing_orders)
-            total_value = sum(o.get('quantity_filled', 0) * o.get('avg_fill_price', 0) for o in existing_orders)
-            weighted_avg = total_value / total_filled if total_filled > 0 else 0
-
-            leg_execution = {
-                "status": "FILLED",
-                "orders": existing_orders,
-                "total_quantity_filled": total_filled,
-                "weighted_avg_price": weighted_avg,
-                "total_cost_basis": total_value if not is_exit_or_scale_out else None,
-                "total_proceeds": total_value if is_exit_or_scale_out else None
-            }
-        else:
-            # First order for this leg
-            total_value = execution_data['quantity_filled'] * execution_data['avg_fill_price']
-            leg_execution = {
-                "status": "FILLED",
-                "orders": [order_doc],
-                "total_quantity_filled": execution_data['quantity_filled'],
-                "weighted_avg_price": execution_data['avg_fill_price'],
-                "total_cost_basis": total_value if not is_exit_or_scale_out else None,
-                "total_proceeds": total_value if is_exit_or_scale_out else None
-            }
-
-        # Update the specific leg's execution using positional operator
-        signal_store_collection.update_one(
-            {
-                "_id": ObjectId(mathematricks_signal_id),
-                f"legs.{leg_index}.leg_id": current_leg['leg_id']
-            },
-            {
-                "$set": {
-                    f"legs.{leg_index}.execution": leg_execution,
-                    "updated_at": datetime.utcnow()
-                }
-            }
-        )
-
-        logger.debug(f"✅ Updated leg {leg_index} ({signal_type}) with execution data")
-
-        # Now calculate position status based on ALL legs
-        # Refresh the document to get updated legs
-        signal_doc = signal_store_collection.find_one({"_id": ObjectId(mathematricks_signal_id)})
-        legs = signal_doc.get('legs', [])
-
-        # Find ENTRY leg and calculate quantities
-        entry_leg = next((leg for leg in legs if leg.get('leg_type') == 'ENTRY'), None)
-        if not entry_leg or not entry_leg.get('execution'):
-            logger.warning(f"⚠️ ENTRY leg not yet executed, skipping position status update")
-            return
-
-        entry_execution = entry_leg['execution']
-        entry_quantity = entry_execution.get('total_quantity_filled', 0)
-        entry_price = entry_execution.get('weighted_avg_price', 0)
-        entry_cost_basis = entry_execution.get('total_cost_basis', entry_price * entry_quantity)
-
-        # Get entry filled_at
-        entry_filled_at = entry_execution['orders'][0].get('filled_at') if entry_execution.get('orders') else None
-        holding_seconds = (datetime.utcnow() - entry_filled_at).total_seconds() if entry_filled_at else 0
-
-        # Calculate total exit quantity from ALL exit/scale_out legs
-        total_exit_quantity = 0
-        cumulative_gross_pnl = 0
-        cumulative_net_pnl = 0
-        cumulative_commission = 0
-
-        exit_legs = [leg for leg in legs if leg.get('leg_type') in ['EXIT', 'SCALE_OUT']]
-        for exit_leg in exit_legs:
-            if exit_leg.get('execution'):
-                exit_exec = exit_leg['execution']
-                exit_qty = exit_exec.get('total_quantity_filled', 0)
-                exit_price_leg = exit_exec.get('weighted_avg_price', 0)
-
-                total_exit_quantity += exit_qty
-
-                # Calculate P&L for this exit leg
-                gross_pnl = (exit_price_leg - entry_price) * exit_qty
-                commission = sum(o.get('commission', 0) for o in exit_exec.get('orders', []))
-                net_pnl = gross_pnl - commission
-
-                cumulative_gross_pnl += gross_pnl
-                cumulative_net_pnl += net_pnl
-                cumulative_commission += commission
-
-        # Determine position status
-        remaining_quantity = entry_quantity - total_exit_quantity
-        partial_exit_count = len(exit_legs)
-
-        if total_exit_quantity >= entry_quantity:
-            # Position fully closed
-            position_status = "CLOSED"
-            cumulative_pnl_percent = (cumulative_net_pnl / entry_cost_basis) * 100 if entry_cost_basis > 0 else 0
-
-            cumulative_pnl_data = {
-                "gross": cumulative_gross_pnl,
-                "net": cumulative_net_pnl,
-                "percent": cumulative_pnl_percent,
-                "commission": cumulative_commission,
-                "holding_seconds": holding_seconds
-            }
-
-            # Update position status
-            signal_store_collection.update_one(
-                {"_id": ObjectId(mathematricks_signal_id)},
-                {
-                    "$set": {
-                        "position.status": "CLOSED",
-                        "position.closed_at": datetime.utcnow(),
-                        "position.pnl": cumulative_pnl_data,
-                        "position.partial_exit_count": partial_exit_count,
-                        "position.remaining_quantity": 0,
-                        "position.entry_quantity": entry_quantity,
-                        "position.exit_quantity": total_exit_quantity,
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-
-            logger.debug(f"✅ Position CLOSED: {partial_exit_count} exits, {total_exit_quantity}/{entry_quantity}, P&L: ${cumulative_net_pnl:.2f}")
-
-        elif total_exit_quantity > 0:
-            # Partial exit
-            position_status = "PARTIAL"
-            cumulative_pnl_percent = (cumulative_net_pnl / entry_cost_basis) * 100 if entry_cost_basis > 0 else 0
-
-            cumulative_pnl_data = {
-                "gross": cumulative_gross_pnl,
-                "net": cumulative_net_pnl,
-                "percent": cumulative_pnl_percent,
-                "commission": cumulative_commission,
-                "holding_seconds": holding_seconds
-            }
-
-            # Update position status
-            signal_store_collection.update_one(
-                {"_id": ObjectId(mathematricks_signal_id)},
-                {
-                    "$set": {
-                        "position.status": "PARTIAL",
-                        "position.pnl": cumulative_pnl_data,
-                        "position.partial_exit_count": partial_exit_count,
-                        "position.remaining_quantity": remaining_quantity,
-                        "position.entry_quantity": entry_quantity,
-                        "position.exit_quantity": total_exit_quantity,
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-
-            logger.debug(f"✅ Position PARTIAL: {partial_exit_count} exits, {total_exit_quantity}/{entry_quantity} exited, {remaining_quantity} remaining, P&L: ${cumulative_net_pnl:.2f}")
-
-        else:
-            # Only ENTRY executed, no exits yet
-            position_status = "OPEN"
-
-            signal_store_collection.update_one(
-                {"_id": ObjectId(mathematricks_signal_id)},
-                {
-                    "$set": {
-                        "position.status": "OPEN",
-                        "position.opened_at": entry_filled_at or datetime.utcnow(),
-                        "position.entry_quantity": entry_quantity,
-                        "position.exit_quantity": 0,
-                        "position.remaining_quantity": entry_quantity,
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-
-            logger.debug(f"✅ Position OPEN: Entry executed with {entry_quantity} quantity")
-
-        # Update mock broker balance if this was an exit
-        if is_exit_or_scale_out and cumulative_net_pnl != 0:
-            account_id = order_data.get('account_id')
-            if account_id and is_mock_broker(account_id):
-                # Get THIS account's specific order data from the exit leg
-                current_exit_leg = legs[leg_index]
-                if current_exit_leg.get('execution'):
-                    # Find the specific order for this account (not total leg quantity)
-                    account_order = None
-                    for order in current_exit_leg['execution'].get('orders', []):
-                        if order.get('account_id') == account_id:
-                            account_order = order
-                            break
-
-                    if account_order:
-                        this_exit_qty = account_order.get('quantity_filled', 0)
-                        this_exit_price = account_order.get('avg_fill_price', 0)
-
-                        # Find THIS account's entry price from the ENTRY leg
-                        account_entry_price = entry_price  # Default to consolidated price
-                        if entry_leg and entry_leg.get('execution'):
-                            for entry_order in entry_leg['execution'].get('orders', []):
-                                if entry_order.get('account_id') == account_id:
-                                    account_entry_price = entry_order.get('avg_fill_price', entry_price)
-                                    break
-
-                        this_exit_pnl = (this_exit_price - account_entry_price) * this_exit_qty
-                        update_mock_broker_balance(account_id, this_exit_pnl, this_exit_qty, this_exit_price)
-
-    except Exception as e:
-        logger.error(f"❌ Error updating signal_store with execution: {e}", exc_info=True)
-
-
-def create_or_update_position(order_data: Dict[str, Any], filled_qty: float, avg_fill_price: float):
-    """
-    Create or update position in trading_accounts.{account_id}.open_positions after order fill
-    Handles both ENTRY (create/increase) and EXIT (decrease/close) actions
-    """
-    try:
-        strategy_id = order_data.get('strategy_id')
-        instrument = order_data.get('instrument')
-        direction = (order_data.get('direction') or 'LONG').upper()
-        action = (order_data.get('action') or 'ENTRY').upper()
-        signal_type = (order_data.get('signal_type') or '').upper()
-        order_id = order_data.get('order_id')
-
-        # Get account_id from order_data, with fallback based on broker mode
-        default_account = "Mock_Paper" if args.use_mock_broker else "IBKR_Main"
-        account_id = order_data.get('account_id', default_account)
-
-        # Find account document
-        account_doc = trading_accounts_collection.find_one({"account_id": account_id})
-        if not account_doc:
-            # Create account document if it doesn't exist
-            account_doc = {
-                "account_id": account_id,
-                "open_positions": [],
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow()
-            }
-            trading_accounts_collection.insert_one(account_doc)
-
-        # Find existing position in open_positions array
-        existing_position = None
-        position_index = None
-        open_positions = account_doc.get('open_positions', [])
-
-        for idx, pos in enumerate(open_positions):
-            if (pos.get('strategy_id') == strategy_id and
-                pos.get('instrument') == instrument and
-                pos.get('status') == 'OPEN'):
-                existing_position = pos
-                position_index = idx
-                break
-
-        # Determine if this is ENTRY or EXIT using signal_type OR direction+action
-        # signal_type is preferred (set by Cerebro), fallback to direction+action logic
-        is_entry = (
-            signal_type == 'ENTRY' or
-            (not signal_type and direction == 'LONG' and action == 'BUY') or
-            (not signal_type and direction == 'SHORT' and action == 'SELL')
-        )
-
-        if is_entry:
-            # ENTRY: Create new position or add to existing
-            if existing_position:
-                # Add to existing position (scale-in)
-                current_qty = existing_position['quantity']
-                current_avg_price = existing_position['avg_entry_price']
-
-                new_qty = current_qty + filled_qty
-                # Calculate new weighted average price
-                new_avg_price = ((current_qty * current_avg_price) + (filled_qty * avg_fill_price)) / new_qty
-
-                # Update the position in the array using array index
-                trading_accounts_collection.update_one(
-                    {'account_id': account_id},
-                    {'$set': {
-                        f'open_positions.{position_index}.quantity': new_qty,
-                        f'open_positions.{position_index}.avg_entry_price': new_avg_price,
-                        f'open_positions.{position_index}.updated_at': datetime.utcnow(),
-                        f'open_positions.{position_index}.last_order_id': order_id
-                    }}
-                )
-                logger.info(f"✅ Updated position {strategy_id}/{instrument}: {current_qty} → {new_qty} shares @ ${new_avg_price:.2f}")
-            else:
-                # Create new position and add to array
-                position = {
-                    'strategy_id': strategy_id,
-                    'instrument': instrument,
-                    'direction': direction,
-                    'quantity': filled_qty,
-                    'avg_entry_price': avg_fill_price,
-                    'current_price': avg_fill_price,
-                    'unrealized_pnl': 0.0,
-                    'status': 'OPEN',
-                    'entry_order_id': order_id,
-                    'last_order_id': order_id,
-                    'created_at': datetime.utcnow(),
-                    'updated_at': datetime.utcnow()
-                }
-                trading_accounts_collection.update_one(
-                    {'account_id': account_id},
-                    {'$push': {'open_positions': position}}
-                )
-                logger.info(f"✅ Created position {strategy_id}/{instrument}: {filled_qty} shares @ ${avg_fill_price:.2f}")
-
-        else:
-            # EXIT: Reduce or close position
-            if existing_position:
-                current_qty = existing_position['quantity']
-
-                if filled_qty >= current_qty:
-                    # Full exit - remove position from open_positions array
-                    trading_accounts_collection.update_one(
-                        {'account_id': account_id},
-                        {'$pull': {
-                            'open_positions': {
-                                'strategy_id': strategy_id,
-                                'instrument': instrument,
-                                'status': 'OPEN'
-                            }
-                        }}
-                    )
-                    logger.info(f"✅ Closed position {strategy_id}/{instrument}: {current_qty} shares @ ${avg_fill_price:.2f}")
-                else:
-                    # Partial exit - reduce position quantity in array
-                    new_qty = current_qty - filled_qty
-                    trading_accounts_collection.update_one(
-                        {'account_id': account_id},
-                        {'$set': {
-                            f'open_positions.{position_index}.quantity': new_qty,
-                            f'open_positions.{position_index}.updated_at': datetime.utcnow(),
-                            f'open_positions.{position_index}.last_order_id': order_id
-                        }}
-                    )
-                    logger.info(f"✅ Reduced position {strategy_id}/{instrument}: {current_qty} → {new_qty} shares")
-            else:
-                logger.warning(f"⚠️ EXIT order {order_id} filled but no open position found for {strategy_id}/{instrument}")
-
-    except Exception as e:
-        logger.error(f"❌ Error creating/updating position: {e}", exc_info=True)
-
-
-def get_account_state() -> Dict[str, Any]:
-    """
-    Get current account state using broker library
-
-    TODO: Update this function to work with broker pool architecture
-    For now, this function is disabled (calls are commented out)
-    """
-    logger.warning("get_account_state() called but is disabled - needs broker pool update")
-    return {}
-
-
-def cancel_order(order_id: str) -> bool:
-    """
-    Cancel an active order by order_id using broker library
-    Returns True if successfully cancelled, False otherwise
-    """
-    try:
-        # Look up the order in MongoDB to get account and broker_order_id
-        order_doc = trading_orders_collection.find_one({'order_id': order_id})
-        if not order_doc:
-            logger.error(f"❌ Cannot cancel order {order_id} - not found in trading_orders")
-            return False
-
-        account_id = order_doc.get('account')
-        if not account_id:
-            logger.error(f"❌ Cannot cancel order {order_id} - no account specified")
-            return False
-
-        # Get broker_order_id from in-memory tracking or MongoDB
-        if order_id in active_ibkr_orders:
-            broker_order_id = active_ibkr_orders[order_id]
-            logger.info(f"🚫 Cancelling order {order_id} (broker order ID: {broker_order_id} from memory)...")
-        else:
-            # Fall back to MongoDB for orders from previous sessions
-            broker_order_id = order_doc.get('broker_order_id') or order_doc.get('ib_order_id')
-            if not broker_order_id:
-                logger.error(f"❌ Cannot cancel order {order_id} - no broker_order_id found in MongoDB")
-                return False
-            logger.info(f"🚫 Cancelling order {order_id} (broker order ID: {broker_order_id} from MongoDB)...")
-
-        # Get broker from pool
-        broker = get_broker_for_account(account_id)
-        if not broker:
-            logger.error(f"❌ Cannot cancel order {order_id} - broker not found for account {account_id}")
-            return False
-
-        # Use broker library to cancel order
-        success = broker.cancel_order(broker_order_id)
-
-        if success:
-            # Remove from tracking if present
-            if order_id in active_ibkr_orders:
-                del active_ibkr_orders[order_id]
-            logger.info(f"✅ Order {order_id} cancelled successfully")
-            return True
-        else:
-            logger.warning(f"⚠️ Failed to cancel order {order_id}")
-            return False
-
-    except Exception as e:
-        logger.error(f"Error cancelling order {order_id}: {e}", exc_info=True)
-        return False
-
-
-def watch_trading_orders():
-    """
-    Watch MongoDB Change Streams for new trading orders
-    Runs in background thread - adds orders to queue for main thread processing
-    """
-    logger.info("Starting MongoDB Change Stream watcher for trading_orders...")
     
-    pipeline = [
-        {
-            '$match': {
-                'operationType': 'insert',
-                'fullDocument.status': 'PENDING'
-            }
-        }
-    ]
+    # Step 2: Initialize each broker
+    logger.info(f"\n📦 Initializing {len(required_accounts)} broker(s)...")
     
-    while True:
-        try:
-            with trading_orders_collection.watch(pipeline) as stream:
-                logger.info("✅ MongoDB Change Stream connected for trading_orders")
-                for change in stream:
-                    try:
-                        order_data = change['fullDocument']
-                        order_id = order_data.get('order_id')
-                        
-                        logger.debug(f"Received trading order via Change Stream: {order_id} - adding to queue")
-                        
-                        # Add order to queue for main thread processing
-                        order_queue.put({
-                            'order_data': order_data,
-                            'resume_token': stream.resume_token
-                        })
-                    
-                    except Exception as e:
-                        logger.error(f"Error processing change stream event: {str(e)}", exc_info=True)
+    for account_id in sorted(required_accounts):
+        broker = initialize_broker(account_id)
+        if broker:
+            broker_pool[account_id] = broker
+    
+    # Step 3: Start IB Gateway containers for IBKR accounts
+    if broker_pool:
+        start_ibkr_gateways()
+    
+    # Step 4: Connect brokers
+    if broker_pool:
+        connect_brokers()
+    
+    # Step 5: Summary
+    logger.info(f"\n✅ Broker Pool Ready: {len(broker_pool)}/{len(required_accounts)} brokers initialized")
+    logger.info("=" * 80)
+
+
+def main():
+    """Main execution service entry point."""
+    global broker_poller
+    
+    logger.info("🚀 Execution Service Starting (Consolidated with Account Data)")
+    logger.info("=" * 80)
+    
+    # Initialize broker pool
+    initialize_broker_pool()
+    
+    # Start broker polling service (migrated from account-data-service)
+    # CRITICAL: Pass broker_pool to prevent duplicate IBKR connections (competing sessions)
+    logger.info("\n📊 Starting background broker polling...")
+    broker_poller = BrokerPoller(
+        repository=trading_accounts_repository,
+        interval=300,  # Poll every 5 minutes
+        mongodb_url=MONGODB_URI,
+        mongodb_client=mongo_client,
+        broker_pool=broker_pool  # Reuse execution_service's broker connections
+    )
+    broker_poller.start()
+    logger.info("✅ Broker polling started (using shared broker pool)")
+    
+    # Start API server in background thread
+    logger.info("\n🌐 Starting API Server...")
+    api_thread = threading.Thread(
+        target=api.run_api_server,
+        args=(broker_pool, True, trading_accounts_repository),
+        daemon=True
+    )
+    api_thread.start()
+    
+    # Keep service running
+    logger.info("\n🎯 Execution Service Ready (with Account Management)")
+    
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Shutting down Execution Service")
         
-        except Exception as e:
-            logger.error(f"MongoDB Change Stream error: {str(e)}")
-            logger.warning("Reconnecting to trading_orders Change Stream in 5 seconds...")
-            time.sleep(5)
-
-
-def process_order_from_queue(order_item: Dict[str, Any]):
-    """
-    Process a single order from the queue in the main thread
-    This runs in the main thread where IBKR's event loop is available
-    """
-    order_data = order_item['order_data']
-    order_id = order_data.get('order_id')
-
-    # Extract signal ID from order ID (format: {signal_id}_ORD)
-    signal_id = order_id.replace('_ORD', '') if order_id.endswith('_ORD') else order_id
-
-    try:
-        logger.debug(f"Processing order from queue: {order_id}")
-
-        # 🚨 CRITICAL FAILSAFE: Check if signal already processed
-        if signal_id in processed_signal_ids:
-            logger.critical(f"🚨 DUPLICATE SIGNAL BLOCKED! Signal {signal_id} already processed - REJECTING to prevent duplicate execution!")
-            signal_logger.critical(f"ORDER: {signal_id} | DUPLICATE_BLOCKED | This signal was already processed - order rejected for safety")
-            # No ack needed - MongoDB Change Stream handles this automatically
-            return
-
-        # Add to processed set
-        processed_signal_ids.add(signal_id)
-        logger.debug(f"Signal {signal_id} marked as processed (total tracked: {len(processed_signal_ids)})")
-
-        # Log to signal_processing.log - Order received (concise)
-        logger.info("-" * 50)
-        logger.info(f"📥 ORDER RECEIVED: {order_data.get('instrument')} | {order_data.get('direction')} | Qty: {order_data.get('quantity')} | OrderID: {order_id}")
-        signal_logger.info(f"ORDER: {signal_id} | ORDER_RECEIVED | OrderID={order_id} | Instrument={order_data.get('instrument')} | Direction={order_data.get('direction')} | Quantity={order_data.get('quantity')}")
-
-        # Log open positions BEFORE order execution
-        default_account = "Mock_Paper" if args.use_mock_broker else "IBKR_Main"
-        account_id = order_data.get('account_id', default_account)
-        log_open_positions(account_id, "BEFORE ORDER")
-
-        # Submit order to broker (now safe - we're in main thread)
-        logger.debug(f"Submitting order {order_id} to broker...")
-        result = submit_order_to_broker(order_data)
-
-        if result:
-            # CRITICAL: Only create execution confirmation if order was actually FILLED or PARTIALLY FILLED
-            # Do NOT create fake fills for orders that are just submitted/pending
-
-            status = result.get('status', '')
-            filled_qty = result.get('filled', 0)
-            ib_order_id = result.get('ib_order_id')
-            avg_fill_price = result.get('avg_fill_price', 0)
-
-            logger.debug(f"Order {order_id} result: status={status}, filled={filled_qty}")
-
-            # Only proceed if there was an actual fill
-            if status in ['Filled', 'PartiallyFilled'] or filled_qty > 0:
-
-                # Create execution confirmation
-                execution = {
-                    "order_id": order_id,
-                    "execution_id": result.get('ib_order_id'),
-                    "timestamp": datetime.utcnow(),
-                    "account": "IBKR_Main",
-                    "instrument": order_data.get('instrument'),
-                    "side": "BUY" if order_data.get('direction') == 'LONG' else "SELL",
-                    "quantity": filled_qty,
-                    "price": result.get('avg_fill_price', 0),
-                    "commission": 0,  # Would get from IBKR execution details
-                    "status": "FILLED" if result.get('remaining', 0) == 0 else "PARTIAL_FILL",
-                    "broker_response": result
-                }
-
-                # Note: Execution data is stored in signal_store.execution field
-                # (redundant execution_confirmations collection and Pub/Sub removed)
-
-                # Create or update position in open_positions collection
-                logger.debug(f"Creating/updating position for {order_id}")
-                create_or_update_position(order_data, filled_qty, avg_fill_price)
-
-                # Log open positions AFTER order execution
-                log_open_positions(account_id, "AFTER ORDER")
-
-                # Update signal_store with execution data and calculate PnL
-                execution_data = {
-                    "broker_order_id": result.get('ib_order_id'),
-                    "quantity_filled": filled_qty,
-                    "avg_fill_price": avg_fill_price,
-                    "fills": result.get('fills', []),
-                    "commission": 0  # TODO: Get actual commission from IBKR
-                }
-                logger.debug(f"Updating signal_store for {order_id}")
-                update_signal_store_with_execution(order_data, execution_data)
-
-                # Update order status in database
-                trading_orders_collection.update_one(
-                    {"order_id": order_id},
-                    {"$set": {"status": execution['status'], "updated_at": datetime.utcnow()}}
-                )
-
-                signal_logger.info(f"ORDER: {signal_id} | EXECUTION_CONFIRMED | Fill confirmed and saved to database")
-                logger.info(f"✅ ORDER COMPLETED: {order_data.get('instrument')} | Filled: {filled_qty} @ ${avg_fill_price:.2f} | Status: {execution['status']}")
-            else:
-                # Order submitted but not filled yet - just update status
-                signal_logger.info(f"ORDER: {signal_id} | WAITING_FOR_FILL | Order accepted by IBKR, waiting for execution...")
-                logger.info(f"📋 Order {order_id} submitted to IBKR, status: {status}")
-                trading_orders_collection.update_one(
-                    {"order_id": order_id},
-                    {"$set": {"status": status, "ib_order_id": result.get('ib_order_id'), "updated_at": datetime.utcnow()}}
-                )
-        else:
-            # Order failed
-            signal_logger.error(f"ORDER: {signal_id} | ORDER_REJECTED | IBKR rejected the order - check execution_service.log for details")
-            logger.error(f"❌ Order {order_id} failed to execute")
-
-            # Update order status
-            trading_orders_collection.update_one(
-                {"order_id": order_id},
-                {"$set": {"status": "REJECTED", "updated_at": datetime.utcnow()}}
-            )
-
-            # For exit orders, this is critical - implement retry logic
-            if order_data.get('action') == 'EXIT':
-                signal_logger.critical(f"ORDER: {signal_id} | EXIT_ORDER_FAILED | CRITICAL: Exit order failed - manual intervention required!")
-                logger.critical(f"EXIT order {order_id} FAILED - manual intervention required!")
-                # TODO: Trigger "raise hell" alerts
-
-        # Get and publish updated account state
-        # TODO: Update get_account_state() to work with broker pool
-        # account_state = get_account_state()
-        # if account_state:
-        #     publish_account_update(account_state)
-
-        logger.debug(f"Completed processing order {order_id}")
-
-    except Exception as e:
-        logger.error(f"Error processing order {order_id}: {str(e)}", exc_info=True)
-        # Order will remain in PENDING state and can be manually retried if needed
-
-
-# MongoDB Change Stream watchers replace Pub/Sub subscribers
-# (watch_trading_orders function defined above)
-
-
-def periodic_account_updates():
-    """
-    Publish account updates periodically (every 30 seconds)
-    """
-    while True:
-        try:
-            time.sleep(30)
-            # TODO: Update get_account_state() to work with broker pool
-            # account_state = get_account_state()
-            # if account_state:
-            #     publish_account_update(account_state)
-        except Exception as e:
-            logger.error(f"Error in periodic account updates: {str(e)}")
+        # Stop broker poller
+        if broker_poller:
+            broker_poller.stop()
+            logger.info("✅ Stopped broker polling")
+        
+        # Cleanup brokers
+        for account_id, broker in broker_pool.items():
+            try:
+                if hasattr(broker, 'disconnect'):
+                    broker.disconnect()
+                    logger.info(f"✅ Disconnected: {account_id}")
+            except Exception as e:
+                logger.warning(f"⚠️  Error disconnecting {account_id}: {e}")
 
 
 if __name__ == "__main__":
-    logger.info("🚀 Execution Service Starting")
-
-    # Connect to all brokers in pool (continue even if some fail - orders will route to available brokers)
-    if not connect_all_brokers():
-        logger.warning("⚠️  No brokers connected - orders will queue until brokers available")
-    else:
-        logger.info(f"✅ Broker pool: {len(broker_pool)} broker(s) ready")
-
-    # Initialize Mock broker with empty positions
-    if args.use_mock_broker:
-        account_id = "Mock_Paper"
-        trading_accounts_collection.update_one(
-            {'account_id': account_id},
-            {
-                '$set': {
-                    'open_positions': [],
-                    'updated_at': datetime.utcnow()
-                }
-            },
-            upsert=True
-        )
-        logger.info(f"✅ Mock broker account '{account_id}' initialized with empty positions")
-
-    # Start MongoDB Change Stream watcher in background thread
-    orders_watcher_thread = threading.Thread(target=watch_trading_orders, daemon=True)
-    orders_watcher_thread.start()
-
-    logger.info("✅ Execution Service ready - listening for orders via MongoDB Change Streams")
-    logger.info("*" * 50)
-    try:
-        while True:
-            # Check if there are orders in the queue (non-blocking)
-            try:
-                order_item = order_queue.get(timeout=0.1)
-                process_order_from_queue(order_item)
-            except queue.Empty:
-                pass
-
-            # Small sleep to prevent CPU spinning
-            time.sleep(0.1)
-    except KeyboardInterrupt:
-        logger.info("Shutting down Execution Service")
-        broker.disconnect()
+    main()

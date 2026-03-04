@@ -1,0 +1,34 @@
+[
+  {
+    "strategy_name": "IBKR_Test_Crypto",
+    "signal_type": "ENTRY",
+    "entry_name": "$BTC_1",
+    "account_equity": 100000,
+    "signal_legs": [{
+      "instrument": "BTC",
+      "instrument_type": "CRYPTO",
+      "action": "BUY",
+      "direction": "LONG",
+      "quantity": 0.01,
+      "price": 95000,
+      "order_type": "MARKET",
+      "environment": "staging"
+    }],
+    "wait": 5
+  },
+  {
+    "strategy_name": "IBKR_Test_Crypto",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$BTC_1",
+    "signal_legs": [{
+      "instrument": "BTC",
+      "instrument_type": "CRYPTO",
+      "action": "SELL",
+      "direction": "SHORT",
+      "quantity": 0.01,
+      "price": 97500,
+      "order_type": "MARKET",
+      "environment": "staging"
+    }]
+  }
+]

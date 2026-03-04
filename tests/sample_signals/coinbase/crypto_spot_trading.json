@@ -1,0 +1,192 @@
+[
+  {
+    "strategy_name": "mock-strategy-crypto",
+    "signal_type": "ENTRY",
+    "entry_signal_id": "$COINBASE_BTC_1",
+    "account_equity": 100000,
+    "signal_legs": [
+      {
+        "instrument": "BTC-USD",
+        "instrument_type": "CRYPTO",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 0.5,
+        "order_type": "MARKET",
+        "price": 70000
+      }
+    ],
+    "environment": "staging",
+    "wait": 5
+  },
+  {
+    "strategy_name": "mock-strategy-crypto",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$COINBASE_BTC_1",
+    "account_equity": 100000,
+    "signal_legs": [
+      {
+        "instrument": "BTC-USD",
+        "instrument_type": "CRYPTO",
+        "action": "SELL",
+        "direction": "CLOSE",
+        "quantity": 0.5,
+        "order_type": "MARKET",
+        "price": 72000
+      }
+    ],
+    "environment": "staging",
+    "wait": 5
+  },
+  {
+    "strategy_name": "mock-strategy-crypto",
+    "signal_type": "ENTRY",
+    "entry_signal_id": "$COINBASE_ETH_1",
+    "account_equity": 100000,
+    "signal_legs": [
+      {
+        "instrument": "ETH-USD",
+        "instrument_type": "CRYPTO",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 5.0,
+        "order_type": "MARKET",
+        "price": 2000
+      }
+    ],
+    "environment": "staging",
+    "wait": 5
+  },
+  {
+    "strategy_name": "mock-strategy-crypto",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$COINBASE_ETH_1",
+    "account_equity": 100000,
+    "signal_legs": [
+      {
+        "instrument": "ETH-USD",
+        "instrument_type": "CRYPTO",
+        "action": "SELL",
+        "direction": "CLOSE",
+        "quantity": 5.0,
+        "order_type": "MARKET",
+        "price": 2100
+      }
+    ],
+    "environment": "staging",
+    "wait": 5
+  },
+  {
+    "strategy_name": "mock-strategy-crypto",
+    "signal_type": "ENTRY",
+    "entry_signal_id": "$COINBASE_SOL_1",
+    "account_equity": 100000,
+    "signal_legs": [
+      {
+        "instrument": "SOL-USD",
+        "instrument_type": "CRYPTO",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 100,
+        "order_type": "MARKET",
+        "price": 150
+      }
+    ],
+    "environment": "staging",
+    "wait": 5
+  },
+  {
+    "strategy_name": "mock-strategy-crypto",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$COINBASE_SOL_1",
+    "account_equity": 100000,
+    "signal_legs": [
+      {
+        "instrument": "SOL-USD",
+        "instrument_type": "CRYPTO",
+        "action": "SELL",
+        "direction": "CLOSE",
+        "quantity": 100,
+        "order_type": "MARKET",
+        "price": 155
+      }
+    ],
+    "environment": "staging",
+    "wait": 5
+  },
+  {
+    "strategy_name": "mock-strategy-crypto",
+    "signal_type": "ENTRY",
+    "entry_signal_id": "$COINBASE_BTC_2",
+    "account_equity": 100000,
+    "signal_legs": [
+      {
+        "instrument": "BTC-USD",
+        "instrument_type": "CRYPTO",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 1.0,
+        "order_type": "MARKET",
+        "price": 70000
+      }
+    ],
+    "environment": "staging",
+    "wait": 5
+  },
+  {
+    "strategy_name": "mock-strategy-crypto",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$COINBASE_BTC_2",
+    "account_equity": 100000,
+    "signal_legs": [
+      {
+        "instrument": "BTC-USD",
+        "instrument_type": "CRYPTO",
+        "action": "SELL",
+        "direction": "CLOSE",
+        "quantity": 1.0,
+        "order_type": "MARKET",
+        "price": 72000
+      }
+    ],
+    "environment": "staging",
+    "wait": 5
+  },
+  {
+    "strategy_name": "mock-strategy-crypto",
+    "signal_type": "ENTRY",
+    "entry_signal_id": "$COINBASE_ETH_2",
+    "account_equity": 100000,
+    "signal_legs": [
+      {
+        "instrument": "ETH-USD",
+        "instrument_type": "CRYPTO",
+        "action": "BUY",
+        "direction": "LONG",
+        "quantity": 10.0,
+        "order_type": "MARKET",
+        "price": 2000
+      }
+    ],
+    "environment": "staging",
+    "wait": 5
+  },
+  {
+    "strategy_name": "mock-strategy-crypto",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$COINBASE_ETH_2",
+    "account_equity": 100000,
+    "signal_legs": [
+      {
+        "instrument": "ETH-USD",
+        "instrument_type": "CRYPTO",
+        "action": "SELL",
+        "direction": "CLOSE",
+        "quantity": 10.0,
+        "order_type": "MARKET",
+        "price": 2100
+      }
+    ],
+    "environment": "staging",
+    "wait": 5
+  }
+]

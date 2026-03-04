@@ -11,27 +11,46 @@ logger = logging.getLogger(__name__)
 
 def get_active_allocations_for_strategy(
     strategy_id: str,
-    portfolio_allocations_collection
+    funds_collection,
+    portfolio_tests_collection=None  # DEPRECATED: No longer needed, kept for backwards compatibility
 ) -> List[Dict]:
     """
-    Get all ACTIVE portfolio allocations that include this strategy.
-    
+    Get all ACTIVE fund allocations that include this strategy.
+    Reads from funds.approved_allocation (v5.2 - allocation snapshot).
+
     Args:
         strategy_id: Strategy ID to search for
-        portfolio_allocations_collection: MongoDB collection
-        
+        funds_collection: MongoDB funds collection
+        portfolio_tests_collection: DEPRECATED - No longer used (allocations stored in fund document)
+
     Returns:
         List of allocation documents with fund_id
     """
     try:
-        allocations = list(portfolio_allocations_collection.find({
-            "status": "ACTIVE",
-            f"allocations.{strategy_id}": {"$exists": True}
+        # Get all active funds with approved allocations
+        active_funds = list(funds_collection.find({
+            "approved_allocation.allocations": {"$exists": True},
+            "status": "ACTIVE"
         }))
-        
+
+        allocations = []
+        for fund in active_funds:
+            approved_allocation = fund.get('approved_allocation', {})
+            allocations_dict = approved_allocation.get('allocations', {})
+            portfolio_test_id = approved_allocation.get('portfolio_test_id', 'unknown')
+
+            # Only include if strategy is allocated in this fund
+            if strategy_id in allocations_dict:
+                allocations.append({
+                    'fund_id': fund['fund_id'],
+                    'allocation_name': f"Test {portfolio_test_id}",
+                    'allocations': allocations_dict,
+                    'portfolio_test_id': portfolio_test_id
+                })
+
         logger.info(f"Found {len(allocations)} ACTIVE allocations for strategy {strategy_id}")
         return allocations
-    
+
     except Exception as e:
         logger.error(f"Error fetching active allocations: {str(e)}")
         return []
@@ -40,10 +59,11 @@ def get_active_allocations_for_strategy(
 def get_strategy_allocation_for_fund(
     fund_id: str,
     strategy_id: str,
-    portfolio_allocations_collection,
+    portfolio_allocations_collection,  # DEPRECATED: Not used anymore
     trading_orders_collection,
     funds_collection,
-    trading_accounts_collection
+    trading_accounts_collection,
+    portfolio_tests_collection=None  # NEW: Required for reading allocations
 ) -> Dict[str, float]:
     """
     Calculate capital allocation for a strategy within a fund.
@@ -74,8 +94,35 @@ def get_strategy_allocation_for_fund(
                 "available_capital": 0.0
             }
         
-        fund_equity = fund_doc.get('total_equity', 0.0)
+        # Get cached fund equity and update timestamp
+        fund_equity_cached = fund_doc.get('total_equity', 0.0)
+        fund_updated_at = fund_doc.get('updated_at')
         
+        # Get FRESH account equity directly from trading_accounts (for accurate allocation)
+        account_docs = list(trading_accounts_collection.find({
+            "fund_id": fund_id,
+            "status": "ACTIVE"
+        }))
+        
+        fresh_equity = sum(
+            acc.get('balances', {}).get('equity', 0) 
+            for acc in account_docs
+        )
+        
+        # Log comparison for debugging
+        logger.info(f"Fund {fund_id} equity:")
+        logger.info(f"  Cached (fund doc): ${fund_equity_cached:,.2f} (updated: {fund_updated_at})")
+        logger.info(f"  Fresh (accounts): ${fresh_equity:,.2f}")
+        
+        if abs(fresh_equity - fund_equity_cached) > 1000:
+            logger.warning(
+                f"⚠️ Fund equity staleness: ${abs(fresh_equity - fund_equity_cached):,.2f} difference "
+                f"between cached and fresh account balances"
+            )
+        
+        # Use FRESH equity for allocation calculation (most accurate)
+        fund_equity = fresh_equity
+
         if fund_equity <= 0:
             logger.warning(f"Fund {fund_id} has zero or negative equity: ${fund_equity:,.2f}")
             return {
@@ -83,23 +130,20 @@ def get_strategy_allocation_for_fund(
                 "used_capital": 0.0,
                 "available_capital": 0.0
             }
-        
-        # Get active allocation for this fund
-        allocation = portfolio_allocations_collection.find_one({
-            "fund_id": fund_id,
-            "status": "ACTIVE"
-        })
-        
-        if not allocation:
-            logger.warning(f"No ACTIVE allocation found for fund {fund_id}")
+
+        # Get active allocation for this fund from approved_allocation snapshot (v5.2)
+        approved_allocation = fund_doc.get('approved_allocation')
+
+        if not approved_allocation:
+            logger.warning(f"No approved allocation found for fund {fund_id}")
             return {
                 "allocated_capital": 0.0,
                 "used_capital": 0.0,
                 "available_capital": 0.0
             }
-        
-        # Get strategy allocation percentage
-        allocations = allocation.get('allocations', {})
+
+        # Get strategy allocation percentage from snapshot
+        allocations = approved_allocation.get('allocations', {})
         strategy_pct = allocations.get(strategy_id, 0.0)
         
         if strategy_pct <= 0:
@@ -164,11 +208,12 @@ def get_available_accounts_for_strategy(
     fund_id: str,
     asset_class: str,
     strategies_collection,
-    trading_accounts_collection
+    trading_accounts_collection,
+    mode: str = None
 ) -> List[Dict[str, Any]]:
     """
     Get accounts that:
-    1. Strategy is allowed to use (in strategy.accounts)
+    1. Strategy is allowed to use (in strategy.accounts[account_type] for mode-specific accounts)
     2. Belong to this fund (account.fund_id = fund_id)
     3. Support the asset class (asset_class in account.asset_classes)
     
@@ -178,20 +223,71 @@ def get_available_accounts_for_strategy(
         asset_class: Asset class (equity, futures, crypto, forex)
         strategies_collection: MongoDB collection
         trading_accounts_collection: MongoDB collection
+        mode: Signal mode (e.g., 'mock_live', 'paper_live', 'live_live') - optional
         
     Returns:
         List of accounts: [{account_id, available_margin, equity}, ...]
         Sorted by available_margin (descending)
     """
     try:
+        # Map strategy asset_class to trading_account asset_classes key
+        # Strategies use: STOCK, CRYPTO, FOREX, FUTURE, OPTION, equity, equities
+        # Accounts use: equity, crypto, forex, futures, options, commodities (SINGULAR!)
+        asset_class_map = {
+            'STOCK': 'equity',
+            'equity': 'equity',
+            'equities': 'equity',
+            'CRYPTO': 'crypto',
+            'crypto': 'crypto',
+            'FOREX': 'forex',
+            'forex': 'forex',
+            'FUTURE': 'futures',
+            'futures': 'futures',
+            'OPTION': 'options',
+            'options': 'options',
+            'commodities': 'commodities'
+        }
+        
+        account_asset_class = asset_class_map.get(asset_class, asset_class.lower())
+        
         # Get strategy
         strategy = strategies_collection.find_one({"strategy_id": strategy_id})
         if not strategy:
             logger.error(f"Strategy {strategy_id} not found")
             return []
         
-        # Get allowed accounts for this strategy
-        allowed_accounts = strategy.get('accounts', [])
+        # Get allowed accounts for this strategy (mode-aware)
+        # If mode provided, extract account_type (mock, paper, live) and lookup strategy.accounts[account_type]
+        # Otherwise use legacy format (flat list)
+        accounts_by_type = strategy.get('accounts', [])
+        
+        if mode:
+            # Extract account_type from mode: mock_live -> mock, paper_live -> paper
+            account_type = mode.split('_')[0]
+            logger.info(f"[MODE-AWARE] Mode: {mode} → Account Type: {account_type}")
+            
+            if isinstance(accounts_by_type, dict):
+                # New format: strategy.accounts = {mock: [...], paper: [...], live: [...]}
+                allowed_accounts = accounts_by_type.get(account_type, [])
+                if not allowed_accounts:
+                    logger.error(
+                        f"Strategy {strategy_id} doesn't support account_type={account_type}. "
+                        f"Available types: {list(accounts_by_type.keys())}"
+                    )
+                    return []
+                logger.info(f"[MODE-AWARE] Using mode-specific accounts for {account_type}: {allowed_accounts}")
+            else:
+                # Legacy format: strategy.accounts = ["IBKR-TESTING-ACCOUNT"]
+                # Treat as 'live' accounts for backward compatibility
+                allowed_accounts = accounts_by_type
+                logger.warning(
+                    f"Strategy {strategy_id} uses legacy account format (flat list). "
+                    f"Using for mode {mode}: {allowed_accounts}"
+                )
+        else:
+            # No mode provided - use legacy behavior (flat list)
+            allowed_accounts = accounts_by_type if isinstance(accounts_by_type, list) else []
+            logger.info(f"[LEGACY] No mode provided, using all accounts: {allowed_accounts}")
         if not allowed_accounts:
             logger.warning(f"Strategy {strategy_id} has no allowed accounts")
             return []
@@ -201,10 +297,16 @@ def get_available_accounts_for_strategy(
             "account_id": {"$in": allowed_accounts},
             "fund_id": fund_id,
             "status": "ACTIVE",
-            f"asset_classes.{asset_class}": {"$exists": True, "$ne": []}
+            f"asset_classes.{account_asset_class}": {"$exists": True}
         }
         
+        logger.info(f"[DEBUG] Querying accounts with: {query}")
+        logger.info(f"[DEBUG] Allowed accounts: {allowed_accounts}")
+        logger.info(f"[DEBUG] Mapped asset class: {asset_class} -> {account_asset_class}")
+        
         accounts = list(trading_accounts_collection.find(query))
+        
+        logger.info(f"[DEBUG] Found {len(accounts)} matching accounts")
         
         if not accounts:
             logger.warning(

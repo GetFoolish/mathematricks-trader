@@ -428,8 +428,18 @@ class BrokerPoller:
 
         # Add authentication details based on broker type
         if account['broker'] == "IBKR":
-            # IBKR connection settings come from environment variables (IBKR_HOST, IBKR_PORT, IBKR_CLIENT_ID)
-            pass
+            # IBKR connection settings from MongoDB authentication_details
+            # NOTE: Use different client_id than execution_service to avoid competing sessions
+            # IBKR Paper accounts only allow 1 live market data subscription
+            # Add 1000 to client_id for account_data_service (e.g., 100 → 1100)
+            base_client_id = auth.get('client_id', 100)
+            service_client_id = base_client_id + 1000
+            
+            config.update({
+                "host": auth.get('host'),
+                "port": auth.get('port'),
+                "client_id": service_client_id
+            })
         elif account['broker'] == "Zerodha":
             config.update({
                 "api_key": auth.get('api_key'),
@@ -454,10 +464,10 @@ class BrokerPoller:
         # Get or create broker instance
         broker = self._get_broker(account_id, config)
 
-        # Connect if needed
+        # Connect if needed (readonly mode - no market data access needed)
         if not broker.is_connected():
             logger.info(f"Connecting to {account_id}...")
-            if not broker.connect():
+            if not broker.connect(skip_sync=True):
                 raise Exception("Failed to connect to broker")
 
         # Fetch balances
@@ -502,13 +512,13 @@ class BrokerPoller:
         asyncio.set_event_loop(loop)
 
         try:
-            # Create broker instance
-            broker = BrokerFactory.create_broker(config)
+            # Create broker instance with mode-aware logic
+            broker = self._get_broker(account_id, config)
 
-            # Connect
+            # Connect (readonly mode - no market data access needed)
             if not broker.is_connected():
                 logger.info(f"Connecting to {account_id}...")
-                if not broker.connect():
+                if not broker.connect(skip_sync=True):
                     raise Exception("Failed to connect to broker")
 
             # Fetch balances
@@ -551,18 +561,94 @@ class BrokerPoller:
 
     def _get_broker(self, account_id: str, config: Dict):
         """
-        Get or create broker instance
+        Get or create broker instance with mode-based routing support.
+
+        Supports 4-mode trading system (account_type × data_source):
+        - mock_mock: Create only Mock broker
+        - mock_live: Create real broker + Mock, wrap in BrokerModeAdapter
+        - paper_live: Create only real broker (IBKR paper account)
+        - live_live: Create only real broker (production)
 
         Args:
             account_id: Account ID (for caching)
             config: Broker configuration
 
         Returns:
-            Broker instance
+            Broker instance (may be wrapped in BrokerModeAdapter)
         """
         if account_id not in self.broker_instances:
             logger.debug(f"Creating new broker instance for {account_id}")
-            self.broker_instances[account_id] = BrokerFactory.create_broker(config)
+
+            # Check account_type from account document
+            account = self.repository.get_account(account_id)
+            if not account:
+                logger.error(f"Account {account_id} not found")
+                return None
+            
+            account_type = account.get('account_type')
+            if not account_type:
+                logger.error(f"Account {account_id} missing required field: account_type={account_type}")
+                return None
+            
+            broker_name = config.get('broker', 'Mock')
+            
+            # Data source is determined by broker: Mock broker = mock data, real brokers = live data
+            data_source = "mock" if broker_name == "Mock" else "live"
+            computed_mode = f"{account_type}_{data_source}"
+
+            try:
+                if account_type == 'mock' and data_source == 'mock':
+                    # mock_mock: Create only Mock broker
+                    logger.debug(f"Creating Mock broker for {account_id} (mode: {computed_mode})")
+                    mock_config = config.copy()
+                    mock_config['broker'] = 'Mock'
+                    broker_instance = BrokerFactory.create_broker(mock_config)
+
+                elif account_type == 'mock' and data_source == 'live':
+                    # mock_live: Create BOTH real + mock, wrap in adapter
+                    logger.debug(f"Creating {broker_name} + Mock brokers for {account_id} (mode: {computed_mode})")
+
+                    # Create real broker
+                    real_broker = BrokerFactory.create_broker(config)
+
+                    # Create mock broker in read-only mode (prevents MongoDB config overwrites)
+                    mock_config = config.copy()
+                    mock_config['broker'] = 'Mock'
+                    mock_config['read_only'] = True
+                    mock_broker = BrokerFactory.create_broker(mock_config)
+
+                    # Wrap in adapter
+                    from services.brokers.adapters import BrokerModeAdapter
+                    broker_instance = BrokerModeAdapter(
+                        real_broker, 
+                        mock_broker, 
+                        account_type='mock',
+                        data_source='live'
+                    )
+
+                elif account_type == 'paper' and data_source == 'live':
+                    # paper_live: Create only real broker (IBKR paper account)
+                    logger.debug(f"Creating {broker_name} broker for {account_id} (mode: {computed_mode} - IBKR Paper)")
+                    broker_instance = BrokerFactory.create_broker(config)
+
+                elif account_type == 'live' and data_source == 'live':
+                    # live_live: Create only real broker
+                    logger.critical(f"Creating LIVE broker for {account_id} (mode: {computed_mode}) - REAL MONEY AT RISK!")
+                    broker_instance = BrokerFactory.create_broker(config)
+
+                else:
+                    logger.error(f"Invalid mode: account_type='{account_type}', data_source='{data_source}' for {account_id}. Falling back to mock_mock.")
+                    mock_config = config.copy()
+                    mock_config['broker'] = 'Mock'
+                    broker_instance = BrokerFactory.create_broker(mock_config)
+
+                self.broker_instances[account_id] = broker_instance
+                logger.info(f"✅ Created broker for {account_id} (mode: {computed_mode})")
+
+            except Exception as e:
+                logger.error(f"Failed to create broker for {account_id}: {e}")
+                raise
+
         return self.broker_instances[account_id]
 
     @staticmethod
@@ -666,46 +752,80 @@ class BrokerPoller:
         Does NOT calculate or update funds.total_equity.
         Execution Service is the single source of truth for fund equity.
 
+        Logic:
+        1. Query funds collection to get all ACTIVE funds
+        2. For each fund, find accounts where fund_id matches
+        3. Display only funds that exist in funds collection
+        4. Show orphaned accounts (accounts with invalid/missing fund_id) under NO_FUND
+
         Args:
             accounts: List of account documents with fund_id and balances
         """
-        # Group accounts by fund for display only
-        funds_data = {}
+        if self.db is None:
+            return
+
+        # Step 1: Get all ACTIVE funds from funds collection (source of truth)
+        all_funds = list(self.db['funds'].find({"status": "ACTIVE"}))
+
+        # Step 2: Create account lookup by fund_id
+        accounts_by_fund = {}
+        orphaned_accounts = []
 
         for account in accounts:
-            fund_id = account.get('fund_id', 'NO_FUND')
+            fund_id = account.get('fund_id')
             balances = account.get('balances', {})
             equity = balances.get('equity', 0)
 
-            if fund_id not in funds_data:
-                funds_data[fund_id] = {'accounts': []}
-
-            funds_data[fund_id]['accounts'].append({
+            account_info = {
                 'account_id': account.get('account_id'),
                 'broker': account.get('broker'),
                 'equity': equity
-            })
+            }
 
-        # READ fund total_equity from MongoDB (don't calculate or write)
-        if funds_data and self.db is not None:
+            if not fund_id:
+                # Account has no fund_id at all
+                orphaned_accounts.append(account_info)
+            else:
+                # Group by fund_id
+                if fund_id not in accounts_by_fund:
+                    accounts_by_fund[fund_id] = []
+                accounts_by_fund[fund_id].append(account_info)
+
+        # Step 3: Display funds (only those that exist in funds collection)
+        if all_funds or orphaned_accounts:
             logger.info("=" * 70)
             logger.info("💰 FUND-LEVEL SUMMARY (Read from MongoDB)")
             logger.info("=" * 70)
 
-            for fund_id in sorted(funds_data.keys()):
-                if fund_id == 'NO_FUND':
-                    continue
-
-                # READ from MongoDB (Execution Service is source of truth)
-                fund_doc = self.db['funds'].find_one({"fund_id": fund_id})
-                total_equity = fund_doc.get('total_equity', 0.0) if fund_doc else 0.0
+            # Display real funds
+            for fund_doc in sorted(all_funds, key=lambda x: x.get('fund_id', '')):
+                fund_id = fund_doc.get('fund_id')
+                total_equity = fund_doc.get('total_equity', 0.0)
+                fund_accounts = accounts_by_fund.get(fund_id, [])
 
                 logger.info(f"\nFund: {fund_id}")
                 logger.info(f"  Total Equity (from MongoDB): ${total_equity:,.2f}")
-                logger.info(f"  Accounts: {len(funds_data[fund_id]['accounts'])}")
+                logger.info(f"  Accounts: {len(fund_accounts)}")
 
-                for acc in funds_data[fund_id]['accounts']:
+                for acc in fund_accounts:
                     logger.info(f"    • {acc['account_id']} ({acc['broker']}): ${acc['equity']:,.2f}")
+
+            # Step 4: Check for orphaned accounts (fund_id doesn't exist in funds collection)
+            for fund_id, fund_accounts in accounts_by_fund.items():
+                fund_exists = any(f.get('fund_id') == fund_id for f in all_funds)
+                if not fund_exists:
+                    orphaned_accounts.extend(fund_accounts)
+
+            # Display orphaned accounts under NO_FUND
+            if orphaned_accounts:
+                logger.warning(f"\n⚠️  NO_FUND (Orphaned Accounts - fund_id missing or invalid)")
+                logger.warning(f"  Total Equity: N/A")
+                logger.warning(f"  Accounts: {len(orphaned_accounts)}")
+
+                for acc in orphaned_accounts:
+                    logger.warning(f"    • {acc['account_id']} ({acc['broker']}): ${acc['equity']:,.2f}")
+
+                logger.warning(f"\n  ⚠️  Action Required: Assign these accounts to a valid fund in MongoDB")
 
             logger.info("=" * 70)
 

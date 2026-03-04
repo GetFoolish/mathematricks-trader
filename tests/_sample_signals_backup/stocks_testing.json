@@ -1,0 +1,58 @@
+[
+  {
+    "strategy_name": "IBKR_Test_Stock",
+    "signal_type": "ENTRY",
+    "staging": true,
+    "signal_legs": [
+      {
+        "action": "BUY",
+        "instrument": "AAPL",
+        "quantity": 1,
+        "price": null
+      }
+    ],
+    "wait": 3
+  },
+  {
+    "strategy_name": "IBKR_Test_Stock",
+    "signal_type": "EXIT",
+    "staging": true,
+    "entry_signal_id": "$PREVIOUS",
+    "signal_legs": [
+      {
+        "action": "SELL",
+        "instrument": "AAPL",
+        "quantity": 1
+      }
+    ],
+    "wait": 2
+  },
+  {
+    "strategy_name": "IBKR_Test_Stock",
+    "signal_type": "ENTRY",
+    "staging": true,
+    "signal_legs": [
+      {
+        "action": "BUY",
+        "instrument": "TSLA",
+        "quantity": 1,
+        "price": null
+      }
+    ],
+    "wait": 3
+  },
+  {
+    "strategy_name": "IBKR_Test_Stock",
+    "signal_type": "EXIT",
+    "staging": true,
+    "entry_signal_id": "$PREVIOUS",
+    "signal_legs": [
+      {
+        "action": "SELL",
+        "instrument": "TSLA",
+        "quantity": 1
+      }
+    ],
+    "wait": 0
+  }
+]

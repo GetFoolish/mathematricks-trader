@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SignalIngestionService
-Monitors MongoDB for new trading signals and routes them to microservices via Pub/Sub
+Monitors MongoDB for new trading signals and stores them for processing by Cerebro
 """
 
 import os
@@ -24,13 +24,6 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from services.signal_ingestion.mongodb_watcher import MongoDBWatcher
 from services.signal_ingestion.signal_standardizer import SignalStandardizer
-
-# Try to import Pub/Sub for MVP microservices bridge
-try:
-    from google.cloud import pubsub_v1
-    PUBSUB_AVAILABLE = True
-except ImportError:
-    PUBSUB_AVAILABLE = False
 
 # Setup logging
 LOG_FILE = os.path.join(PROJECT_ROOT, 'logs', 'signal_ingestion.log')
@@ -77,7 +70,7 @@ def get_signal_processing_logger():
 class SignalIngestionService:
     """
     Main service class for signal ingestion
-    Watches MongoDB and publishes to Pub/Sub
+    Watches MongoDB and stores standardized signals for Cerebro processing
     """
 
     def __init__(self, environment: str = 'production'):
@@ -108,19 +101,6 @@ class SignalIngestionService:
         except PyMongoError as e:
             logger.error(f"⚠️ Failed to connect to signal_store: {e}")
             self.signal_store_collection = None
-
-        # Initialize Pub/Sub publisher
-        self.pubsub_publisher = None
-        self.pubsub_topic_path = None
-        if PUBSUB_AVAILABLE:
-            try:
-                project_id = os.getenv('PUBSUB_PROJECT_ID', 'mathematricks-trader')
-                self.pubsub_publisher = pubsub_v1.PublisherClient()
-                self.pubsub_topic_path = self.pubsub_publisher.topic_path(project_id, 'standardized-signals')
-                logger.info("✅ Pub/Sub bridge enabled - signals will route to microservices")
-            except Exception as e:
-                logger.warning(f"⚠️ Pub/Sub initialization failed: {e}")
-                self.pubsub_publisher = None
 
         logger.info("=" * 80)
         logger.info(f"SignalIngestionService Starting ({environment.upper()})")
@@ -176,6 +156,7 @@ class SignalIngestionService:
                 "signal_sent_timestamp": sent_dt,
                 "receive_lag_ms": int(receive_lag_ms * 1000) if receive_lag_ms else 0,
                 "environment": self.environment,
+                "data_source": signal_data.get('data_source', 'mock'),  # Preserve data_source from signal
                 "signal_data": signal_data,
                 "cerebro_decision": None,  # Will be updated by Cerebro
                 "order_id": None,          # Will be updated by Execution Service
@@ -205,7 +186,7 @@ class SignalIngestionService:
         if not timestamp and signal_data.get('signal_sent_EPOCH'):
             timestamp = datetime.datetime.fromtimestamp(signal_data['signal_sent_EPOCH'], tz=datetime.timezone.utc).isoformat()
 
-        signal = signal_data.get('signal', {})
+        signal_legs = signal_data.get('signal_legs', {})
         strategy_name = signal_data.get('strategy_name', 'Unknown Strategy')
 
         # Get signal ID from the data
@@ -246,10 +227,10 @@ class SignalIngestionService:
             logger.info(f"⚡ Lag: {delay:.3f}s [Sent: {sent_dt_str}, Recd: {recd_dt_str}]")
 
         # Format signal details dynamically
-        if isinstance(signal, list):
+        if isinstance(signal_legs, list):
             # Multi-leg signal
             logger.info("📋 Signal Details (Multi-leg):")
-            for i, leg in enumerate(signal, 1):
+            for i, leg in enumerate(signal_legs, 1):
                 logger.info(f"  Leg {i}:")
                 for key, value in leg.items():
                     if value is not None and value != '':
@@ -257,7 +238,7 @@ class SignalIngestionService:
         else:
             # Single-leg signal
             logger.info("📋 Signal Details:")
-            for key, value in signal.items():
+            for key, value in signal_legs.items():
                 if value is not None and value != '':
                     logger.info(f"  • {key}: {value}")
 
@@ -270,8 +251,8 @@ class SignalIngestionService:
         # Log to signal_processing.log (unified tracking)
         signal_env = signal_data.get('environment', 'production').upper()
 
-        # Handle signal as array (new format) or dict (legacy)
-        signal_for_log = signal[0] if isinstance(signal, list) else signal
+        # Handle signal_legs as array (new format) or dict (legacy)
+        signal_for_log = signal_legs[0] if isinstance(signal_legs, list) else signal_legs
 
         signal_logger.info(
             f"SIGNAL: {signal_id_from_data} | RECEIVED | Strategy={strategy_name} | "
@@ -288,36 +269,12 @@ class SignalIngestionService:
         except Exception as e:
             logger.warning(f"⚠️ Error sending Telegram notification: {e}")
 
-        # Publish to microservices via Pub/Sub
-        if self.pubsub_publisher:
-            try:
-                self.publish_to_pubsub(signal_data, mathematricks_signal_id)
-            except Exception as e:
-                logger.error(f"⚠️ Error publishing to microservices: {e}")
-
-    def publish_to_pubsub(self, signal_data: dict, mathematricks_signal_id: str = None):
-        """Publish signal to MVP microservices via Pub/Sub"""
-        if not self.pubsub_publisher or not self.pubsub_topic_path:
-            return
-
-        # Standardize signal format
-        standardized_signal = SignalStandardizer.standardize(signal_data)
-
-        # Add mathematricks_signal_id for Cerebro to update
+        # Signal processing complete (cerebro called via mongodb_watcher)
+        logger.info(f"✅ Signal processing complete")
         if mathematricks_signal_id:
-            standardized_signal['mathematricks_signal_id'] = mathematricks_signal_id
-
-        # Publish to Pub/Sub
-        message_data = SignalStandardizer.to_json(standardized_signal)
-        future = self.pubsub_publisher.publish(self.pubsub_topic_path, message_data)
-        message_id = future.result(timeout=5.0)
-
-        logger.info("\n🚀 Routing to MVP microservices (Cerebro → Execution)")
-        logger.info(f"✅ Signal published to Cerebro: {message_id}")
-        logger.info(f"   → Signal ID: {standardized_signal['signal_id']}")
-        logger.info(f"   → Mathematricks Signal ID: {mathematricks_signal_id}")
-        logger.info(f"   → Instrument: {standardized_signal['instrument']}")
-        logger.info(f"   → Action: {standardized_signal['action']}")
+            logger.info(f"   → Mathematricks Signal ID: {mathematricks_signal_id}")
+        if signal_id_from_data:
+            logger.info(f"   → Signal ID: {signal_id_from_data}")
         logger.info("-" * 50)
 
     def start(self):

@@ -87,9 +87,14 @@ export interface Strategy {
   name: string;
   asset_class: string;
   instruments: string[];
-  status: 'ACTIVE' | 'INACTIVE' | 'TESTING';
+  status: 'ACTIVE' | 'INACTIVE' | 'TESTING' | StrategyStatus;  // Support both old and new formats
   trading_mode?: 'LIVE' | 'PAPER';
-  account?: string;
+  account?: string; // Legacy field
+  accounts?: {
+    mock?: string[];
+    paper?: string[];
+    live?: string[];
+  }; // Mode-aware accounts (v5)
   include_in_optimization?: boolean;
   risk_limits?: {
     max_position_size?: number;
@@ -100,6 +105,14 @@ export interface Strategy {
   created_at: string;
   updated_at: string;
   backtest_data?: BacktestData;
+}
+
+// New format for strategy.status field with defaults
+export interface StrategyStatus {
+  active: boolean;
+  mode?: 'mock_mock' | 'mock_live' | 'paper_live' | 'live_live';
+  account_type?: 'mock' | 'paper' | 'live';
+  data_source?: 'mock' | 'live';
 }
 
 export interface BacktestData {
@@ -302,7 +315,7 @@ export interface GridConfig {
   row_height: number;
 }
 
-export type WidgetType = 'FundBalances' | 'AccountStatement';
+export type WidgetType = 'FundBalances' | 'AccountStatement' | 'SystemHealth';
 
 export interface WidgetConfig {
   account_filter?: string;
@@ -390,3 +403,97 @@ export interface UpdateDashboardRequest {
   widgets?: DashboardWidget[];
   grid_config?: GridConfig;
 }
+
+// Strategy Submission Types
+export interface StrategySubmission {
+  submission_id: string;
+  status: 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED';
+  strategy_name: string;
+  developer_info: {
+    name: string;
+    email: string;
+    note: string;
+  };
+  raw_data_backtest_full: BacktestDataPoint[];
+  metrics: StrategyMetrics;
+  synthetic_data: {
+    columns_generated: string[];
+    starting_capital: number;
+  };
+  approved_strategy_id?: string;
+  rejection_reason?: string;
+  reviewed_at?: string;
+  submitted_at: string;
+  created_at: string;
+  updated_at: string;
+  tearsheet_generated?: boolean;
+  tearsheet_path?: string;
+  tearsheet_error?: string;
+}
+
+export interface BacktestDataPoint {
+  date: string;
+  return: number;
+  pnl: number;
+  margin_used: number;
+  notional_value: number;
+  account_equity: number;
+}
+
+export interface StrategyMetrics {
+  cagr: number;
+  sharpe_ratio: number;
+  calmar_ratio: number;
+  max_drawdown: number;
+  total_return: number;
+  volatility_annual: number;
+  sortino_ratio: number;
+  win_rate: number;
+  profit_factor: number;
+  num_days: number;
+  start_date: string;
+  end_date: string;
+  num_trades: number;
+}
+
+export interface ApproveSubmissionRequest {
+  strategy_id: string;
+  asset_class: string;
+  instruments: string[];
+  accounts?: string[];
+  status?: 'ACTIVE' | 'INACTIVE' | 'TESTING';
+  trading_mode?: 'PAPER' | 'LIVE';
+  include_in_optimization?: boolean;
+  developer_contact?: string;
+  notes?: string;
+  risk_limits?: {
+    max_position_size?: number;
+    max_daily_loss?: number;
+  };
+}
+
+export interface RejectSubmissionRequest {
+  rejection_reason: string;
+}
+
+// System Health Types
+export interface SystemHealthData {
+  overall_status: 'healthy' | 'degraded' | 'unhealthy';
+  timestamp: string;
+  services: ServiceHealth[];
+  metrics?: {
+    active_strategies?: number;
+    active_accounts?: number;
+    pending_orders?: number;
+    signals_today?: number;
+  };
+}
+
+export interface ServiceHealth {
+  name: string;
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  message?: string;
+  uptime?: number;
+  response_time?: number;
+}
+

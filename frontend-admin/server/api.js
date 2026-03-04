@@ -5,21 +5,36 @@ import { MongoClient, ObjectId } from 'mongodb';
 const app = express();
 const PORT = process.env.API_PORT || 8000;
 
-// MongoDB connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27018/?replicaSet=rs0';
+// MongoDB connection URIs
+const MONGODB_URI_CLOUD = process.env.MONGODB_URI_CLOUD || 'mongodb+srv://vandan_db_user:pY3qmfZmpWqleff3@mathematricks-signalscl.bmgnpvs.mongodb.net/';
+const MONGODB_URI_LOCAL = process.env.MONGODB_URI_LOCAL || 'mongodb://localhost:27018/?replicaSet=rs0';
+
+// Current MongoDB configuration
+let currentMongoDbMode = process.env.MONGODB_URI?.includes('mongodb+srv') ? 'cloud' : 'local';
+let MONGODB_URI = process.env.MONGODB_URI || MONGODB_URI_CLOUD;
+let mongoClient;
 let db;
 let signalStoreCollection;
 let tradingOrdersCollection;
+let rawSignalsCollection;
 
 // Connect to MongoDB
-async function connectToMongo() {
+async function connectToMongo(uri = MONGODB_URI) {
   try {
-    const client = new MongoClient(MONGODB_URI);
-    await client.connect();
-    db = client.db('mathematricks_trading');
+    // Close existing connection if any
+    if (mongoClient) {
+      await mongoClient.close();
+    }
+    
+    mongoClient = new MongoClient(uri);
+    await mongoClient.connect();
+    db = mongoClient.db('mathematricks_trading');
     signalStoreCollection = db.collection('signal_store');
     tradingOrdersCollection = db.collection('trading_orders');
-    console.log('[API] Connected to MongoDB (mathematricks_trading)');
+    rawSignalsCollection = db.collection('trading_signals_raw');
+    
+    const modeLabel = currentMongoDbMode === 'cloud' ? 'Cloud (Atlas)' : 'Local (27018)';
+    console.log(`[API] Connected to MongoDB (${modeLabel})`);
   } catch (error) {
     console.error('[API] MongoDB connection error:', error);
     process.exit(1);
@@ -46,6 +61,43 @@ function serializeDocument(doc) {
   return doc;
 }
 
+// MongoDB Mode Management Endpoints
+// GET /api/mongodb-mode - Get current MongoDB connection mode
+app.get('/api/mongodb-mode', (req, res) => {
+  res.json({ 
+    mode: currentMongoDbMode,
+    uri: currentMongoDbMode === 'cloud' ? 'Cloud (Atlas)' : 'Local (27018)'
+  });
+});
+
+// POST /api/mongodb-mode - Switch MongoDB connection mode
+app.post('/api/mongodb-mode', async (req, res) => {
+  try {
+    const { mode } = req.body;
+    
+    if (!mode || (mode !== 'cloud' && mode !== 'local')) {
+      return res.status(400).json({ error: 'Invalid mode. Must be "cloud" or "local"' });
+    }
+    
+    // Update current mode and URI
+    currentMongoDbMode = mode;
+    MONGODB_URI = mode === 'cloud' ? MONGODB_URI_CLOUD : MONGODB_URI_LOCAL;
+    
+    // Reconnect to MongoDB with new URI
+    await connectToMongo(MONGODB_URI);
+    
+    console.log(`[API] Switched to ${mode === 'cloud' ? 'Cloud (Atlas)' : 'Local (27018)'} MongoDB`);
+    
+    res.json({ 
+      mode: currentMongoDbMode,
+      message: `Successfully switched to ${mode === 'cloud' ? 'cloud' : 'local'} MongoDB`
+    });
+  } catch (error) {
+    console.error('[API] Error switching MongoDB mode:', error);
+    res.status(500).json({ error: 'Failed to switch MongoDB mode' });
+  }
+});
+
 // GET /api/v1/activity/signals
 // CONSOLIDATED SCHEMA v3: Each document has legs[] array, return each leg as a signal row
 app.get('/api/v1/activity/signals', async (req, res) => {
@@ -67,34 +119,34 @@ app.get('/api/v1/activity/signals', async (req, res) => {
     // Flatten legs: each leg becomes a separate signal row
     const signals = [];
     for (const doc of docs) {
-      const legs = doc.legs || [];
+      const signal_legs = doc.signal_legs || [];
+      const raw_signal = doc.raw_signal || {};
 
-      for (const leg of legs) {
-        const raw = leg.raw || {};
-        const decision = leg.decision || null;
+      for (const leg of signal_legs) {
+        const cerebro = leg.cerebro || null;
         const execution = leg.execution || null;
-        const position = doc.position || {};
+        const signal_status = doc.signal_status || {};
 
-        // Get first leg from raw.legs (the actual BUY/SELL actions)
+        // Get first leg from raw_signal.signal_legs (the actual BUY/SELL actions)
         let firstLeg = {};
-        if (raw.legs && raw.legs.length > 0) {
-          firstLeg = raw.legs[0];
+        if (raw_signal.signal_legs && raw_signal.signal_legs.length > 0) {
+          firstLeg = raw_signal.signal_legs[0];
         }
 
-        // Decision status
-        let decisionStatus = decision ? (decision.status || 'PENDING') : null;
+        // Cerebro decision status
+        let decisionStatus = cerebro ? (cerebro.status || 'PENDING') : null;
 
         // Signal type
-        let signalType = leg.leg_type || raw.signal_type || 'UNKNOWN';
+        let signalType = leg.leg_type || raw_signal.signal_type || 'UNKNOWN';
 
         // Calculate timestamps and lags
-        const signalSentEpoch = raw.sent_epoch;
+        const signalSentEpoch = raw_signal.sent_epoch;
         let signalSentTimestamp = null;
         if (signalSentEpoch) {
           signalSentTimestamp = new Date(signalSentEpoch * 1000).toISOString();
         }
 
-        let signalReceivedTimestamp = raw.received_at;
+        let signalReceivedTimestamp = raw_signal.received_at;
         if (typeof signalReceivedTimestamp === 'string') {
           signalReceivedTimestamp = new Date(signalReceivedTimestamp);
         }
@@ -114,24 +166,24 @@ app.get('/api/v1/activity/signals', async (req, res) => {
             executionCompletedTimestamp = new Date(lastOrder.filled_at);
           }
         }
-        // Fallback to decision timestamp
-        if (!executionCompletedTimestamp && decision && decision.timestamp) {
-          executionCompletedTimestamp = new Date(decision.timestamp);
+        // Fallback to cerebro timestamp
+        if (!executionCompletedTimestamp && cerebro && cerebro.timestamp) {
+          executionCompletedTimestamp = new Date(cerebro.timestamp);
         }
 
         if (executionCompletedTimestamp && signalSentEpoch) {
           executionLagSeconds = (executionCompletedTimestamp.getTime() / 1000) - signalSentEpoch;
         }
 
-        // Get PnL from position
-        const pnl = position.pnl || null;
+        // Get PnL from signal_status
+        const pnl = signal_status?.pnl || null;
 
-        // Get final quantity from decision.legs or execution
+        // Get final quantity from cerebro.created_orders or execution
         let finalQuantity = firstLeg.quantity;
-        if (decision && decision.legs && decision.legs.length > 0) {
-          finalQuantity = decision.legs[0].quantity;
+        if (cerebro && cerebro.created_orders && cerebro.created_orders.length > 0) {
+          finalQuantity = cerebro.created_orders[0].quantity;
         } else if (execution && execution.total_quantity_filled) {
-          // For EXIT legs, decision.legs is empty but execution has the actual quantity
+          // For EXIT legs, use execution quantity
           finalQuantity = execution.total_quantity_filled;
         }
 
@@ -139,8 +191,8 @@ app.get('/api/v1/activity/signals', async (req, res) => {
           signal_id: leg.leg_id || doc.signal_id,  // Use leg_id as unique identifier
           base_signal_id: doc.signal_id,  // Parent signal ID
           strategy_id: doc.strategy_id || 'Unknown',
-          timestamp: serializeDocument(raw.received_at || doc.created_at),
-          created_at: serializeDocument(raw.received_at || doc.created_at),
+          timestamp: serializeDocument(raw_signal.received_at || doc.created_at),
+          created_at: serializeDocument(raw_signal.received_at || doc.created_at),
           instrument: firstLeg.instrument || doc.instrument,
           action: firstLeg.action,
           direction: firstLeg.direction,
@@ -159,7 +211,7 @@ app.get('/api/v1/activity/signals', async (req, res) => {
           execution_lag_seconds: executionLagSeconds,
           signal_type: signalType,
           execution: serializeDocument(execution),
-          position: serializeDocument(position),
+          signal_status: serializeDocument(signal_status),
           pnl: serializeDocument(pnl)
         });
       }
@@ -173,40 +225,78 @@ app.get('/api/v1/activity/signals', async (req, res) => {
 });
 
 // GET /api/v1/activity/orders
-// Fetches execution orders from signal_store.legs[].execution.orders[] (CONSOLIDATED schema v3)
+// Fetches BOTH pending orders from trading_orders AND executed orders from signal_store
 app.get('/api/v1/activity/orders', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     const environment = req.query.environment;
 
-    // Query for signals with any leg having execution.orders
-    const query = {
-      'legs.execution.orders': { $exists: true, $ne: [] }
+    const orders = [];
+
+    // PART 1: Fetch PENDING orders from trading_orders collection
+    const pendingQuery = { status: 'PENDING' };
+    if (environment) {
+      pendingQuery.environment = environment;
+    }
+
+    const pendingOrders = await tradingOrdersCollection
+      .find(pendingQuery)
+      .sort({ timestamp: -1 })
+      .limit(limit)
+      .toArray();
+
+    pendingOrders.forEach(order => {
+      // Generate shorter order ID
+      const brokerShort = (order.account_id || 'UNK').replace(/[-_]MOCK/g, '').replace(/IBKR-/g, '');
+      const shortOrderId = order.fund_id 
+        ? `${order.signal_id}_${order.fund_id}_${brokerShort}`
+        : `${order.signal_id}_${brokerShort}`;
+
+      orders.push({
+        signal_id: order.signal_id,
+        leg_id: null,
+        leg_type: order.signal_type || 'UNKNOWN',
+        order_id: shortOrderId,
+        full_order_id: order.order_id,
+        broker_order_id: order.broker_order_id || null,
+        broker: order.account_id || 'N/A',
+        fund_id: order.fund_id || null,
+        instrument: order.instrument || 'N/A',
+        signal_type: order.signal_type || 'UNKNOWN',
+        quantity_requested: order.quantity || 0,
+        quantity_filled: 0,
+        avg_fill_price: null,
+        filled_at: null,
+        status: 'PENDING',
+        environment: order.environment || 'production',
+        fills: [],
+        created_at: order.timestamp // For sorting
+      });
+    });
+
+    // PART 2: Fetch EXECUTED orders from signal_store.signal_legs[].execution.orders[]
+    const executedQuery = {
+      'signal_legs.execution.orders': { $exists: true, $ne: [] }
     };
     if (environment) {
-      query.environment = environment;
+      executedQuery.environment = environment;
     }
 
     const signals = await signalStoreCollection
-      .find(query)
+      .find(executedQuery)
       .sort({ created_at: -1 })
       .limit(limit)
       .toArray();
 
-    // Flatten execution.orders[] from ALL legs of all signals into a single array
-    const orders = [];
     signals.forEach(signal => {
       const instrument = signal.instrument || 'N/A';
 
-      // Iterate through each leg in the legs array
-      (signal.legs || []).forEach(leg => {
+      (signal.signal_legs || []).forEach(leg => {
         if (!leg.execution || !leg.execution.orders) return;
 
         const signalType = leg.leg_type || 'UNKNOWN';
 
         leg.execution.orders.forEach(order => {
-          // Generate shorter, more readable order ID
-          // Format: {signal_id}_{fund}_{broker_short}
           const brokerShort = (order.account_id || 'UNK').replace(/[-_]MOCK/g, '').replace(/IBKR-/g, '');
           const shortOrderId = `${signal.signal_id}_${order.fund_id}_${brokerShort}`;
 
@@ -223,9 +313,9 @@ app.get('/api/v1/activity/orders', async (req, res) => {
             leg_id: leg.leg_id,
             leg_type: signalType,
             order_id: shortOrderId,
-            full_order_id: order.order_id, // Keep full ID for reference
+            full_order_id: order.order_id,
             broker_order_id: order.broker_order_id,
-            broker: order.account_id || 'N/A', // Broker/account
+            broker: order.account_id || 'N/A',
             fund_id: order.fund_id,
             instrument: instrument,
             signal_type: signalType,
@@ -235,20 +325,24 @@ app.get('/api/v1/activity/orders', async (req, res) => {
             filled_at: order.filled_at,
             status: status,
             environment: signal.environment,
-            fills: order.fills
+            fills: order.fills,
+            created_at: order.filled_at // For sorting
           });
         });
       });
     });
 
-    // Sort by filled_at descending
+    // Sort by timestamp descending (most recent first)
     orders.sort((a, b) => {
-      const timeA = a.filled_at ? new Date(a.filled_at).getTime() : 0;
-      const timeB = b.filled_at ? new Date(b.filled_at).getTime() : 0;
+      const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
       return timeB - timeA;
     });
 
-    res.json({ status: 'success', count: orders.length, orders: serializeDocument(orders) });
+    // Limit total results
+    const limitedOrders = orders.slice(0, limit);
+
+    res.json({ status: 'success', count: limitedOrders.length, orders: serializeDocument(limitedOrders) });
   } catch (error) {
     console.error('[API] Error fetching orders:', error);
     res.status(500).json({ detail: error.message });
@@ -263,15 +357,15 @@ app.get('/api/v1/activity/positions', async (req, res) => {
     const environment = req.query.environment;
     const status = req.query.status; // 'OPEN' or 'CLOSED'
 
-    // Query for ENTRY signals with position data
+    // Query for ENTRY signals with signal_status data
     const query = {
-      'position.status': { $exists: true }
+      'signal_status.status': { $exists: true }
     };
     if (environment) {
       query.environment = environment;
     }
     if (status) {
-      query['position.status'] = status;
+      query['signal_status.status'] = status;
     }
 
     const entrySignals = await signalStoreCollection
@@ -280,25 +374,25 @@ app.get('/api/v1/activity/positions', async (req, res) => {
           signal_id: 1,
           strategy_id: 1,
           instrument: 1,
-          'position': 1,
+          'signal_status': 1,
           'legs': 1,
           created_at: 1,
           environment: 1
         }
       })
-      .sort({ 'position.opened_at': -1 })
+      .sort({ 'signal_status.opened_at': -1 })
       .limit(limit)
       .toArray();
 
     // Build positions with entry and exit signal details
     const positions = [];
     for (const entrySignal of entrySignals) {
-      // CONSOLIDATED SCHEMA v3: Get ENTRY leg (first leg)
-      const entryLeg = entrySignal.legs?.find(leg => leg.leg_type === 'ENTRY') || entrySignal.legs?.[0] || {};
-      const entryRaw = entryLeg.raw || {};
+      // CONSOLIDATED SCHEMA v4: Get ENTRY leg (first leg)
+      const entryLeg = entrySignal.signal_legs?.find(leg => leg.leg_type === 'ENTRY') || entrySignal.signal_legs?.[0] || {};
+      const raw_signal = entrySignal.raw_signal || {};
       const entryExecution = entryLeg.execution || {};
 
-      const instrument = entryRaw.legs?.[0]?.instrument || entrySignal.instrument || 'N/A';
+      const instrument = raw_signal.signal_legs?.[0]?.instrument || entrySignal.instrument || 'N/A';
       const strategyId = entrySignal.strategy_id || 'N/A';
       const entryPrice = entryExecution.weighted_avg_price || 0;
       const totalQty = entryExecution.total_quantity_filled || 0;
@@ -312,10 +406,10 @@ app.get('/api/v1/activity/positions', async (req, res) => {
       let exitPrice = null;
       let proceeds = null;
 
-      // Fetch exit signals if position is closed
-      if (entrySignal.position.status === 'CLOSED' && entrySignal.position.exit_signals?.length > 0) {
+      // Fetch exit signals if signal_status is closed
+      if (entrySignal.signal_status.status === 'CLOSED' && entrySignal.signal_status.exit_signals?.length > 0) {
         // Get unique exit signal IDs
-        const uniqueExitIds = [...new Set(entrySignal.position.exit_signals.map(id => id.toString()))];
+        const uniqueExitIds = [...new Set(entrySignal.signal_status.exit_signals.map(id => id.toString()))];
 
         exitSignals = await signalStoreCollection
           .find(
@@ -337,16 +431,16 @@ app.get('/api/v1/activity/positions', async (req, res) => {
         strategy_id: strategyId,
         fund_id: fundId,
         instrument: instrument,
-        status: entrySignal.position.status,
+        status: entrySignal.signal_status.status,
         quantity: totalQty,
         entry_price: entryPrice,
         exit_price: exitPrice,
         cost_basis: costBasis,
         proceeds: proceeds,
-        current_value: entrySignal.position.status === 'OPEN' ? costBasis : proceeds, // TODO: calculate unrealized for open
-        pnl: entrySignal.position.pnl || null,
-        opened_at: entrySignal.position.opened_at,
-        closed_at: entrySignal.position.closed_at || null,
+        current_value: entrySignal.signal_status.status === 'OPEN' ? costBasis : proceeds, // TODO: calculate unrealized for open
+        pnl: entrySignal.signal_status.pnl || null,
+        opened_at: entrySignal.signal_status.opened_at,
+        closed_at: entrySignal.signal_status.closed_at || null,
         environment: entrySignal.environment
       });
     }
@@ -382,8 +476,8 @@ app.get('/api/v1/activity/trading-signals', async (req, res) => {
     // Transform to trading signals format
     const tradingSignals = signals.map(signal => {
       // Get ENTRY leg (should be first leg in array)
-      const entryLeg = signal.legs?.find(leg => leg.leg_type === 'ENTRY') || signal.legs?.[0];
-      const exitLegs = signal.legs?.filter(leg => leg.leg_type === 'EXIT' || leg.leg_type === 'SCALE_OUT') || [];
+      const entryLeg = signal.signal_legs?.find(leg => leg.leg_type === 'ENTRY') || signal.signal_legs?.[0];
+      const exitLegs = signal.signal_legs?.filter(leg => leg.leg_type === 'EXIT' || leg.leg_type === 'SCALE_OUT') || [];
 
       return {
         signal_id: signal.signal_id,
@@ -392,21 +486,21 @@ app.get('/api/v1/activity/trading-signals', async (req, res) => {
         environment: signal.environment,
 
         // Position info
-        status: signal.position?.status || 'PENDING',
-        opened_at: serializeDocument(signal.position?.opened_at),
-        closed_at: serializeDocument(signal.position?.closed_at),
+        status: signal.signal_status?.status || 'PENDING',
+        opened_at: serializeDocument(signal.signal_status?.opened_at),
+        closed_at: serializeDocument(signal.signal_status?.closed_at),
 
         // P&L info (cumulative for PARTIAL, final for CLOSED)
-        pnl: serializeDocument(signal.position?.pnl),
+        pnl: serializeDocument(signal.signal_status?.pnl),
 
         // Partial exit info
-        partial_exit_count: signal.position?.partial_exit_count,
-        remaining_quantity: signal.position?.remaining_quantity,
-        entry_quantity: signal.position?.entry_quantity,
-        exit_quantity: signal.position?.exit_quantity,
+        partial_exit_count: signal.signal_status?.partial_exit_count,
+        remaining_quantity: signal.signal_status?.remaining_quantity,
+        entry_quantity: signal.signal_status?.entry_quantity,
+        exit_quantity: signal.signal_status?.exit_quantity,
 
         // Legs
-        legs: serializeDocument(signal.legs),
+        signal_legs: serializeDocument(signal.signal_legs),
         entry_leg: serializeDocument(entryLeg),
         exit_legs: exitLegs.map(serializeDocument),
 
@@ -700,6 +794,187 @@ app.post('/api/v1/dashboards/:dashboard_id/reload-all', async (req, res) => {
     res.json({ status: 'success', reloaded: dashboard.widgets.length });
   } catch (error) {
     console.error('[API] Error reloading dashboard widgets:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================================
+// NEW ACTIVITY TAB ENDPOINTS
+// ============================================================================
+
+// GET /api/v1/activity/raw-signals - Tab 1: Raw Signals from trading_signals_raw
+app.get('/api/v1/activity/raw-signals', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const environment = req.query.environment;
+
+    const query = {};
+    if (environment) {
+      query.environment = environment;
+    }
+
+    const rawSignals = await rawSignalsCollection
+      .find(query)
+      .sort({ received_at: -1 })
+      .limit(limit)
+      .toArray();
+
+    res.json({
+      raw_signals: serializeDocument(rawSignals),
+      count: rawSignals.length
+    });
+  } catch (error) {
+    console.error('[API] Error fetching raw signals:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/v1/activity/raw-signal/:signal_id - Get single raw signal by signal_id or MongoDB _id
+app.get('/api/v1/activity/raw-signal/:signal_id', async (req, res) => {
+  try {
+    const { signal_id } = req.params;
+    
+    // Try to find by signal_id field first (normalized field added by signal_ingestion)
+    let rawSignal = await rawSignalsCollection.findOne({ signal_id: signal_id });
+    
+    // Fallback: try signalID field (legacy field from signal-senders)
+    if (!rawSignal) {
+      rawSignal = await rawSignalsCollection.findOne({ signalID: signal_id });
+    }
+    
+    // Fallback: if not found and looks like MongoDB ObjectId, try as _id
+    if (!rawSignal && ObjectId.isValid(signal_id)) {
+      rawSignal = await rawSignalsCollection.findOne({ _id: new ObjectId(signal_id) });
+    }
+    
+    if (!rawSignal) {
+      return res.status(404).json({ error: 'Raw signal not found' });
+    }
+    
+    res.json({
+      raw_signal: serializeDocument(rawSignal)
+    });
+  } catch (error) {
+    console.error('[API] Error fetching raw signal:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/v1/activity/signal-store - Tab 2: Signal Store
+app.get('/api/v1/activity/signal-store', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const environment = req.query.environment;
+
+    const query = {};
+    if (environment) {
+      query.environment = environment;
+    }
+
+    const signals = await signalStoreCollection
+      .find(query)
+      .sort({ created_at: -1 })
+      .limit(limit)
+      .toArray();
+
+    res.json({
+      signals: serializeDocument(signals),
+      count: signals.length
+    });
+  } catch (error) {
+    console.error('[API] Error fetching signal store:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/v1/activity/trading-orders-full - Tab 3: Trading Orders
+app.get('/api/v1/activity/trading-orders-full', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const environment = req.query.environment;
+
+    const query = {};
+    if (environment) {
+      query.environment = environment;
+    }
+
+    const orders = await tradingOrdersCollection
+      .find(query)
+      .sort({ created_at: -1 })
+      .limit(limit)
+      .toArray();
+
+    res.json({
+      orders: serializeDocument(orders),
+      count: orders.length
+    });
+  } catch (error) {
+    console.error('[API] Error fetching trading orders:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/v1/activity/signal-status - Tab 4: Signal Status (one row per signal)
+app.get('/api/v1/activity/signal-status', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const environment = req.query.environment;
+
+    const query = {};
+    if (environment) {
+      query.environment = environment;
+    }
+
+    const signals = await signalStoreCollection
+      .find(query)
+      .sort({ created_at: -1 })
+      .limit(limit)
+      .toArray();
+
+    // Transform to status view: one row per signal with summary info
+    const statusData = signals.map(doc => {
+      const signal_status = doc.signal_status || {};
+      const signal_legs = doc.signal_legs || [];
+      
+      // Count ENTRY and EXIT legs
+      const entryLegs = signal_legs.filter(leg => leg.leg_type === 'ENTRY');
+      const exitLegs = signal_legs.filter(leg => leg.leg_type === 'EXIT');
+
+      // Get cerebro decision status from first leg
+      const firstLegCerebro = signal_legs.length > 0 ? (signal_legs[0].cerebro || {}) : {};
+      const decisionStatus = firstLegCerebro.status || 'PENDING';
+
+      return {
+        _id: doc._id,
+        signal_id: doc.signal_id,
+        base_signal_id: doc.base_signal_id,
+        strategy_id: doc.strategy_id,
+        instrument: doc.instrument,
+        environment: doc.environment,
+        mode: doc.mode,
+        position_status: signal_status.status || 'PENDING',
+        entry_quantity: signal_status.entry_quantity || 0,
+        exit_quantity: signal_status.exit_quantity || 0,
+        remaining_quantity: signal_status.remaining_quantity || 0,
+        pnl: signal_status.pnl,
+        opened_at: signal_status.opened_at,
+        closed_at: signal_status.closed_at,
+        created_at: doc.created_at,
+        updated_at: doc.updated_at,
+        entry_legs_count: entryLegs.length,
+        exit_legs_count: exitLegs.length,
+        decision_status: decisionStatus,
+        processing_complete: doc.processing_complete,
+        raw_document: doc // Include full document for detail view
+      };
+    });
+
+    res.json({
+      signals: serializeDocument(statusData),
+      count: statusData.length
+    });
+  } catch (error) {
+    console.error('[API] Error fetching signal status:', error);
     res.status(500).json({ error: error.message });
   }
 });

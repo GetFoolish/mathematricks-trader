@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""
+Comprehensive Test Runner for Mathematricks Trader
+Includes preflight checks and comprehensive test suites
+"""
+
+import subprocess
+import sys
+import os
+from pathlib import Path
+from datetime import datetime
+
+
+class TestRunner:
+    """Comprehensive test runner with preflight checks"""
+    
+    def __init__(self):
+        self.project_root = Path.cwd()
+        self.failed_tests = []
+        self.passed_tests = []
+    
+    def run_command(self, cmd: str, description: str, critical: bool = False):
+        """Run a command and print results"""
+        print(f"\n{'='*80}")
+        print(f"Running: {description}")
+        print(f"Command: {cmd}")
+        print('='*80)
+        
+        result = subprocess.run(cmd, shell=True, capture_output=False)
+        
+        if result.returncode != 0:
+            print(f"❌ Failed: {description}")
+            self.failed_tests.append(description)
+            if critical:
+                print("🛑 Critical test failed, stopping execution")
+                sys.exit(1)
+            return False
+        else:
+            print(f"✅ Passed: {description}")
+            self.passed_tests.append(description)
+            return True
+    
+    def run_preflight_checks(self):
+        """Run preflight checks before tests"""
+        print("\n🔍 Running Preflight Checks...")
+        print("="*80)
+        
+        checks_passed = True
+        
+        # Check Python version
+        print("\n📌 Checking Python version...")
+        result = subprocess.run(
+            [sys.executable, "--version"],
+            capture_output=True,
+            text=True
+        )
+        print(f"   {result.stdout.strip()}")
+        
+        # Check required directories
+        print("\n📌 Checking project structure...")
+        required_dirs = [
+            "tests/conftest.py",
+            "services",
+            "scripts/preflight_check.py"
+        ]
+        
+        for path_str in required_dirs:
+            path = self.project_root / path_str
+            if path.exists():
+                print(f"   ✅ {path_str}")
+            else:
+                print(f"   ❌ {path_str} - NOT FOUND")
+                checks_passed = False
+        
+        # Run preflight_check.py if it exists
+        preflight_script = self.project_root / "scripts" / "preflight_check.py"
+        if preflight_script.exists():
+            print("\n📌 Running system preflight checks...")
+            result = subprocess.run(
+                [sys.executable, str(preflight_script)],
+                capture_output=True,
+                text=True
+            )
+            
+            # Print output
+            if result.stdout:
+                print(result.stdout)
+            
+            if result.returncode != 0:
+                print("   ⚠️  Preflight checks reported warnings")
+                if result.stderr:
+                    print(f"   Error: {result.stderr}")
+                # Don't fail on preflight warnings, just warn
+            else:
+                print("   ✅ System preflight checks passed")
+        else:
+            print("\n   ℹ️  No preflight_check.py found, skipping system checks")
+        
+        # Check MongoDB connection (if running)
+        print("\n📌 Checking MongoDB connection...")
+        try:
+            import pymongo
+            mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+            client = pymongo.MongoClient(mongo_uri, serverSelectionTimeoutMS=2000)
+            client.server_info()
+            print(f"   ✅ MongoDB connected at {mongo_uri}")
+            client.close()
+        except Exception as e:
+            print(f"   ⚠️  MongoDB not accessible: {e}")
+            print("   ℹ️  Some integration tests may be skipped")
+        
+        # Check Docker services (optional)
+        print("\n📌 Checking Docker services...")
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}: {{.Status}}"],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0 and result.stdout:
+            services = [line for line in result.stdout.split('\n') if 'mathematricks' in line.lower()]
+            if services:
+                print("   ✅ Docker services running:")
+                for service in services[:5]:  # Show first 5
+                    print(f"      {service}")
+                if len(services) > 5:
+                    print(f"      ... and {len(services) - 5} more")
+            else:
+                print("   ℹ️  No Mathematricks Docker services running")
+        else:
+            print("   ℹ️  Docker not available or no services running")
+        
+        print("\n" + "="*80)
+        if checks_passed:
+            print("✅ Preflight checks completed")
+        else:
+            print("⚠️  Some preflight checks failed, but continuing...")
+        print("="*80)
+        
+        return checks_passed
+    
+    def print_summary(self):
+        """Print test execution summary"""
+        print("\n" + "="*80)
+        print("📊 TEST EXECUTION SUMMARY")
+        print("="*80)
+        
+        total = len(self.passed_tests) + len(self.failed_tests)
+        
+        if self.passed_tests:
+            print(f"\n✅ Passed ({len(self.passed_tests)}/{total}):")
+            for test in self.passed_tests:
+                print(f"   • {test}")
+        
+        if self.failed_tests:
+            print(f"\n❌ Failed ({len(self.failed_tests)}/{total}):")
+            for test in self.failed_tests:
+                print(f"   • {test}")
+        
+        print("\n" + "="*80)
+        
+        if self.failed_tests:
+            print("❌ Some tests failed")
+            return False
+        else:
+            print("✅ All tests passed!")
+            return True
+
+
+def main():
+    """Run test suite with various options"""
+    
+    runner = TestRunner()
+    
+    print("\n🧪 Mathematricks Trader Test Framework")
+    print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("="*80)
+    
+    # Check if we're in the right directory
+    if not Path("tests/conftest.py").exists():
+        print("❌ Error: Please run this script from the project root directory")
+        sys.exit(1)
+    
+    # Define test suites
+    tests = {
+        "1": ("python -m pytest -m unit -v", "Unit Tests", False),
+        "2": ("python -m pytest -m integration -v", "Integration Tests", False),
+        "3": ("python -m pytest -m e2e -v", "End-to-End Tests", False),
+        "4": ("python -m pytest -m 'not slow' -v", "Fast Tests Only", False),
+        "5": ("python -m pytest -m critical -v", "Critical Tests Only", True),
+        "6": ("python -m pytest tests/unit/test_signal_ingestion.py -v", "Signal Ingestion Tests", False),
+        "7": ("python -m pytest tests/unit/test_execution_service.py -v", "Execution Service Tests", False),
+        "8": ("python -m pytest --cov=services --cov-report=html --cov-report=term", "Tests with Coverage", False),
+        "9": ("python -m pytest -v --tb=short", "All Tests (Short Output)", False),
+        "10": ("python -m pytest -v", "All Tests (Verbose)", False),
+        "preflight": ("", "Run Preflight Checks Only", False),
+        "clean": ("", "Clean Test Artifacts", False),
+    }
+    
+    print("\nAvailable Test Suites:")
+    print("-" * 80)
+    for key, (cmd, desc, critical) in tests.items():
+        marker = "🔴" if critical else "🔵"
+        print(f"{marker} {key:10s} - {desc}")
+    print("-" * 80)
+    print("ℹ️  🔴 = Critical tests (stop on failure)")
+    print("-" * 80)
+    
+    # Parse command line arguments
+    if len(sys.argv) > 1:
+        choice = sys.argv[1]
+        skip_preflight = "--skip-preflight" in sys.argv
+    else:
+        # Interactive mode
+        choice = input("\nSelect test suite to run (or 'q' to quit): ").strip()
+        skip_preflight = False
+    
+    if choice.lower() == 'q':
+        print("Exiting...")
+        sys.exit(0)
+    
+    # Handle special commands
+    if choice == "clean":
+        print("\n🧹 Cleaning test artifacts...")
+        subprocess.run("find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true", shell=True)
+        subprocess.run("find . -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null || true", shell=True)
+        subprocess.run("find . -type f -name '*.pyc' -delete 2>/dev/null || true", shell=True)
+        subprocess.run("rm -rf htmlcov/ .coverage tests/test_output/* 2>/dev/null || true", shell=True)
+        print("✅ Test artifacts cleaned")
+        sys.exit(0)
+    
+    if choice == "preflight":
+        runner.run_preflight_checks()
+        sys.exit(0)
+    
+    # Run preflight checks unless skipped
+    if not skip_preflight:
+        runner.run_preflight_checks()
+        input("\n⏸️  Press Enter to continue with tests, or Ctrl+C to cancel...")
+    
+    # Run selected test suite
+    if choice in tests:
+        cmd, desc, critical = tests[choice]
+        if cmd:  # Some choices like "preflight" don't have commands
+            success = runner.run_command(cmd, desc, critical)
+            runner.print_summary()
+            sys.exit(0 if success else 1)
+    elif choice == "all":
+        # Run all test suites
+        print("\n🚀 Running ALL test suites...")
+        for key in ["1", "2", "3", "6", "7"]:
+            cmd, desc, critical = tests[key]
+            runner.run_command(cmd, desc, critical)
+        
+        runner.print_summary()
+        sys.exit(0 if not runner.failed_tests else 1)
+    else:
+        print(f"❌ Invalid choice: {choice}")
+        print("\nUsage:")
+        print("  python tests/run_tests.py [test_number]")
+        print("  python tests/run_tests.py [test_number] --skip-preflight")
+        print("  python tests/run_tests.py all")
+        print("  python tests/run_tests.py clean")
+        print("  python tests/run_tests.py preflight")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

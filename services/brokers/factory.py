@@ -9,6 +9,8 @@ from .base import AbstractBroker
 from .ibkr import IBKRBroker
 from .zerodha import ZerodhaBroker
 from .mock import MockBroker
+from .kraken import KrakenBroker
+from .coinbase import CoinbaseBroker
 from .exceptions import BrokerError
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,8 @@ class BrokerFactory:
         "IBKR": IBKRBroker,
         "Zerodha": ZerodhaBroker,
         "Mock": MockBroker,
+        "Kraken": KrakenBroker,
+        "Coinbase": CoinbaseBroker,
         # Add more brokers here as they're implemented
     }
 

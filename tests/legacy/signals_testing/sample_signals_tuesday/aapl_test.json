@@ -1,0 +1,44 @@
+[
+  {
+    "strategy_name": "IBKR_Test_Stock",
+    "passphrase": "test_password_123",
+    "signal_type": "ENTRY",
+    "entry_name": "$AAPL_Tuesday_1",
+    "account_equity": 1000000,
+    "signal_legs": [{
+      "instrument": "AAPL",
+      "instrument_type": "STOCK",
+      "action": "BUY",
+      "direction": "LONG",
+      "quantity": 5,
+      "order_type": "MARKET",
+      "price": 133.75,
+      "environment": "staging"
+    }],
+    "wait": 10,
+    "metadata": {
+      "test_type": "standard_stock",
+      "description": "AAPL - Standard large-cap stock test"
+    }
+  },
+  {
+    "strategy_name": "IBKR_Test_Stock",
+    "passphrase": "test_password_123",
+    "signal_type": "EXIT",
+    "entry_signal_id": "$AAPL_Tuesday_1",
+    "signal_legs": [{
+      "instrument": "AAPL",
+      "instrument_type": "STOCK",
+      "action": "SELL",
+      "direction": "SHORT",
+      "quantity": 5,
+      "order_type": "MARKET",
+      "price": 135.50,
+      "environment": "staging"
+    }],
+    "metadata": {
+      "test_type": "standard_stock_exit",
+      "description": "Exit AAPL position - verify position closure"
+    }
+  }
+]

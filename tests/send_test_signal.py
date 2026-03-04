@@ -1,0 +1,1123 @@
+#!/usr/bin/env python3
+"""
+Send test signals directly to local MongoDB
+Supports array format with sequential signal sending and wait times
+
+Usage:
+    # From file (recommended)
+    python send_test_signal.py --file simple_signal_equity_1.json
+    python send_test_signal.py @simple_signal_equity_1.json
+
+    # List available strategies
+    python send_test_signal.py --list-strategies
+
+Format:
+    Array of signals with signal_type, signal_legs, and wait fields
+    See sample files in services/signal_ingestion/sample_signals/
+"""
+import argparse
+import json
+import os
+import sys
+import random
+import time
+import logging
+from pymongo import MongoClient
+from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Import yfinance for realistic option contract lookup
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+    print("⚠️  Warning: yfinance not available, option signals will use hardcoded values")
+
+
+def setup_logging():
+    """Setup dual logging to console and file"""
+    # Create logs directory if it doesn't exist
+    os.makedirs('logs', exist_ok=True)
+    
+    # Create logger
+    logger = logging.getLogger('send_test_signal')
+    logger.setLevel(logging.INFO)
+    
+    # Remove existing handlers
+    logger.handlers = []
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(message)s')
+    console_handler.setFormatter(console_formatter)
+    
+    # File handler
+    file_handler = logging.FileHandler('logs/testing.log', mode='a')
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter('%(message)s')
+    file_handler.setFormatter(file_formatter)
+    
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    
+    return logger
+
+
+# Initialize logger
+logger = setup_logging()
+
+
+def get_realistic_option_contract(symbol: str, right: str = 'C', offset_from_atm: float = 5.0):
+    """
+    Fetch a realistic option contract for the given symbol using yfinance
+    
+    Args:
+        symbol: Underlying symbol (e.g., 'SPY')
+        right: Option type - 'C' for call, 'P' for put
+        offset_from_atm: Dollar offset from ATM strike (positive for OTM calls/ITM puts)
+    
+    Returns:
+        dict with keys: strike, expiry (YYYYMMDD format), current_price
+        or None if lookup fails
+    """
+    if not YFINANCE_AVAILABLE:
+        logger.info(f"   ⚠️  yfinance not available, skipping realistic option lookup")
+        return None
+    
+    try:
+        # Fetch ticker data
+        ticker = yf.Ticker(symbol)
+        
+        # Get current price
+        try:
+            current_price = ticker.history(period='1d')['Close'].iloc[-1]
+        except:
+            # Fallback to fast_info
+            current_price = ticker.fast_info.get('lastPrice')
+        
+        if not current_price or current_price <= 0:
+            logger.info(f"   ⚠️  Could not fetch current price for {symbol}")
+            return None
+        
+        logger.info(f"   📊 Current {symbol} price: ${current_price:.2f}")
+        
+        # Get available expiration dates
+        expirations = ticker.options
+        if not expirations:
+            logger.info(f"   ⚠️  No option expirations available for {symbol}")
+            return None
+        
+        # Find next expiration at least 7 days out (avoid weekly expiries too close)
+        target_date = datetime.now() + timedelta(days=7)
+        valid_expirations = [exp for exp in expirations if datetime.strptime(exp, '%Y-%m-%d') >= target_date]
+        
+        if not valid_expirations:
+            # Fallback to nearest available
+            selected_expiry_str = expirations[0]
+        else:
+            selected_expiry_str = valid_expirations[0]
+        
+        # Convert to YYYYMMDD format for IBKR
+        expiry_date = datetime.strptime(selected_expiry_str, '%Y-%m-%d')
+        expiry_ibkr = expiry_date.strftime('%Y%m%d')
+        
+        # Get option chain for selected expiry
+        opt_chain = ticker.option_chain(selected_expiry_str)
+        chain = opt_chain.calls if right == 'C' else opt_chain.puts
+        
+        if chain.empty:
+            logger.info(f"   ⚠️  No {right} options available for {selected_expiry_str}")
+            return None
+        
+        # Calculate target strike (ATM + offset)
+        target_strike = current_price + offset_from_atm
+        
+        # Find closest available strike to target
+        chain['strike_diff'] = abs(chain['strike'] - target_strike)
+        closest_row = chain.loc[chain['strike_diff'].idxmin()]
+        selected_strike = closest_row['strike']
+        
+        logger.info(f"   ✅ Selected {right} option: strike=${selected_strike:.2f}, expiry={expiry_ibkr}")
+        
+        return {
+            'strike': float(selected_strike),
+            'expiry': expiry_ibkr,
+            'current_price': float(current_price),
+            'offset_from_atm': float(selected_strike - current_price)
+        }
+        
+    except Exception as e:
+        logger.info(f"   ⚠️  Error fetching option contract for {symbol}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def update_option_signal_with_realistic_contract(signal: dict):
+    """
+    Update an option signal with realistic strike/expiry from yfinance
+    
+    Modifies signal in-place if it contains option legs
+    
+    Args:
+        signal: Signal dictionary to update
+    
+    Returns:
+        str: 'updated' if signal was updated, 'not_option' if not an option signal, 
+             'failed' if option signal but lookup failed
+    """
+    # Check if this signal has option legs
+    signal_legs = signal.get('signal_legs') or signal.get('signal', [])
+    
+    if not signal_legs or not isinstance(signal_legs, list):
+        return 'not_option'
+    
+    has_options = False
+    all_updated = True
+    
+    for leg in signal_legs:
+        instrument_type = leg.get('instrument_type', '').upper()
+        
+        # Skip non-option legs
+        if instrument_type != 'OPTION':
+            continue
+        
+        has_options = True
+        
+        # Check if leg has nested option details
+        option_legs = leg.get('legs', [])
+        if not option_legs or not isinstance(option_legs, list):
+            continue
+        
+        # Get underlying symbol
+        underlying = leg.get('underlying') or leg.get('instrument')
+        if not underlying:
+            logger.info(f"   ⚠️  Option leg missing underlying symbol")
+            all_updated = False
+            continue
+        
+        # Fetch realistic contract for first option leg
+        # (for now, assume all nested legs in a spread would use same underlying)
+        first_option = option_legs[0]
+        right = first_option.get('right', 'C')
+        
+        # Determine offset based on action (5 OTM for buys, ATM for sells)
+        action = first_option.get('action', 'BUY').upper()
+        offset = 5.0 if action == 'BUY' else 0.0
+        
+        logger.info(f"   🔍 Fetching realistic option contract for {underlying}...")
+        realistic = get_realistic_option_contract(underlying, right=right, offset_from_atm=offset)
+        
+        if realistic:
+            # Update all nested option legs with realistic strike/expiry
+            for opt_leg in option_legs:
+                opt_leg['strike'] = realistic['strike']
+                opt_leg['expiry'] = realistic['expiry']
+            
+            logger.info(f"   ✅ Updated option signal with realistic contract")
+        else:
+            logger.info(f"   ❌ Failed to get realistic contract for {underlying}")
+            all_updated = False
+    
+    if not has_options:
+        return 'not_option'
+    
+    return 'updated' if all_updated else 'failed'
+
+
+def send_signal(payload: dict, signal_type: str = "single", previous_entry_id: str = None, mode: str = None, run_id_suffix: str = None, environment: str = 'staging', account_type: str = None, deployment_target: str = 'cloud'):
+    """
+    Send signal via HTTP POST to signal-receiver API
+
+    Args:
+        payload: Signal JSON matching webhook format
+        signal_type: Type of signal ("entry", "exit", or "single")
+        previous_entry_id: MongoDB ObjectId of previous ENTRY signal (for EXIT signals)
+        mode: Trading mode (mock_mock, mock_live, paper_live, live_live)
+        run_id_suffix: Optional 6-digit suffix to append to signalID for uniqueness across test runs
+        environment: Environment for signal routing (staging, production)
+        account_type: Account type override
+    """
+    import requests
+    
+    # Determine Signal Receiver URL based on deployment target
+    if deployment_target == 'local':
+        SIGNAL_API_URL = 'http://localhost:3000/api/v1/signals'
+    else:  # cloud
+        # Use environment to determine cloud URL
+        if environment == 'live':
+            SIGNAL_API_URL = 'https://mathematricks.fund/api/v1/signals'
+        else:  # staging (default)
+            SIGNAL_API_URL = 'https://staging.mathematricks.fund/api/v1/signals'
+    
+    # Inject entry_signal_id if this is an EXIT signal and we have a previous ENTRY
+    if signal_type == "exit" and previous_entry_id:
+        # Replace any variable reference (starting with $) with the resolved ObjectId
+        entry_ref = payload.get("entry_signal_id", "")
+        if entry_ref.startswith("$"):
+            payload["entry_signal_id"] = previous_entry_id
+            print(f"✓ Injected entry_signal_id (ObjectId): {previous_entry_id[:12]}...")
+
+    # Use timezone-aware UTC datetime
+    now_utc = datetime.now(timezone.utc)
+
+    # Prepare signal payload
+    signal_payload = payload.copy()
+    
+    # Auto-generate fields if missing
+    # ALWAYS use current timestamp (override any hardcoded values from JSON)
+    signal_payload["signal_sent_EPOCH"] = int(now_utc.timestamp())
+
+    if "signalID" not in signal_payload:
+        # Simple auto-generated ID: just timestamp_random
+        timestamp = signal_payload["signal_sent_EPOCH"]
+        random_id = random.randint(1000, 9999)
+        signal_payload["signalID"] = f"sig_{timestamp}_{random_id}"
+    
+    # Append run_id_suffix + EPOCH to signalID for uniqueness across test runs AND within runs
+    if run_id_suffix:
+        # Extract base signalID without any existing suffix
+        base_signal_id = signal_payload["signalID"]
+        # Append the 6-digit suffix + current EPOCH for guaranteed uniqueness
+        signal_payload["signalID"] = f"{base_signal_id}_{run_id_suffix}_{signal_payload['signal_sent_EPOCH']}"
+
+    # Add passphrase for API authentication
+    if "passphrase" not in signal_payload:
+        signal_payload["passphrase"] = "test_password_123"
+    
+    # Add mode metadata
+    signal_payload["mode"] = mode
+    signal_payload["test"] = True
+    signal_payload["environment"] = environment
+    
+    # Extract account_type and data_source from mode if not explicitly provided
+    # Mode format: {account_type}_{data_source} (e.g., paper_live, mock_mock, etc.)
+    if mode:
+        mode_parts = mode.split('_')
+        # Extract data_source from mode (second part): mock_mock → mock, mock_live → live, etc.
+        data_source = mode_parts[1] if len(mode_parts) > 1 else 'mock'
+        # Extract account_type from mode (first part): paper_live → paper, mock_mock → mock, etc.
+        # Only use mode-derived account_type if not explicitly provided
+        if not account_type and len(mode_parts) > 0:
+            account_type = mode_parts[0]
+    else:
+        data_source = 'mock'
+        if not account_type:
+            account_type = 'mock'
+    
+    signal_payload["data_source"] = data_source
+    signal_payload["account_type"] = account_type
+    
+    # Do not inject account_equity; must be provided by signal payload
+
+    # POST to signal receiver API
+    print(f"\n📡 Sending signal to: {SIGNAL_API_URL}")
+    print(f"   Environment: {environment}")
+    print(f"   Mode: {mode}")
+    
+    try:
+        response = requests.post(
+            SIGNAL_API_URL,
+            json=signal_payload,
+            timeout=10,
+            headers={'Content-Type': 'application/json'}
+        )
+        
+        # Print response details
+        print(f"\n📡 API Response:")
+        print(f"   Status Code: {response.status_code}")
+        if response.text:
+            try:
+                response_json = response.json()
+                print(f"   Response: {json.dumps(response_json, indent=2)}")
+                result_data = response_json
+            except:
+                print(f"   Response (text): {response.text}")
+                result_data = {}
+        else:
+            print(f"   Response: NONE")
+            result_data = {}
+        
+        response.raise_for_status()
+
+        print("=" * 80)
+        if signal_type != "single":
+            print(f"✅ Test Signal Sent Successfully ({signal_type.upper()})")
+        else:
+            print("✅ Test Signal Sent Successfully")
+        print("=" * 80)
+        print(f"Signal ID:    {signal_payload['signalID']}")
+        print(f"Strategy:     {signal_payload.get('strategy_name', 'N/A')}")
+
+        # Support both signal_legs (new) and signal (legacy)
+        signal_data = signal_payload.get('signal_legs') or signal_payload.get('signal', {})
+        # Handle signal_legs/signal as array or dict
+        if isinstance(signal_data, list):
+            first_leg = signal_data[0] if len(signal_data) > 0 else {}
+            action = first_leg.get('action', 'N/A')
+            quantity = first_leg.get('quantity', 'N/A')
+            instrument = first_leg.get('instrument') or first_leg.get('ticker', 'N/A')
+            leg_count = f" ({len(signal_data)} legs)" if len(signal_data) > 1 else ""
+        else:
+            action = signal_data.get('action', 'N/A')
+            quantity = signal_data.get('quantity', 'N/A')
+            instrument = signal_data.get('instrument') or signal_data.get('ticker', 'N/A')
+            leg_count = ""
+        print(f"Action:       {action} {quantity} {instrument}{leg_count}")
+
+        # Show signal type if present (new array format)
+        if "signal_type" in signal_payload:
+            print(f"Type:         {signal_payload['signal_type']}")
+
+        print(f"Staging:      {'Yes' if signal_payload.get('staging', True) else 'No'}")
+        print(f"Staging:      {'Yes' if signal_payload.get('staging', True) else 'No'}")
+        
+        # Display processing result from API
+        api_status = result_data.get('status', 'unknown')
+        print(f"API Status:   {api_status}")
+        
+        if api_status == 'approved':
+            signal_store_id = result_data.get('signal_store_id')
+            print(f"Signal Store: {signal_store_id}")
+        elif api_status == 'rejected':
+            print(f"Rejection:    {result_data.get('reason', 'Unknown reason')}")
+        elif api_status == 'timeout':
+            print(f"Warning:      {result_data.get('reason', 'Processing timeout')}")
+        
+        print(f"Timestamp:    {now_utc.isoformat()}")
+        print("=" * 80)
+        
+        if api_status == 'approved':
+            print("\n✅ Signal approved and processed by signal_ingestion")
+        elif api_status == 'rejected':
+            print("\n❌ Signal rejected by signal_ingestion")
+        elif api_status == 'timeout':
+            print("\n⚠️  Signal may still be processing (timeout waiting for signal_store)")
+        
+        print("\n💡 Monitor logs:")
+        print("   tail -f logs/signal_ingestion.log    # Should show signal received")
+        print("   tail -f logs/cerebro_service.log      # Should show position sizing")
+        print("   tail -f logs/execution_service.log    # Should show order placement")
+        print("")
+
+        # Extract signal_store_id from API response
+        signal_store_id = result_data.get('signal_store_id')
+        
+        return_value = {
+            "raw_id": signal_store_id,  # This is now the signal_store ObjectId
+            "signal_id": signal_payload['signalID']
+        }
+
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Failed to send signal to API: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"   Response: {e.response.text}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
+        sys.exit(1)
+
+    return return_value
+
+
+def list_strategies():
+    """List available strategies from MongoDB"""
+    # Use MONGODB_URI_LOCAL for Mac scripts, fallback to MONGODB_URI for Docker
+    mongodb_uri = os.getenv('MONGODB_URI_LOCAL') or os.getenv('MONGODB_URI')
+    try:
+        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
+        client.server_info()
+    except Exception as e:
+        print(f"❌ Failed to connect to MongoDB: {e}")
+        sys.exit(1)
+
+    db = client['mathematricks_trading']
+    strategies = list(db.strategies.find({}, {"name": 1, "accounts": 1}))
+
+    if not strategies:
+        print("⚠️  No strategies found in MongoDB")
+        print("   Add strategies using the portfolio_builder service")
+        return
+
+    print("\n📋 Available Strategies:")
+    print("=" * 80)
+    for strat in strategies:
+        accounts = strat.get('accounts', [])
+        account_str = ', '.join(accounts) if accounts else 'No accounts configured'
+        print(f"  • {strat['name']}")
+        print(f"    Accounts: {account_str}")
+    print("=" * 80)
+    print("")
+
+    client.close()
+
+
+def shuffle_signals(entry_signals: list, exit_signals_by_entry: dict, seed: int) -> list:
+    """
+    Shuffle signals realistically: entries and exits are interleaved randomly,
+    but an exit never comes before its corresponding entry.
+
+    Algorithm:
+    1. Shuffle entries to get random entry order
+    2. For each entry, assign its exit a random position AFTER the entry
+    3. Build final list respecting these constraints
+
+    Args:
+        entry_signals: List of (signal, source_file) tuples for ENTRY signals
+        exit_signals_by_entry: Dict mapping (source_file, entry_signal_id) -> list of (exit_signal, source_file)
+        seed: Random seed (0=random time-based, positive=reproducible, negative=no shuffle)
+
+    Returns:
+        List of (signal, source_file) tuples in the shuffled order
+    """
+    if seed < 0:
+        # No shuffle - just pair entries with exits sequentially
+        ordered = []
+        for entry_sig, entry_source in entry_signals:
+            ordered.append((entry_sig, entry_source))
+            entry_signal_id = entry_sig.get("entry_signal_id")
+            key = (entry_source, entry_signal_id)
+            if entry_signal_id and key in exit_signals_by_entry:
+                for exit_sig, exit_source in exit_signals_by_entry[key]:
+                    ordered.append((exit_sig, exit_source))
+        return ordered
+
+    # Initialize random with seed
+    rng = random.Random(seed if seed > 0 else None)
+
+    # Shuffle entries
+    shuffled_entries = list(entry_signals)
+    rng.shuffle(shuffled_entries)
+
+    # Collect all exits with their constraints
+    # Each exit must come after its entry's position
+    exits_with_constraints = []  # List of (exit_sig, exit_source, entry_index)
+
+    for entry_idx, (entry_sig, entry_source) in enumerate(shuffled_entries):
+        entry_signal_id = entry_sig.get("entry_signal_id")
+        key = (entry_source, entry_signal_id)
+        if entry_signal_id and key in exit_signals_by_entry:
+            for exit_sig, exit_source in exit_signals_by_entry[key]:
+                exits_with_constraints.append((exit_sig, exit_source, entry_idx))
+
+    # Shuffle exits
+    rng.shuffle(exits_with_constraints)
+
+    # Build final list by interleaving
+    # We'll insert signals one by one, respecting constraints
+    # Use a simple greedy approach: for each slot, pick randomly from available signals
+
+    total_signals = len(shuffled_entries) + len(exits_with_constraints)
+    result = []
+    entries_placed = set()  # Track which entry indices have been placed
+    remaining_entries = list(range(len(shuffled_entries)))
+    remaining_exits = list(exits_with_constraints)
+
+    rng.shuffle(remaining_entries)
+
+    for _ in range(total_signals):
+        # Determine what's available to place
+        available_entries = remaining_entries[:]
+        available_exits = [
+            (i, ex) for i, ex in enumerate(remaining_exits)
+            if ex[2] in entries_placed  # Exit's entry has been placed
+        ]
+
+        # Build choice pool
+        choices = []
+        if available_entries:
+            choices.append(('entry', available_entries[0]))
+        if available_exits:
+            choices.append(('exit', available_exits[0]))
+
+        if not choices:
+            break
+
+        # Random choice between entry and exit (if both available)
+        choice_type, choice_data = rng.choice(choices)
+
+        if choice_type == 'entry':
+            entry_idx = choice_data
+            entry_sig, entry_source = shuffled_entries[entry_idx]
+            result.append((entry_sig, entry_source))
+            entries_placed.add(entry_idx)
+            remaining_entries.remove(entry_idx)
+        else:
+            exit_list_idx, (exit_sig, exit_source, _) = choice_data
+            result.append((exit_sig, exit_source))
+            remaining_exits.pop(exit_list_idx)
+
+    return result
+
+
+def process_folder(folder_path: str, seed: int = 1, delay_override: int = None,
+                   signal_count: int = None, pause_and_play: bool = False, mode: str = None,
+                   file_filter: str = None, environment: str = 'staging', account_type: str = None, deployment_target: str = 'cloud'):
+    """
+    Load and send all JSON signal files from a folder
+
+    IMPORTANT: This function ensures ENTRY signals are always sent before their
+    corresponding EXIT signals, even when shuffling is enabled.
+
+    Args:
+        folder_path: Path to folder containing *.json signal files
+        seed: Seed for shuffling (0=random, positive=reproducible, negative=no shuffle)
+        delay_override: Override wait time between signals (seconds). None = use signal's wait value
+        signal_count: Limit total number of signals to send (None = all).
+        pause_and_play: If True, pause after each signal and wait for Enter key
+        mode: Trading mode (mock_mock, mock_live, paper_live, live_live) - added to signal metadata
+        file_filter: Filter to specific JSON file name (e.g., 'tech_stocks_realistic.json')
+    """
+    import glob
+
+    # Generate unique 6-character suffix for this test run (prevents duplicate signal blocking)
+    # Use last 6 chars of current timestamp to ensure uniqueness across test runs
+    run_id_suffix = str(int(time.time()))[-6:]
+
+    # Log separator for new test run
+    logger.info("\n" + "-" * 100)
+    logger.info(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] NEW SIGNAL SEND STARTED")
+    logger.info("-" * 100 + "\n")
+
+    # Validate folder exists
+    if not os.path.isdir(folder_path):
+        logger.info(f"❌ Folder not found: {folder_path}")
+        sys.exit(1)
+
+    # Find all .json files in folder
+    json_files = sorted(glob.glob(os.path.join(folder_path, "*.json")))
+
+    # Apply file filter if provided
+    if file_filter:
+        json_files = [f for f in json_files if os.path.basename(f) == file_filter]
+        if not json_files:
+            logger.info(f"❌ No files matching filter '{file_filter}' found in: {folder_path}")
+            sys.exit(1)
+
+    if not json_files:
+        logger.info(f"❌ No .json files found in: {folder_path}")
+        sys.exit(1)
+
+    logger.info("\n" + "=" * 80)
+    logger.info(f"📁 Loading signals from folder: {folder_path}")
+    if file_filter:
+        logger.info(f"   File filter: {file_filter}")
+    logger.info(f"   Found {len(json_files)} signal files")
+    logger.info("=" * 80)
+
+    # Load all signals from all files, separating ENTRY and EXIT
+    # Use (source_file, entry_name) as key to avoid collisions across files
+    entry_signals = []  # List of (signal, source_file)
+    exit_signals_by_entry = {}  # Maps (source_file, entry_name) -> list of (exit_signal, source_file)
+
+    for json_file in json_files:
+        try:
+            with open(json_file, 'r') as f:
+                file_signals = json.load(f)
+
+            source_file = os.path.basename(json_file)
+
+            # Handle both array and single signal formats
+            if not isinstance(file_signals, list):
+                file_signals = [file_signals]
+
+            for sig in file_signals:
+                signal_type = sig.get("signal_type", "ENTRY").upper()
+
+                if signal_type == "ENTRY":
+                    entry_signals.append((sig, source_file))
+                elif signal_type == "EXIT":
+                    # Group EXIT signals by (source_file, entry_signal_id) to avoid cross-file collisions
+                    entry_ref = sig.get("entry_signal_id", "$PREVIOUS")
+                    key = (source_file, entry_ref)
+                    if key not in exit_signals_by_entry:
+                        exit_signals_by_entry[key] = []
+                    exit_signals_by_entry[key].append((sig, source_file))
+
+            print(f"✓ Loaded {len(file_signals)} signal(s) from {source_file}")
+
+        except json.JSONDecodeError as e:
+            print(f"❌ Invalid JSON in {os.path.basename(json_file)}: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"❌ Error reading {os.path.basename(json_file)}: {e}")
+            sys.exit(1)
+
+    total_entries = len(entry_signals)
+    total_exits = sum(len(exits) for exits in exit_signals_by_entry.values())
+    print(f"\n📊 Total signals loaded: {total_entries + total_exits} ({total_entries} ENTRY, {total_exits} EXIT)")
+
+    # Update option signals with realistic contract details BEFORE shuffling/sending
+    # This ensures ENTRY and EXIT signals use the same strike/expiry
+    # ONLY applies to mock_live, paper_live, live_live modes (mock_mock uses hardcoded values)
+    # CRITICAL: Skip option signals that fail to get realistic contracts to avoid broker errors
+    option_signals_updated = 0
+    failed_option_signals = []
+    
+    # Check if we should update option contracts based on mode
+    should_update_options = mode in ['mock_live', 'paper_live', 'live_live']
+    
+    if should_update_options:
+        print(f"\n🔍 Checking for option signals to update with realistic contracts (mode={mode})...")
+        
+        # Update ENTRY signals and track failures
+        entries_to_remove = []
+        for i, (entry_sig, source_file) in enumerate(entry_signals):
+            result = update_option_signal_with_realistic_contract(entry_sig)
+            if result == 'updated':
+                option_signals_updated += 1
+            elif result == 'failed':
+                # Mark this ENTRY and its EXITs for removal
+                entry_name = entry_sig.get("entry_name", "UNKNOWN")
+                failed_option_signals.append(f"{source_file}:{entry_name}")
+                entries_to_remove.append(i)
+                logger.info(f"   ⚠️  Skipping option signal {source_file}:{entry_name} (could not get realistic contract)")
+        
+        # Remove failed ENTRY signals (in reverse order to preserve indices)
+        for i in reversed(entries_to_remove):
+            entry_signals.pop(i)
+        
+        # Remove EXIT signals corresponding to failed ENTRY signals
+        for (source_file, entry_ref), exit_list in list(exit_signals_by_entry.items()):
+            # Check if this EXIT references a failed ENTRY
+            for failed_sig_id in failed_option_signals:
+                if f"{source_file}:{entry_ref}" == failed_sig_id or entry_ref in failed_sig_id:
+                    del exit_signals_by_entry[(source_file, entry_ref)]
+                    logger.info(f"   ⚠️  Skipping EXIT signal for failed ENTRY {failed_sig_id}")
+                    break
+        
+        # Update EXIT signals (must use same strike/expiry as their ENTRY)
+        # We need to match EXIT to ENTRY and copy the contract details
+        for (source_file, entry_ref), exit_list in exit_signals_by_entry.items():
+            # Find the corresponding ENTRY signal
+            matching_entry = None
+            for entry_sig, entry_source in entry_signals:
+                if entry_source == source_file:
+                    entry_signal_id = entry_sig.get("entry_signal_id")
+                    if entry_signal_id == entry_ref or entry_ref == "$PREVIOUS":
+                        matching_entry = entry_sig
+                        break
+            
+            # If we found the ENTRY, copy its option contract details to EXIT
+            if matching_entry:
+                # Get option contract from ENTRY
+                entry_legs = matching_entry.get('signal_legs') or matching_entry.get('signal', [])
+                for entry_leg in entry_legs:
+                    if entry_leg.get('instrument_type', '').upper() == 'OPTION':
+                        entry_option_legs = entry_leg.get('legs', [])
+                        if entry_option_legs:
+                            # Found the ENTRY option contract, now update EXIT signals
+                            for exit_sig, exit_source in exit_list:
+                                exit_legs = exit_sig.get('signal_legs') or exit_sig.get('signal', [])
+                                for exit_leg in exit_legs:
+                                    if exit_leg.get('instrument_type', '').upper() == 'OPTION':
+                                        exit_option_legs = exit_leg.get('legs', [])
+                                        if exit_option_legs:
+                                            # Copy strike/expiry from ENTRY to EXIT
+                                            for i, exit_opt in enumerate(exit_option_legs):
+                                                if i < len(entry_option_legs):
+                                                    exit_opt['strike'] = entry_option_legs[i]['strike']
+                                                    exit_opt['expiry'] = entry_option_legs[i]['expiry']
+                                            logger.info(f"   ✅ Copied option contract from ENTRY to EXIT signal")
+        
+        if option_signals_updated > 0:
+            print(f"✅ Updated {option_signals_updated} option signal(s) with realistic contracts")
+        if failed_option_signals:
+            print(f"⚠️  Skipped {len(failed_option_signals)} option signal(s) - could not fetch realistic contracts")
+            print(f"    Failed: {', '.join(failed_option_signals)}")
+        if option_signals_updated == 0 and not failed_option_signals:
+            print(f"✓ No option signals found (or yfinance unavailable)")
+        print()
+    else:
+        print(f"\n✓ Skipping option contract updates (mode={mode} - using hardcoded values)\n")
+
+    # Shuffle signals with realistic interleaving
+    if seed >= 0:
+        shuffle_type = "reproducible" if seed > 0 else "randomized"
+        print(f"🔀 Shuffling signals ({shuffle_type}, seed={seed})")
+        print(f"   Entries and exits interleaved randomly, exits always after their entry")
+    else:
+        print(f"📌 Signal order preserved (seed={seed})")
+
+    ordered_signals = shuffle_signals(entry_signals, exit_signals_by_entry, seed)
+
+    if pause_and_play:
+        print(f"⏸️  Pause-and-play enabled: will pause after each signal")
+
+    print("=" * 80 + "\n")
+
+    # Limit total number of signals if signal_count specified
+    # NOTE: This limit applies PER-MODE since process_folder is called once per mode
+    # (e.g., --signal_count 2 with --all means 2 signals for mock_mock, 2 for mock_live, etc.)
+    if signal_count is not None and signal_count > 0:
+        if signal_count < len(ordered_signals):
+            ordered_signals = ordered_signals[:signal_count]
+            print(f"✂️  Limited to first {signal_count} total signals")
+        else:
+            print(f"📊 Signal count {signal_count} >= total signals {len(ordered_signals)}, using all")
+
+    # Send all signals in the correct order
+    total_wait_time = 0
+    entry_id_registry = {}
+    signals_sent = 0
+
+    for i, (signal_payload, source_file) in enumerate(ordered_signals, 1):
+        # Validate signal
+        _validate_signal_payload(signal_payload, allow_signal_type=True)
+
+        # Get signal type for display
+        signal_type = signal_payload.get("signal_type", "UNKNOWN").upper()
+        logger.info(f"{'🔵' if signal_type == 'ENTRY' else '🔴'} [{source_file}] Signal {i}/{len(ordered_signals)} ({signal_type})...")
+
+        # For EXIT signals, resolve variable reference before sending
+        resolved_entry_id = None
+        if signal_type == "EXIT":
+            entry_ref = signal_payload.get("entry_signal_id", "$PREVIOUS")
+            if entry_ref and entry_ref.startswith("$"):
+                if entry_ref in entry_id_registry:
+                    resolved_entry_id = entry_id_registry[entry_ref]
+                    logger.info(f"   ✓ Resolved {entry_ref} → {resolved_entry_id}")
+                elif entry_ref != "$PREVIOUS":
+                    logger.info(f"   ⚠️  WARNING: Variable {entry_ref} not found in registry")
+
+        # Send signal
+        result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode, run_id_suffix=run_id_suffix, environment=environment, account_type=account_type, deployment_target=deployment_target)
+        signals_sent += 1
+
+        # Capture ENTRY MongoDB ObjectId and register named variable for EXIT signals to reference
+        if signal_type == "ENTRY" and result and result.get("raw_id"):
+            # Use MongoDB ObjectId (single source of truth) not signalID string
+            entry_signal_id_value = result["raw_id"]  # MongoDB _id as string
+
+            # Register variable reference if provided (e.g., "$TECH_STOCKS_1")
+            entry_signal_id_var = signal_payload.get("entry_signal_id")
+            if entry_signal_id_var:
+                entry_id_registry[entry_signal_id_var] = entry_signal_id_value
+                logger.info(f"   ✓ Registered {entry_signal_id_var} → ObjectId({entry_signal_id_value[:12]}...)")
+
+            # Always keep $PREVIOUS for backward compatibility
+            entry_id_registry["$PREVIOUS"] = entry_signal_id_value
+
+        # Pause and play mode: wait for user input after each signal
+        if pause_and_play and i < len(ordered_signals):
+            try:
+                input(f"   ⏸️  Press ENTER to continue to next signal ({i}/{len(ordered_signals)})...")
+            except EOFError:
+                # Handle non-interactive mode gracefully
+                pass
+        else:
+            # Wait if specified
+            wait_seconds = signal_payload.get("wait", 0)
+
+            # Apply delay override if provided
+            if delay_override is not None:
+                wait_seconds = delay_override
+
+            if wait_seconds > 0 and i < len(ordered_signals):  # Don't wait after last signal
+                print(f"   ⏳ Waiting {wait_seconds} seconds before next signal...")
+                time.sleep(wait_seconds)
+                total_wait_time += wait_seconds
+
+        print()  # Blank line between signals
+
+    print("\n" + "=" * 80)
+    print(f"✅ All {signals_sent} Signals Sent Successfully")
+    print("=" * 80)
+    if total_wait_time > 0:
+        print(f"⏱️  Total wait time: {total_wait_time} seconds")
+    print("")
+
+    return signals_sent
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Send test signal directly to MongoDB (mimics webhook)",
+        epilog="""
+Examples:
+
+  1. Simple equity signal:
+     python send_test_signal.py @simple_signal_equity_1.json
+
+  2. Ladder signal (6 sequential trades):
+     python send_test_signal.py @ladder_signal_equity_1.json
+
+  3. Pairs trading signal (multi-leg):
+     python send_test_signal.py @pairs_signal_equity_1.json
+
+  4. Send all signals from folder (with reproducible shuffle):
+     python send_test_signal.py --folder sample_signals/
+     python send_test_signal.py --folder sample_signals/ --seed 42
+
+  5. Send signals with randomized order each run:
+     python send_test_signal.py --folder sample_signals/ --seed 0
+
+  6. List available strategies:
+     python send_test_signal.py --list-strategies
+
+Signal Format (Array):
+
+  [
+    {
+      "strategy_name": "US_Equity",
+      "passphrase": "test_password_123",
+      "signal_type": "ENTRY",
+      "signal_legs": [
+        {
+          "instrument": "AAPL",
+          "instrument_type": "STOCK",
+          "action": "BUY",
+          "direction": "LONG",
+          "quantity": 10,
+          "order_type": "MARKET",
+          "price": 150.00,
+          "environment": "staging"
+        }
+      ],
+      "wait": 10
+    },
+    {
+      "strategy_name": "US_Equity",
+      "signal_type": "EXIT",
+      "signal_legs": [...]
+    }
+  ]
+
+Required fields per signal:
+  - strategy_name: Name of the strategy
+  - signal_type: "ENTRY" or "EXIT"
+  - signal_legs: Array of legs with instrument, action, direction, quantity
+
+Optional fields per signal:
+  - signalID: Unique ID (auto-generated if missing)
+  - signal_sent_EPOCH: Unix timestamp (auto-generated if missing)
+  - passphrase: Authentication (not checked locally)
+  - staging: true/false (default: true)
+  - wait: Seconds to wait after sending this signal (default: 0)
+
+See sample files in services/signal_ingestion/sample_signals/
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+
+    parser.add_argument(
+        "json_payload",
+        nargs="?",
+        help='JSON string or @filename (e.g., \'{"strategy_name": "Forex", ...}\' or @signal.json)'
+    )
+    parser.add_argument(
+        "--file", "-f",
+        dest="file_path",
+        help="Path to JSON signal file (alternative to @filename syntax)"
+    )
+    parser.add_argument(
+        "--folder",
+        dest="folder_path",
+        help="Path to folder containing JSON signal files (*.json) - all files processed in order"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        dest="seed",
+        help="Seed for signal shuffling (positive=reproducible, 0=randomized). Overrides SIGNAL_TEST_SEED env var"
+    )
+    parser.add_argument(
+        "--delay",
+        type=int,
+        dest="delay_override",
+        help="Override wait time between signals in seconds (default: use signal's wait value)"
+    )
+    parser.add_argument(
+        "--list-strategies",
+        action="store_true",
+        help="List available strategies from MongoDB"
+    )
+
+    args = parser.parse_args()
+
+    # List strategies mode
+    if args.list_strategies:
+        list_strategies()
+        return
+
+    # Handle --folder option
+    if args.folder_path:
+        # Get seed from CLI override or environment variable
+        seed = args.seed
+        if seed is None:
+            try:
+                seed = int(os.getenv('SIGNAL_TEST_SEED', '1'))
+            except ValueError:
+                seed = 1
+        
+        process_folder(args.folder_path, seed, delay_override=args.delay_override)
+        return
+
+    # Handle --file option
+    if args.file_path:
+        try:
+            with open(args.file_path, 'r') as f:
+                json_str = f.read()
+        except FileNotFoundError:
+            print(f"❌ File not found: {args.file_path}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"❌ Error reading file: {e}")
+            sys.exit(1)
+    elif args.json_payload:
+        # Read JSON payload
+        json_str = args.json_payload
+
+        # Handle @filename syntax
+        if json_str.startswith("@"):
+            filename = json_str[1:]
+            try:
+                with open(filename, 'r') as f:
+                    json_str = f.read()
+            except FileNotFoundError:
+                print(f"❌ File not found: {filename}")
+                sys.exit(1)
+            except Exception as e:
+                print(f"❌ Error reading file: {e}")
+                sys.exit(1)
+    else:
+        parser.error("JSON payload is required (use --file or @filename or pass JSON string)")
+
+    # Parse JSON
+    try:
+        payload = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        print(f"❌ Invalid JSON: {e}")
+        print(f"\nReceived: {json_str[:200]}...")
+        sys.exit(1)
+
+    # Check format: array of signals or single signal
+    if isinstance(payload, list):
+        # Array format: Sequential signals with wait_after
+        print("\n" + "=" * 80)
+        print(f"📋 Processing {len(payload)} sequential signals")
+        print("=" * 80)
+
+        # Generate unique 6-character suffix for this test run
+        run_id_suffix = str(int(time.time()))[-6:]
+        
+        # Mode defaults to None when using --file flag directly
+        mode = None
+
+        total_wait_time = 0
+        entry_id_registry = {}  # Maps variable names (e.g., "$ENTRY_1") to signal_store IDs
+
+        for i, signal_payload in enumerate(payload, 1):
+            # Validate signal
+            _validate_signal_payload(signal_payload, allow_signal_type=True)
+
+            # Get signal type for display
+            signal_type = signal_payload.get("signal_type", "UNKNOWN").upper()
+            print(f"\n{'🔵' if signal_type == 'ENTRY' else '🔴'} Sending signal {i}/{len(payload)} ({signal_type})...")
+
+            # For EXIT signals, resolve variable reference before sending
+            resolved_entry_id = None
+            if signal_type == "EXIT":
+                entry_ref = signal_payload.get("entry_signal_id", "$PREVIOUS")
+                if entry_ref and entry_ref.startswith("$"):
+                    if entry_ref in entry_id_registry:
+                        resolved_entry_id = entry_id_registry[entry_ref]
+                        print(f"✓ Resolved {entry_ref} → {resolved_entry_id[:12]}...")
+                    elif entry_ref != "$PREVIOUS":
+                        print(f"⚠️ WARNING: Variable {entry_ref} not found in registry")
+
+            # Send signal (pass signal_type lowercase and resolved_entry_id)
+            result = send_signal(signal_payload, signal_type=signal_type.lower(), previous_entry_id=resolved_entry_id, mode=mode, run_id_suffix=run_id_suffix)
+
+            # Capture ENTRY signal_id and register named variable
+            if signal_type == "ENTRY" and result and result.get("signal_id"):
+                entry_signal_id = result["signal_id"]  # This is the signalID string, NOT MongoDB ObjectId
+
+                # Register named variable if provided (e.g., "$ENTRY_1")
+                entry_name = signal_payload.get("entry_name")
+                if entry_name:
+                    entry_id_registry[entry_name] = entry_signal_id
+                    print(f"✓ Registered {entry_name} → {entry_signal_id}")
+
+                # Always keep $PREVIOUS for backward compatibility
+                entry_id_registry["$PREVIOUS"] = entry_signal_id
+
+            # Wait if specified
+            wait_seconds = signal_payload.get("wait", 0)
+            if wait_seconds > 0 and i < len(payload):  # Don't wait after last signal
+                print(f"\n⏳ Waiting {wait_seconds} seconds before next signal...")
+                time.sleep(wait_seconds)
+                total_wait_time += wait_seconds
+
+        print("\n" + "=" * 80)
+        print(f"✅ All {len(payload)} Signals Sent Successfully")
+        print("=" * 80)
+        if total_wait_time > 0:
+            print(f"⏱️  Total wait time: {total_wait_time} seconds")
+        print("")
+
+    else:
+        # Single signal format
+        _validate_signal_payload(payload)
+        send_signal(payload, signal_type="single")
+
+
+def _validate_signal_payload(payload: dict, allow_signal_type: bool = False):
+    """
+    Validate a single signal payload
+
+    Args:
+        payload: Signal JSON to validate
+        allow_signal_type: If True, check for signal_type field (new array format)
+
+    Raises:
+        SystemExit: If validation fails
+    """
+    # Validate required fields
+    if "strategy_name" not in payload:
+        print("❌ Missing required field: strategy_name")
+        sys.exit(1)
+
+    # Check for signal_type if required (new array format)
+    if allow_signal_type and "signal_type" not in payload:
+        print("❌ Missing required field: signal_type (must be 'ENTRY' or 'EXIT')")
+        sys.exit(1)
+
+    # Support both "signal_legs" (new) and "signal" (legacy)
+    signal_legs = payload.get("signal_legs") or payload.get("signal")
+
+    if not signal_legs:
+        print("❌ Missing required field: signal_legs (or 'signal' for legacy format)")
+        sys.exit(1)
+
+    # Handle signal_legs as array (new format) or dict (legacy)
+    if isinstance(signal_legs, list):
+        if len(signal_legs) == 0:
+            print("❌ Signal legs array is empty")
+            sys.exit(1)
+        # Validate first leg
+        signal_to_validate = signal_legs[0]
+    else:
+        # Legacy format: signal is a dict
+        signal_to_validate = signal_legs
+
+    # Check for instrument (new) or ticker (legacy)
+    if "instrument" not in signal_to_validate and "ticker" not in signal_to_validate:
+        print("❌ Missing required field in signal leg: instrument (or ticker for legacy format)")
+        sys.exit(1)
+
+    # Check other required fields
+    required_signal_fields = ["action", "quantity"]
+    for field in required_signal_fields:
+        if field not in signal_to_validate:
+            print(f"❌ Missing required field in signal leg: {field}")
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

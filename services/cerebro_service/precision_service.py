@@ -3,12 +3,14 @@ Precision Service - Manages quantity precision for different brokers and assets
 
 This service queries brokers for asset precision and caches results for performance.
 The broker is the authoritative source for what precision is allowed.
+
+Cache is now stored in MongoDB for distributed system compatibility.
 """
-import json
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+from pymongo import MongoClient
 
 logger = logging.getLogger(__name__)
 
@@ -17,73 +19,55 @@ class PrecisionService:
     """
     Service to manage quantity precision for trading.
 
-    Queries brokers for asset-specific precision and caches results.
-    Cache is structured as: broker_id -> symbol -> {precision, last_checked}
+    Queries brokers for asset-specific precision and caches results in MongoDB.
+    Cache structure: {source, symbol, precision, last_checked}
     """
 
-    CACHE_FILE = "data/precision_cache.json"
     CACHE_TTL_HOURS = 24
 
-    def __init__(self, project_root: str = None):
+    def __init__(self, mongo_uri: str = None):
         """
         Initialize the precision service.
 
         Args:
-            project_root: Root directory of the project (for cache file path)
+            mongo_uri: MongoDB connection URI (defaults to env variable or localhost)
         """
-        if project_root:
-            self.cache_file = os.path.join(project_root, self.CACHE_FILE)
-        else:
-            # Try to find project root
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(os.path.dirname(current_dir))
-            self.cache_file = os.path.join(project_root, self.CACHE_FILE)
-
-        self.cache = self._load_cache()
-        logger.info(f"PrecisionService initialized with cache at {self.cache_file}")
-
-    def _load_cache(self) -> Dict[str, Any]:
-        """Load precision cache from file."""
+        if mongo_uri is None:
+            mongo_uri = os.getenv('MONGODB_URI')
+            if not mongo_uri:
+                raise ValueError("MONGODB_URI environment variable is required for PrecisionService")
+        
+        self.mongo_client = MongoClient(mongo_uri)
+        self.db = self.mongo_client['mathematricks_trading']
+        self.cache_collection = self.db['precision_cache']
+        
+        logger.info(f"PrecisionService initialized with MongoDB cache")
+        
+        # Ensure indexes exist
         try:
-            if os.path.exists(self.cache_file):
-                with open(self.cache_file, 'r') as f:
-                    cache = json.load(f)
-                    logger.debug(f"Loaded precision cache with {len(cache)} brokers")
-                    return cache
+            self.cache_collection.create_index([('source', 1), ('symbol', 1)], unique=True)
         except Exception as e:
-            logger.warning(f"Failed to load precision cache: {e}")
+            logger.debug(f"Index already exists or creation failed: {e}")
 
-        return {}
-
-    def _save_cache(self):
-        """Save precision cache to file."""
-        try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
-
-            with open(self.cache_file, 'w') as f:
-                json.dump(self.cache, f, indent=2)
-            logger.debug(f"Saved precision cache")
-        except Exception as e:
-            logger.error(f"Failed to save precision cache: {e}")
-
-    def _is_cache_valid(self, last_checked: str) -> bool:
+    def _is_cache_valid(self, last_checked: datetime) -> bool:
         """
         Check if cached precision is still valid (within TTL).
 
         Args:
-            last_checked: ISO format timestamp
+            last_checked: Datetime of last check
 
         Returns:
             True if cache is valid, False if expired
         """
         try:
-            checked_time = datetime.fromisoformat(last_checked.replace('Z', '+00:00'))
             now = datetime.now(timezone.utc)
-            age_hours = (now - checked_time).total_seconds() / 3600
+            # Ensure last_checked is timezone-aware
+            if last_checked.tzinfo is None:
+                last_checked = last_checked.replace(tzinfo=timezone.utc)
+            age_hours = (now - last_checked).total_seconds() / 3600
             return age_hours < self.CACHE_TTL_HOURS
         except Exception as e:
-            logger.warning(f"Failed to parse cache timestamp: {e}")
+            logger.warning(f"Failed to validate cache timestamp: {e}")
             return False
 
     def _get_cached_precision(self, broker_id: str, symbol: str) -> Optional[int]:
@@ -97,39 +81,50 @@ class PrecisionService:
         Returns:
             Precision value if cached and valid, None otherwise
         """
-        if broker_id not in self.cache:
+        try:
+            doc = self.cache_collection.find_one({'source': broker_id, 'symbol': symbol})
+            
+            if doc is None:
+                return None
+            
+            if self._is_cache_valid(doc['last_checked']):
+                logger.debug(f"Using cached precision for {broker_id}/{symbol}: {doc['precision']}")
+                return doc['precision']
+            
+            logger.debug(f"Cache expired for {broker_id}/{symbol}")
             return None
-
-        if symbol not in self.cache[broker_id]:
+            
+        except Exception as e:
+            logger.warning(f"Failed to retrieve cached precision: {e}")
             return None
-
-        entry = self.cache[broker_id][symbol]
-        if self._is_cache_valid(entry.get('last_checked', '')):
-            logger.debug(f"Using cached precision for {broker_id}/{symbol}: {entry['precision']}")
-            return entry['precision']
-
-        logger.debug(f"Cache expired for {broker_id}/{symbol}")
-        return None
 
     def _cache_precision(self, broker_id: str, symbol: str, precision: int):
         """
-        Cache precision value for an asset.
+        Cache precision value for an asset in MongoDB.
 
         Args:
             broker_id: Broker identifier
             symbol: Asset symbol
             precision: Number of decimal places
         """
-        if broker_id not in self.cache:
-            self.cache[broker_id] = {}
-
-        self.cache[broker_id][symbol] = {
-            'precision': precision,
-            'last_checked': datetime.now(timezone.utc).isoformat()
-        }
-
-        self._save_cache()
-        logger.debug(f"Cached precision for {broker_id}/{symbol}: {precision}")
+        try:
+            doc = {
+                'source': broker_id,
+                'symbol': symbol,
+                'precision': precision,
+                'last_checked': datetime.now(timezone.utc)
+            }
+            
+            self.cache_collection.update_one(
+                {'source': broker_id, 'symbol': symbol},
+                {'$set': doc},
+                upsert=True
+            )
+            
+            logger.debug(f"Cached precision for {broker_id}/{symbol}: {precision}")
+            
+        except Exception as e:
+            logger.error(f"Failed to cache precision: {e}")
 
     def get_precision(
         self,
@@ -208,42 +203,41 @@ class PrecisionService:
 
     def clear_cache(self, broker_id: str = None, symbol: str = None):
         """
-        Clear precision cache.
+        Clear precision cache in MongoDB.
 
         Args:
             broker_id: If provided, clear only this broker's cache
             symbol: If provided with broker_id, clear only this symbol
         """
-        if broker_id and symbol:
-            if broker_id in self.cache and symbol in self.cache[broker_id]:
-                del self.cache[broker_id][symbol]
-                logger.info(f"Cleared cache for {broker_id}/{symbol}")
-        elif broker_id:
-            if broker_id in self.cache:
-                del self.cache[broker_id]
-                logger.info(f"Cleared cache for {broker_id}")
-        else:
-            self.cache = {}
-            logger.info("Cleared all precision cache")
-
-        self._save_cache()
+        try:
+            if broker_id and symbol:
+                result = self.cache_collection.delete_one({'source': broker_id, 'symbol': symbol})
+                logger.info(f"Cleared cache for {broker_id}/{symbol} ({result.deleted_count} docs)")
+            elif broker_id:
+                result = self.cache_collection.delete_many({'source': broker_id})
+                logger.info(f"Cleared cache for {broker_id} ({result.deleted_count} docs)")
+            else:
+                result = self.cache_collection.delete_many({})
+                logger.info(f"Cleared all precision cache ({result.deleted_count} docs)")
+        except Exception as e:
+            logger.error(f"Failed to clear cache: {e}")
 
 
 # Module-level singleton for convenience
 _precision_service: Optional[PrecisionService] = None
 
 
-def get_precision_service(project_root: str = None) -> PrecisionService:
+def get_precision_service(mongo_uri: str = None) -> PrecisionService:
     """
     Get or create the precision service singleton.
 
     Args:
-        project_root: Root directory of the project
+        mongo_uri: MongoDB connection URI
 
     Returns:
         PrecisionService instance
     """
     global _precision_service
     if _precision_service is None:
-        _precision_service = PrecisionService(project_root)
+        _precision_service = PrecisionService(mongo_uri)
     return _precision_service

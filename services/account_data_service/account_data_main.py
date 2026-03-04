@@ -351,18 +351,21 @@ def get_account_state_legacy(account_name: str):
             )
 
         # Transform to old format expected by CerebroService
+        # Use .get() for last_updated to handle MOCK accounts that may not have it
+        from datetime import datetime
         state = {
             "account_id": account['account_id'],
             "account": account['account_id'],
             "broker_id": account['broker'],
-            "timestamp": account['balances']['last_updated'],
+            "timestamp": account['balances'].get('last_updated', datetime.utcnow()),
             "equity": account['balances']['equity'],
             "cash_balance": account['balances']['cash_balance'],
             "margin_used": account['balances']['margin_used'],
             "margin_available": account['balances']['margin_available'],
-            "unrealized_pnl": account['balances']['unrealized_pnl'],
-            "realized_pnl": account['balances']['realized_pnl'],
-            "open_positions": account['open_positions'],
+            "unrealized_pnl": account['balances'].get('unrealized_pnl', 0),
+            "realized_pnl": account['balances'].get('realized_pnl', 0),
+            "open_positions": account.get('open_positions', []),
+            "holdings": account['balances'].get('holdings', {}),  # Crypto holdings
             "open_orders": [],  # Not tracking orders in this service
             "created_at": account['updated_at']
         }
@@ -486,7 +489,7 @@ def get_margin_preview(account_name: str, request: MarginPreviewRequest):
                 broker = BrokerFactory.create_broker(config)
 
                 if not broker.is_connected():
-                    if not broker.connect():
+                    if not broker.connect(skip_sync=True):
                         raise Exception("Failed to connect to IBKR")
 
                 # Query margin impact

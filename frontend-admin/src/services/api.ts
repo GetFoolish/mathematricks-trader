@@ -21,6 +21,9 @@ import type {
   WidgetData,
   WidgetType,
   WidgetConfig,
+  StrategySubmission,
+  ApproveSubmissionRequest,
+  RejectSubmissionRequest,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8002';
@@ -153,10 +156,19 @@ class ApiClient {
   }
 
   // Part 2: Approve Allocation (makes it current)
-  async approveAllocation(allocations: Record<string, number>, fund_id: string) {
+  async approveAllocation(
+    portfolio_test_id: string,
+    fund_id: string,
+    allocations?: Record<string, number>,
+    approved_by?: string,
+    notes?: string
+  ) {
     const response = await this.portfolioBuilderClient.post('/api/v1/allocations/approve', {
+      portfolio_test_id,
+      fund_id,
       allocations,
-      fund_id
+      approved_by,
+      notes
     });
     return response.data;
   }
@@ -230,6 +242,40 @@ class ApiClient {
     const params: any = { limit };
     if (environment) params.environment = environment;
     const response = await this.frontendApiClient.get('/api/v1/activity/trading-signals', { params });
+    return response.data;
+  }
+
+  // NEW Activity Tab APIs
+  async getRawSignals(limit: number = 100, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.frontendApiClient.get('/api/v1/activity/raw-signals', { params });
+    return response.data;
+  }
+
+  async getRawSignalById(signalId: string) {
+    const response = await this.frontendApiClient.get(`/api/v1/activity/raw-signal/${signalId}`);
+    return response.data;
+  }
+
+  async getSignalStore(limit: number = 100, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.frontendApiClient.get('/api/v1/activity/signal-store', { params });
+    return response.data;
+  }
+
+  async getTradingOrdersFull(limit: number = 100, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.frontendApiClient.get('/api/v1/activity/trading-orders-full', { params });
+    return response.data;
+  }
+
+  async getSignalStatus(limit: number = 100, environment?: string) {
+    const params: any = { limit };
+    if (environment) params.environment = environment;
+    const response = await this.frontendApiClient.get('/api/v1/activity/signal-status', { params });
     return response.data;
   }
 
@@ -371,6 +417,46 @@ class ApiClient {
   }
 
   // ============================================================================
+  // Strategy Submission APIs
+  // ============================================================================
+
+  async getStrategySubmissions(status?: string): Promise<StrategySubmission[]> {
+    const params = status ? `?status=${status}` : '';
+    const response = await this.portfolioBuilderClient.get(`/api/v1/admin/submissions${params}`);
+    return response.data.submissions;
+  }
+
+  async getSubmission(submissionId: string): Promise<StrategySubmission> {
+    const response = await this.portfolioBuilderClient.get(`/api/v1/public/submission/${submissionId}`);
+    return response.data.submission;
+  }
+
+  async approveSubmission(
+    submissionId: string,
+    approvalData: ApproveSubmissionRequest
+  ): Promise<{ strategy_id: string; submission_id: string }> {
+    const response = await this.portfolioBuilderClient.post(
+      `/api/v1/admin/submissions/${submissionId}/approve`,
+      approvalData
+    );
+    return response.data;
+  }
+
+  async rejectSubmission(
+    submissionId: string,
+    rejectionData: RejectSubmissionRequest
+  ): Promise<void> {
+    await this.portfolioBuilderClient.post(
+      `/api/v1/admin/submissions/${submissionId}/reject`,
+      rejectionData
+    );
+  }
+
+  async deleteSubmission(submissionId: string): Promise<void> {
+    await this.portfolioBuilderClient.delete(`/api/v1/admin/submissions/${submissionId}`);
+  }
+
+  // ============================================================================
   // Authentication APIs (Mock for MVP - replace with real impl)
   // ============================================================================
 
@@ -398,4 +484,5 @@ class ApiClient {
 }
 
 export const apiClient = new ApiClient();
+export const api = apiClient;
 export default apiClient;
