@@ -99,7 +99,7 @@ services:
         condition: service_healthy
     environment:
       - TZ=${TZ}
-      - MONGODB_URI=${MONGODB_URI}
+      - MONGODB_URI=${SIGNAL_INGESTION_MONGODB_URI:-${MONGODB_URI}}
       - CEREBRO_SERVICE_URL=http://cerebro-service:8082
     command: python -m services.signal_ingestion.signal_ingestion_main --staging
 
@@ -174,7 +174,7 @@ services:
         condition: service_healthy
     environment:
       - PORT=3000
-      - mongodbconnectionstring=mongodb://mongodb:27018/mathematricks_trading?replicaSet=rs0&directConnection=true
+      - mongodbconnectionstring=${mongodbconnectionstring}
       - WEBHOOK_PASSPHRASES=yahoo123,test_password_123
     healthcheck:
       test: ["CMD-SHELL", "netstat -tlnp | grep :3000 || exit 1"]
